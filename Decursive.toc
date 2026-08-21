@@ -43,7 +43,7 @@
 ## X-Website: https://github.com/randylorfing/Decursive/
 ## X-Credits: Sylvin (Full french translation), Peter Sun, Ananhaid (ZhTW and zhCN translation), Fenlis, Chkid (koKR translation), Hemathio, Swix, Athariel, StingerSoft (Russian Translation), Freydis88, Floyddotnet, Vilogity, Dessa, Farook (German translation)
 
-## X-Curse-Project-ID: 2154
+## X-Curse-Project-ID: 1659159
 ## X-AceForum: 4195
 
 ## X-eMail: randylorfing@gmail.com
