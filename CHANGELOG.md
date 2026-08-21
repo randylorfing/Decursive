@@ -1,5 +1,10 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## Maintainer contact update
+- Addon `Author` metadata, the `D.author` variable, and the in-game About page now show Randy Lorfing.
+- Bug-report contact (`X-eMail` metadata and the debug-report fallback address) now points to randylorfing@gmail.com.
+- Original GPL copyright headers crediting John Wellesz (2006-2025) are unchanged.
+
 ## square-sound25-root-decursive
 - Fixed a settings-page rebuild error caused by calling `SetScript("OnClick")` on a pooled plain `Frame`.
 - Pooled toggle rows now retain the child switch button handler while their option state is safely rebound on reuse.
