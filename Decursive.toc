@@ -25,7 +25,7 @@
 ## X-Zhaohu-12.1-Patch: v11.0.10-square-sound6-safe-visual-restore
 ## X-Zhaohu-Backend: v10.43-feature-engine
 ## X-Zhaohu-UI: modern-v11-single-ui-motto
-## Author: John Wellesz
+## Author: Randy Lorfing
 
 ## X-License: GNU GPL V3
 
@@ -46,7 +46,7 @@
 ## X-Curse-Project-ID: 2154
 ## X-AceForum: 4195
 
-## X-eMail: Decursive@2072productions.com
+## X-eMail: randylorfing@gmail.com
 
 
 Dcr_preload.lua

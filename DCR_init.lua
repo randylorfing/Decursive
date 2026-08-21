@@ -79,7 +79,7 @@ local function RegisterDecursive_Once() -- {{{
 
     D.name = "Decursive";
     D.version = "11.0.10";
-    D.author = "John Wellesz";
+    D.author = "Randy Lorfing";
 
     -- v11 has no AceConfig/AceGUI settings stack. Backend code calls this
     -- lightweight hook when a visible configuration value may have changed.

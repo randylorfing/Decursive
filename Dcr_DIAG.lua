@@ -274,7 +274,7 @@ end -- }}}
 
 do
     local DebugHeader = false;
-    local ReportEmail = GetAddOnMetadata(addonName, "X-eMail") or "Decursive@2072productions.com";
+    local ReportEmail = GetAddOnMetadata(addonName, "X-eMail") or "randylorfing@gmail.com";
     local HeaderFailOver = ("|cFF11FF33Please email the content of this window to <%s>|r\n|cFF009999(Use CTRL+A to select all and then CTRL+C to put the text in your clip-board)|r\nAlso tell in your report if you noticed any strange behavior of Decursive.\n"):format(ReportEmail:gsub('@','+ReportFH@'));
     local LoadedAddonNum = 0;
     local TotalAddonMemoryUsage = 0;

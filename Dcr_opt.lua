@@ -2748,7 +2748,7 @@ local function GetStaticOptions ()
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
                                     "\n\n|cFFDDDD00 %s|r:\n   %s\n\n   %s"
                                 ):format(
-                                    "11.0.10", "John Wellesz", ("2026-08-21T06:20:00Z"):sub(1,10),
+                                    "11.0.10", "Randy Lorfing", ("2026-08-21T06:20:00Z"):sub(1,10),
                                     L["ABOUT_NOTES"],
                                     L["ABOUT_LICENSE"],         GetAddOnMetadata(addonName, "X-License") or 'All Rights Reserved',
                                     L["ABOUT_SHAREDLIBS"],      GetAddOnMetadata(addonName, "X-Embeds")  or 'GetAddOnMetadata() failure',
