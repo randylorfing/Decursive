@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v @project-version@) add-on for World of Warcraft UI
+    Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@
     Decursive is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY.
 
-    This file was last updated on @file-date-iso@
+    This file was last updated on 2026-08-17T20:37:56Z
 --]]
 -------------------------------------------------------------------------------
 
@@ -118,7 +118,7 @@ local DebugTextTable    = T._DebugTextTable;
 local Reported          = {};
 
 local UNPACKAGED = "@pro" .. "ject-version@";
-local VERSION = "@project-version@";
+local VERSION = "11.0.10";
 
 if not T._LoadedFiles then
     T._LoadedFiles = {};
@@ -274,7 +274,7 @@ end -- }}}
 
 do
     local DebugHeader = false;
-    local ReportEmail = GetAddOnMetadata("Decursive", "X-eMail") or "Decursive@2072productions.com";
+    local ReportEmail = GetAddOnMetadata(addonName, "X-eMail") or "Decursive@2072productions.com";
     local HeaderFailOver = ("|cFF11FF33Please email the content of this window to <%s>|r\n|cFF009999(Use CTRL+A to select all and then CTRL+C to put the text in your clip-board)|r\nAlso tell in your report if you noticed any strange behavior of Decursive.\n"):format(ReportEmail:gsub('@','+ReportFH@'));
     local LoadedAddonNum = 0;
     local TotalAddonMemoryUsage = 0;
@@ -340,7 +340,7 @@ do
         local dbclud = T.Dcr.Status and T.Dcr.Status.delayedUnDebuffOccurences or -1
 
 
-        DebugHeader = ("%s\n@project-version@  %s(%s)  CT: %0.4f D: %s %s %s DTl: %d DE: %d nDrE: %d Embeded: %s W: %d (LA: %d TAMU: %d) TA: %d NDRTA: %d BUIE: %d dbc: [d:%d-%d, u:%d-%d] TI: [dc:%d, lc:%d, y:%d, LEBY:%d, LB:%d, TTE:%u] (%s, %s, %s, %s)"):format(instructionsHeader, -- "%s\n
+        DebugHeader = ("%s\n11.0.10  %s(%s)  CT: %0.4f D: %s %s %s DTl: %d DE: %d nDrE: %d Embeded: %s W: %d (LA: %d TAMU: %d) TA: %d NDRTA: %d BUIE: %d dbc: [d:%d-%d, u:%d-%d] TI: [dc:%d, lc:%d, y:%d, LEBY:%d, LB:%d, TTE:%u] (%s, %s, %s, %s)"):format(instructionsHeader, -- "%s\n
         tostring(DC.MyClass), tostring(UnitLevel("player") or "??"), NiceTime(), date(), GetLocale(), -- %s(%s)  CT: %0.4f D: %s %s
         BugGrabber and "BG" .. (T.BugGrabber and "e" or "") or "NBG", -- %s
         #DebugTextTable / 2, -- DTl: %d
@@ -809,15 +809,15 @@ function T._RegisterBugGrabberCallBacks()
         EventRegistry:RegisterCallback("BugGrabber.BugGrabbed", T._onError)
         -- necessary to hide the message printed by buggrabber
 		EventRegistry:TriggerEvent("BugGrabber.DisplayRegistered")
-        --@debug@
+        --[==[@debug@
         print("dcr: new BG registered")
-        --@end-debug@
+        --@end-debug@]==]
     else
         -- there is no way to know which version of Buggraber the user might have so stay compatible with older versions
         pcall (BugGrabber.RegisterCallback, T, "BugGrabber_BugGrabbed", T._onError)
-        --@debug@
+        --[==[@debug@
         print("dcr: old BG registered")
-        --@end-debug@
+        --@end-debug@]==]
     end
 
     return true
@@ -1004,11 +1004,7 @@ do
             ["AceLocale-3.0"] = 6,
             ["AceTimer-3.0"] = 17,
 
-            ["AceGUI-3.0"] = 41,
-            ["AceConfig-3.0"] = 3,
-            ["AceConfigCmd-3.0"] = 14,
-            ["AceConfigDialog-3.0"] = 86,
-            ["AceConfigRegistry-3.0"] = 21,
+            ["AceSerializer-3.0"] = 5,
 
             ["LibDataBroker-1.1"] = 4,
             ["LibDBIcon-1.0"] = 55,
@@ -1044,8 +1040,8 @@ do
             LibraryIssues = true;
         end
 
-        local DcrMinTOC = tonumber(GetAddOnMetadata("Decursive", "X-Min-Interface") or 11508); -- once GetAddOnMetadata() was bugged and returned nil...
-        local DcrMinMidTOC = tonumber(GetAddOnMetadata("Decursive", "X-Mid-Interface") or 50503);
+        local DcrMinTOC = tonumber(GetAddOnMetadata(addonName, "X-Min-Interface") or 11508); -- once GetAddOnMetadata() was bugged and returned nil...
+        local DcrMinMidTOC = tonumber(GetAddOnMetadata(addonName, "X-Mid-Interface") or 50503);
 
         -- test if Decursive is backward compatible with the client's version
         if tocversion < DcrMinTOC or tocversion > 30000 and tocversion < DcrMinMidTOC then
@@ -1056,7 +1052,7 @@ do
         end
 
         -- Catch people updating add-ons while WoW is running before they post "it doesn't work!!!!" comments.
-        local versionInTOC = GetAddOnMetadata("Decursive", "Version");
+        local versionInTOC = GetAddOnMetadata(addonName, "Version");
 
         if versionInTOC and versionInTOC ~= VERSION and versionInTOC ~= UNPACKAGED and VERSION ~= UNPACKAGED then
             table.insert(Errors, "You have updated Decursive while WoW was still running in the background.");
@@ -1213,4 +1209,4 @@ do
     end
 end
 
-T._LoadedFiles["Dcr_DIAG.lua"] = "@project-version@";
+T._LoadedFiles["Dcr_DIAG.lua"] = "11.0.10";

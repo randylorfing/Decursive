@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v @project-version@) add-on for World of Warcraft UI
+    Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@
     Decursive is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY.
 
-    This file was last updated on @file-date-iso@
+    This file was last updated on 2026-08-17T20:37:56Z
 --]]
 -------------------------------------------------------------------------------
 
@@ -157,6 +157,11 @@ function D:GetDefaultsSettings()
             LastVersionAnnounce = 0,
             LastUnpackagedAlert = 0,
 
+            -- WoW 12.1 learned protected-aura IDs are scoped by class/spec.
+            -- This prevents a spell learned by one dispel toolkit from producing
+            -- false alerts on a specialization that cannot remove that effect.
+            SoundProtectedAuraSpellIDsBySpec = {},
+
             -- the key to bind the macro to
             MacroBind = false,
             NoStartMessages = false,
@@ -208,9 +213,6 @@ function D:GetDefaultsSettings()
 
             MFScanEverybodyTimer = 1,
             MFScanEverybodyReport = false,
-            --@alpha@
-            -- MFScanEverybodyReport = true, -- UNdebuff is triggered very often, not sure when. No more need for reporting though.
-            --@end-alpha@
 
             delayedDebuffOccurences = 0,
             delayedUnDebuffOccurences = 0,
@@ -245,11 +247,44 @@ function D:GetDefaultsSettings()
 
             DebuffsFrameElemBorderShow = true,
 
+            -- WoW 12.1 compatibility: show the dispel-spell cooldown overlay on MUFs.
+            CooldownOverlay121Enabled = true,
+            CooldownOverlay121Style = "OVERLAY_TIMER",
+            CooldownOverlay121Opacity = .62,
+            CooldownOverlay121Numbers = true,
+            CooldownPriority2Border121Enabled = true,
+            CooldownBorder121Color = {1, .2, .1}, -- legacy v10 setting; priority #2 color is now taken from MF_colors[2]
+            CooldownBorder121Alpha = .95,
+            CooldownBorder121Thickness = 2,
+            CooldownPriority2Pulse121Enabled = true,
+            OutOfRange121Enabled = true,
+            OutOfRange121DimAmount = .60,
+            OutOfRange121Color = {1, 1, 0},
+            Environment121Mode = "AUTO",
+            -- DandersFrames provider preference. On the first load with no explicit
+            -- user choice, Decursive enables this automatically when DandersFrames
+            -- and its public AuraContainer API are available. Afterwards the user's
+            -- explicit toggle is preserved across sessions.
+            DandersFramesDispelIntegrationEnabled = false,
+            DandersFramesDispelIntegrationUserSet = false,
+            Environment121ProfilesInitialized = false,
+            Environment121Profiles = {
+                DANDERSFRAMES = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .62, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
+                RAID = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .45, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .50, CooldownOverlay121Numbers = false, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = false, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
+                MYTHIC_PLUS = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .70, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .70, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
+                DUNGEON = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
+                PVP = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .75, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .65, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
+                OPEN_WORLD = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .62, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
+            },
+
             DebuffsFrameElemBorderAlpha = .2,
 
             DebuffsFrameElemTieTransparency = true,
 
             DebuffsFramePerline = 10,
+            -- v11 large-raid layout: keep the MUF grid compact (max five rows)
+            -- while preserving the existing manual units-per-line setting as a fallback.
+            DebuffsFrameRaidAutoLayout121 = true,
 
             DebuffsFrameTieSpacing = true,
 
@@ -319,11 +354,16 @@ function D:GetDefaultsSettings()
             -- Are prio list members protected from blacklisting?
             DoNot_Blacklist_Prio_List = false,
 
-            -- Play a sound when there is something to decurse
+            -- Sound notifications. v11.0.7 moved these controls to a dedicated
+            -- Sound Notifications page; v11.0.7 expands the alert-sound library.
             PlaySound = true,
-
-            -- The sound file to use
-            SoundFile = DC.AfflictionSound,
+            SoundFile = T._AddonPath .. "Sounds\\FemaleDispel.ogg",
+            SoundNotificationPreset = "FEMALE_DISPEL",
+            SoundNotificationChannel = "Master",
+            SoundNotificationIgnoreSeconds = 2.0,
+            PlayFailureSound = true,
+            SoundProtectedAuraAlerts = true,
+            SoundProtectedAuraAutoLearn = true,
 
             -- Hide the buttons
             HideButtons = false,
@@ -512,7 +552,17 @@ local OptionsPostSetActions = { -- {{{
     ["DebuffsFrameVerticalDisplay"] = function(v) D.MicroUnitF:ResetAllPositions (); end,
     ["DebuffsFrameMaxCount"] = function(v) D.MicroUnitF.MaxUnit = v; D.MicroUnitF:Delayed_MFsDisplay_Update(); end, -- just the number of MUFs is changed MFsDisplay_Update() is enough
     ["DebuffsFramePerline"] = function(v)  D.MicroUnitF:ResetAllPositions (); end,
-    ["DebuffsFrameElemScale"] = function(v) D.MicroUnitF:SetScale(D.profile.DebuffsFrameElemScale); end,
+    ["DebuffsFrameRaidAutoLayout121"] = function(v) D.MicroUnitF:ResetAllPositions (); end,
+    ["DebuffsFrameElemScale"] = function(v)
+        -- Legacy scale writes update the currently active party/raid size so
+        -- older configuration paths cannot be immediately undone by the
+        -- context-aware sizing system.
+        if D.MicroUnitF and D.MicroUnitF.SetActiveContextMUFSizePixels then
+            D.MicroUnitF:SetActiveContextMUFSizePixels((tonumber(D.profile.DebuffsFrameElemScale) or 1) * (DC.MFSIZE or 20));
+        else
+            D.MicroUnitF:SetScale(D.profile.DebuffsFrameElemScale);
+        end
+    end,
     ["DebuffsFrameRefreshRate"] = function(v) D:ScheduleRepeatedCall("Dcr_MUFupdate", D.DebuffsFrame_Update, D.db.global.DebuffsFrameRefreshRate, D); D:Debug("MUFs refresh rate changed:", D.db.global.DebuffsFrameRefreshRate, v); end,
     ["MFScanEverybodyTimer"] = function(v)
         if v > 0 then
@@ -531,6 +581,10 @@ local OptionsPostSetActions = { -- {{{
     end,
 
     ["Scan_Pets"] = function(v) D:GroupChanged ("opt CURE_PETS"); end,
+    ["PlaySound"] = function(v)
+        D.Status.SoundPlayed = false;
+        T._DispelNotificationIgnoreUntil = 0;
+    end,
     ["DisableMacroCreation"] = function(v) if v then D:SetMacroKey (nil); D:Debug("SetMacroKey (nil)"); end end,
 } -- }}}
 
@@ -769,14 +823,6 @@ local function GetStaticOptions ()
                         get = function () return not D.profile.HideLiveList end,
                         order = 7,
                     },
-                    PlaySound = {
-                        type = "toggle",
-                        disabled = function() return D.profile.HideLiveList and not D.profile.ShowDebuffsFrame and D.profile.AutoHideMUFs == 1 or not D:IsEnabled(); end,
-                        name = L["PLAY_SOUND"],
-                        desc = L["OPT_PLAYSOUND_DESC"],
-
-                        order = 10,
-                    },
                     AfflictionTooltips = {
                         type = "toggle",
                         disabled = function() return D.profile.HideLiveList and not D.profile.ShowDebuffsFrame and D.profile.AutoHideMUFs == 1 or not D:IsEnabled(); end,
@@ -850,7 +896,7 @@ local function GetStaticOptions ()
                         name = D:ColorText(L["DECURSIVE_DEBUG_REPORT_SHOW"], "FFFF0000"),
                         desc = L["DECURSIVE_DEBUG_REPORT_SHOW_DESC"],
                         func = function ()
-                            LibStub("AceConfigDialog-3.0"):Close(D.name);
+                            if T.ZhaohuModern and T.ZhaohuModern.frame then T.ZhaohuModern.frame:Hide(); end
                             if GameTooltip:IsShown() then GameTooltip:Hide(); end
                             T._ShowDebugReport();
                         end,
@@ -866,7 +912,7 @@ local function GetStaticOptions ()
                         func = function ()
 
                         -- {{{
-                            LibStub("AceConfigDialog-3.0"):Close(D.name);
+                            if T.ZhaohuModern and T.ZhaohuModern.frame then T.ZhaohuModern.frame:Hide(); end
                             if GameTooltip:IsShown() then GameTooltip:Hide(); end
                             if not D.MemoriumFrame then
                                 D.MemoriumFrame = CreateFrame("Frame", nil, UIParent);
@@ -934,7 +980,7 @@ local function GetStaticOptions ()
 
                                 ---[[
                                 f.fB = f:CreateTexture(nil,"OVERLAY")
-                                f.fB:SetTexture("Interface\\AddOns\\Decursive\\Textures\\GoldBorder")
+                                f.fB:SetTexture(T._AddonPath .. "Textures\\GoldBorder")
                                 f.fB:SetTexCoord(5/512, 324/512, 6/512, 287/512);
                                 f.fB:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0);
                                 f.fB:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0);
@@ -1023,6 +1069,221 @@ local function GetStaticOptions ()
                     },
                 }
             }, -- }}}
+
+            SoundNotifications = {
+                type = "group",
+                name = "Sound Notifications",
+                desc = "Configure MUF affliction alerts, burst suppression, output channel and cure-failure feedback.",
+                order = 5,
+                disabled = function() return not D:IsEnabled(); end,
+                args = {
+                    intro = {
+                        type = "description",
+                        name = "Sound alerts are linked to the same player-dispellable condition that lights a Decursive MUF. Only units currently assigned to a Decursive square are tracked. When that MUF unit changes from clean to player-dispellable, Decursive requests the selected sound through the shared burst-ignore window. Protected aura names, spell IDs and managed-button visibility are never read.",
+                        order = 1,
+                    },
+                    PlaySound = {
+                        type = "toggle",
+                        name = "Enable sound notifications",
+                        desc = "Master switch for Decursive dispel and cure-failure sound notifications.",
+                        order = 10,
+                    },
+                    SoundNotificationPreset = {
+                        type = "select",
+                        style = "dropdown",
+                        name = "Dispel alert sound",
+                        desc = "Choose the sound used for a new dispel alert.",
+                        values = {
+                            AFFLICTION = "Tone — Affliction Alert (classic)",
+                            QUICK = "Tone — Quick Pulse",
+                            FAILURE = "Tone — Short Alert",
+                            BRIGHT_PING = "Tone — Bright Ping",
+                            DOUBLE_PING = "Tone — Double Ping",
+                            TRIPLE_PING = "Tone — Triple Ping",
+                            HIGH_CHIME = "Tone — High Chime",
+                            LOW_CHIME = "Tone — Low Chime",
+                            PULSE_UP = "Tone — Rising Pulse",
+                            PULSE_DOWN = "Tone — Falling Pulse",
+                            VOICE_DISPEL = "Voice — Dispel",
+                            VOICE_CLEANSE = "Voice — Cleanse",
+                            VOICE_CURE = "Voice — Cure",
+                            VOICE_HELP = "Voice — Help",
+                            VOICE_CLEANSE_ME = "Voice — Cleanse me",
+                            VOICE_CURE_ME = "Voice — Cure me",
+                            VOICE_HELP_CLEANSE_ME = "Voice — Help, cleanse me",
+                            VOICE_HELP_CURE_ME = "Voice — Help, cure me",
+                            FEMALE_DISPEL = "Female Voice — Dispel",
+                            FEMALE_DISPEL_ME = "Female Voice — Dispel me",
+                            FEMALE_CLEANSE = "Female Voice — Cleanse",
+                            FEMALE_CLEANSE_ME = "Female Voice — Cleanse me",
+                        },
+                        get = function() return D.profile.SoundNotificationPreset or "FEMALE_DISPEL" end,
+                        set = function(info, value)
+                            D.profile.SoundNotificationPreset = value;
+                            local files = {
+                                AFFLICTION = DC.AfflictionSound,
+                                QUICK = T._AddonPath .. "Sounds\\G_NecropolisWound-fast.ogg",
+                                FAILURE = DC.FailedSound,
+                                BRIGHT_PING = T._AddonPath .. "Sounds\\BrightPing.ogg",
+                                DOUBLE_PING = T._AddonPath .. "Sounds\\DoublePing.ogg",
+                                TRIPLE_PING = T._AddonPath .. "Sounds\\TriplePing.ogg",
+                                HIGH_CHIME = T._AddonPath .. "Sounds\\HighChime.ogg",
+                                LOW_CHIME = T._AddonPath .. "Sounds\\LowChime.ogg",
+                                PULSE_UP = T._AddonPath .. "Sounds\\PulseUp.ogg",
+                                PULSE_DOWN = T._AddonPath .. "Sounds\\PulseDown.ogg",
+                                VOICE_DISPEL = T._AddonPath .. "Sounds\\VoiceDispel.ogg",
+                                VOICE_CLEANSE = T._AddonPath .. "Sounds\\VoiceCleanse.ogg",
+                                VOICE_CURE = T._AddonPath .. "Sounds\\VoiceCure.ogg",
+                                VOICE_HELP = T._AddonPath .. "Sounds\\VoiceHelp.ogg",
+                                VOICE_CLEANSE_ME = T._AddonPath .. "Sounds\\VoiceCleanseMe.ogg",
+                                VOICE_CURE_ME = T._AddonPath .. "Sounds\\VoiceCureMe.ogg",
+                                VOICE_HELP_CLEANSE_ME = T._AddonPath .. "Sounds\\VoiceHelpCleanseMe.ogg",
+                                VOICE_HELP_CURE_ME = T._AddonPath .. "Sounds\\VoiceHelpCureMe.ogg",
+                                FEMALE_DISPEL = T._AddonPath .. "Sounds\\FemaleDispel.ogg",
+                                FEMALE_DISPEL_ME = T._AddonPath .. "Sounds\\FemaleDispelMe.ogg",
+                                FEMALE_CLEANSE = T._AddonPath .. "Sounds\\FemaleCleanse.ogg",
+                                FEMALE_CLEANSE_ME = T._AddonPath .. "Sounds\\FemaleCleanseMe.ogg",
+                            };
+                            D.profile.SoundFile = files[value] or DC.AfflictionSound;
+                        end,
+                        disabled = function() return not D.profile.PlaySound end,
+                        order = 20,
+                    },
+                    SoundNotificationChannel = {
+                        type = "select",
+                        style = "dropdown",
+                        name = "Output channel",
+                        desc = "Choose which WoW audio channel carries Decursive notifications. Master stays audible even when Sound Effects are disabled.",
+                        values = { Master = "Master", SFX = "Sound Effects", Dialog = "Dialog", Ambience = "Ambience", Music = "Music" },
+                        disabled = function() return not D.profile.PlaySound end,
+                        order = 30,
+                    },
+                    SoundNotificationIgnoreSeconds = {
+                        type = "range",
+                        name = "Burst ignore window",
+                        desc = "After the first dispel alert plays, discard every additional alert request for this many seconds. The default is 2.0 seconds, so a group-wide affliction produces one sound instead of one sound per player.",
+                        min = 0,
+                        max = 5,
+                        step = 0.25,
+                        disabled = function() return not D.profile.PlaySound end,
+                        order = 40,
+                    },
+                    PlayFailureSound = {
+                        type = "toggle",
+                        name = "Play cure-failure sound",
+                        desc = "Play the short failure sound when an attempted cleanse fails. The master sound switch must also be enabled.",
+                        disabled = function() return not D.profile.PlaySound end,
+                        order = 50,
+                    },
+                    testSound = {
+                        type = "execute",
+                        name = "Test dispel alert",
+                        desc = "Play the currently selected dispel alert immediately. The test bypasses the burst ignore timer.",
+                        func = function() if D.PlayDispelNotificationSound then D:PlayDispelNotificationSound("settings test", true); else D:SafePlaySoundFile(D.profile.SoundFile or DC.AfflictionSound, D.profile.SoundNotificationChannel or "Master"); end end,
+                        disabled = function() return not D.profile.PlaySound end,
+                        order = 60,
+                    },
+                    mufTriggerHeader = {
+                        type = "header",
+                        name = "WoW 12.1 MUF Affliction Trigger",
+                        order = 100,
+                    },
+                    mufTriggerStatus = {
+                        type = "description",
+                        name = function()
+                            local available = D.Is121MUFStateSoundEngineAvailable and D:Is121MUFStateSoundEngineAvailable();
+                            if available then
+                                return "Trigger engine: |cff55ff55Active — Blizzard aura sounds|r\nTracks: assigned group unit tokens\nInput: known/learned public dispellable Spell IDs\nBehavior: Blizzard detects the protected aura application and plays the selected sound directly.\nThe red/blue MUF square remains independently managed by Blizzard.";
+                            end
+                            return "Trigger engine: |cffffaa00Unavailable on this client|r\nDecursive will use the legacy learned-spell-ID fallback below when possible.";
+                        end,
+                        order = 105,
+                    },
+                    protectedHeader = {
+                        type = "header",
+                        name = "Aura Sound Spell-ID Pool",
+                        hidden = false,
+                        order = 200,
+                    },
+                    SoundProtectedAuraAlerts = {
+                        type = "toggle",
+                        name = "Enable registered aura alerts",
+                        desc = "Register known/learned dispellable Spell IDs with Blizzard's 12.1 aura-sound engine for the currently assigned group units.",
+                        disabled = function() return not D.profile.PlaySound end,
+                        hidden = false,
+                        order = 210,
+                    },
+                    SoundProtectedAuraAutoLearn = {
+                        type = "toggle",
+                        name = "Learn Spell IDs from successful dispels",
+                        desc = "When you successfully dispel an aura and the combat log exposes its public Spell ID, remember it for the current class/spec and immediately register it with Blizzard. The first-ever occurrence can be silent; later occurrences use Blizzard-native sound detection.",
+                        disabled = function() return not D.profile.PlaySound or not D.profile.SoundProtectedAuraAlerts end,
+                        hidden = false,
+                        order = 220,
+                    },
+                    protectedStatus = {
+                        type = "description",
+                        name = function()
+                            local ids, contextKey = {}, "current spec";
+                            if D.GetProtectedAuraSoundIDs then
+                                local currentIDs, currentKey = D:GetProtectedAuraSoundIDs();
+                                if type(currentIDs) == "table" then ids = currentIDs; end
+                                if currentKey then contextKey = currentKey; end
+                            end
+                            local count = #ids;
+                            local recent = {};
+                            if type(ids) == "table" then
+                                for i = math.max(1, #ids - 7), #ids do
+                                    local id = ids[i];
+                                    local spellName;
+                                    if _G.C_Spell and type(_G.C_Spell.GetSpellName) == "function" then
+                                        local ok, value = pcall(_G.C_Spell.GetSpellName, id);
+                                        if ok and value and (not _G.canaccessvalue or _G.canaccessvalue(value)) then spellName = value; end
+                                    end
+                                    recent[#recent + 1] = ("%d — %s"):format(id, spellName or "Unknown spell");
+                                end
+                            end
+                            local recentText = #recent > 0 and ("\nRecent learned IDs:\n" .. table.concat(recent, "\n")) or "";
+                            return ("Debounce engine: Decursive exact lockout\nCurrent learning context: %s\nLearned protected aura spell IDs: %d%s\n\nThe first accepted alert opens the configured ignore window. Additional group-member applications during that window are discarded. If WoW hides a protected aura's combat-log spell ID, Decursive leaves that occurrence visual-only rather than playing an unthrottled fallback."):format(contextKey, count, recentText);
+                        end,
+                        hidden = false,
+                        order = 230,
+                    },
+                    addProtectedSpellID = {
+                        type = "input",
+                        name = "Add protected aura Spell ID",
+                        desc = "Manually add a known dispellable debuff Spell ID for the current class/spec. Decursive immediately registers it with Blizzard's native aura-sound engine for assigned group units.",
+                        get = function() return "" end,
+                        set = function(info, value)
+                            local id = tonumber(value);
+                            if id and id > 0 and D.LearnProtectedAuraSoundSpellID then
+                                D:LearnProtectedAuraSoundSpellID(id, "manual");
+                            else
+                                D:Println("Sound Notifications: enter a valid numeric spell ID.");
+                            end
+                        end,
+                        disabled = function() return not D.profile.PlaySound or not D.profile.SoundProtectedAuraAlerts end,
+                        hidden = false,
+                        order = 240,
+                    },
+                    clearProtectedSpellIDs = {
+                        type = "execute",
+                        name = "Clear learned aura IDs",
+                        desc = "Remove all automatically/manually learned protected aura spell IDs for the current class/spec.",
+                        func = function()
+                            local ids = D.GetProtectedAuraSoundIDs and D:GetProtectedAuraSoundIDs();
+                            if type(ids) == "table" then
+                                for i = #ids, 1, -1 do table.remove(ids, i); end
+                            end
+                            if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("learned IDs cleared") end
+                            D:Println("Sound Notifications: learned protected aura spell IDs cleared for the current class/spec.");
+                        end,
+                        disabled = function() local ids = D.GetProtectedAuraSoundIDs and D:GetProtectedAuraSoundIDs(); return type(ids) ~= "table" or #ids == 0 end,
+                        hidden = false,
+                        order = 250,
+                    },
+                },
+            },
 
             livelistoptions = {
                 -- {{{
@@ -1222,13 +1483,339 @@ local function GetStaticOptions ()
                                 desc = L["OPT_SHOWBORDER_DESC"],
                                 order = 1350,
                             },
+                            Environment121Mode = {
+                                type = 'select',
+                                name = "Environment mode",
+                                desc = "Automatically tune Decursive for Raid, Mythic+, Dungeon, PvP, or Open World. Automatic detects the current activity. Manual choices lock Decursive to that environment profile until changed.",
+                                values = {
+                                    AUTO = "Automatic",
+                                    RAID = "Raid",
+                                    MYTHIC_PLUS = "Mythic+",
+                                    DUNGEON = "Dungeon",
+                                    PVP = "PvP",
+                                    OPEN_WORLD = "Open World",
+                                    DANDERSFRAMES = "DandersFrames (integration)",
+                                },
+                                get = function()
+                                    if D.Get121EnvironmentMode then return select(1, D:Get121EnvironmentMode()) end
+                                    return D.profile.Environment121Mode or "AUTO"
+                                end,
+                                set = function(info, value)
+                                    if value == "DANDERSFRAMES" then return end
+                                    if D.Set121EnvironmentMode then D:Set121EnvironmentMode(value) else D.profile.Environment121Mode = value end
+                                end,
+                                disabled = function()
+                                    if D.Status.Combat then return true end
+                                    if D.Get121DispelDetectionProviderStatus then
+                                        local st = D:Get121DispelDetectionProviderStatus()
+                                        if st and st.sessionProvider == "DANDERSFRAMES" then return true end
+                                    end
+                                    return false
+                                end,
+                                order = 1349,
+                            },
+                            Environment121ActiveProfile = {
+                                type = 'description',
+                                name = function()
+                                    if D.Get121EnvironmentMode then
+                                        local setting, active, displayName = D:Get121EnvironmentMode()
+                                        local suffix = setting == "AUTO" and " (automatic)" or " (manual)"
+                                        return "|cFF55DDDDActive profile: " .. (displayName or active or "Open World") .. suffix .. "|r\nDetection, reaction, range, and cooldown settings below are saved separately for the active environment profile."
+                                    end
+                                    return ""
+                                end,
+                                order = 1350,
+                            },
+                            Detection121Mode = {
+                                type = 'description',
+                                name = "|cFF55DDDDDetection policy: Strict Managed|r\nWoW 12.1 dispel detection always uses Blizzard AuraContainer/AuraButton filtering. Legacy aura enumeration is disabled on 12.1 so protected/secret aura data is never required.",
+                                order = 1350.10,
+                            },
+                            SecondaryAffliction121Enabled = {
+                                type = 'toggle',
+                                name = "Show secondary simultaneous affliction",
+                                desc = "Allow a second simultaneous dispellable affliction to use the managed secondary border. This affects newly initialized managed MUFs; /reload is recommended after changing it.",
+                                get = function() return D.profile.CooldownPriority2Border121Enabled ~= false end,
+                                set = function(info, value)
+                                    local v = value and true or false
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("SecondaryAffliction121Enabled", v) end
+                                    D.profile.CooldownPriority2Border121Enabled = v
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1350.20,
+                            },
+                            SecondaryAffliction121Pulse = {
+                                type = 'toggle',
+                                name = "Pulse secondary affliction",
+                                desc = "Pulse the secondary-affliction border for this environment profile. /reload is recommended after changing live managed-border behavior.",
+                                get = function() return D.profile.CooldownPriority2Pulse121Enabled ~= false end,
+                                set = function(info, value)
+                                    local v = value and true or false
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("SecondaryAffliction121Pulse", v) end
+                                    D.profile.CooldownPriority2Pulse121Enabled = v
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.CooldownPriority2Border121Enabled == false end,
+                                order = 1350.30,
+                            },
+                            SharedPriorityCooldown121Enabled = {
+                                type = 'toggle',
+                                name = "Share cooldown with same-priority afflicted MUFs",
+                                desc = "When enabled, other units still requiring the same Decursive curing priority may receive the shared cooldown indication. Matching is performed by Blizzard managed dispel-type filters; protected aura details are not read by addon Lua.",
+                                get = function() return D.profile.SharedPriorityCooldown121Enabled == true end,
+                                set = function(info, value)
+                                    local v = value and true or false
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("SharedPriorityCooldown121Enabled", v) else D.profile.SharedPriorityCooldown121Enabled = v end
+                                    if D.Refresh121SharedPriorityCooldowns then D:Refresh121SharedPriorityCooldowns() end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1350.40,
+                            },
+                            ClearCleansedTarget121Enabled = {
+                                type = 'toggle',
+                                name = "Clear cleansed target visual immediately",
+                                desc = "The successfully cleansed MUF always clears immediately and is never given a cooldown overlay. Other still-dispellable MUFs receive the cooldown overlay while your cure is unavailable.",
+                                get = function() return D.profile.ClearCleansedTarget121Enabled ~= false end,
+                                set = function(info, value)
+                                    local v = value and true or false
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("ClearCleansedTarget121Enabled", v) else D.profile.ClearCleansedTarget121Enabled = v end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1350.50,
+                            },
+                            EnvironmentChat121Enabled = {
+                                type = 'toggle',
+                                name = "Announce environment/profile changes",
+                                desc = "Print a Decursive message when automatic or manual environment selection changes the active behavior profile.",
+                                get = function() return D.profile.EnvironmentChat121Enabled ~= false end,
+                                set = function(info, value)
+                                    local v = value and true or false
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("EnvironmentChat121Enabled", v) else D.profile.EnvironmentChat121Enabled = v end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1350.60,
+                            },
+                            ProfileBehaviorHint121 = {
+                                type = 'description',
+                                name = "|cFFAAAAAAThese controls are stored in the active environment profile. Unsafe options that attempt to read protected/secret aura details are intentionally not provided.|r",
+                                order = 1350.70,
+                            },
+                            ResetEnvironment121Profile = {
+                                type = 'execute',
+                                name = "Reset active environment profile",
+                                desc = "Restore the recommended range and cooldown defaults for the environment profile currently being edited.",
+                                func = function()
+                                    if D.Reset121EnvironmentProfile then D:Reset121EnvironmentProfile() end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1350.5,
+                            },
+                            OutOfRange121Enabled = {
+                                type = 'toggle',
+                                name = "Dim MUFs when out of range",
+                                desc = "Dim the MUF while that unit is outside normal friendly-spell range. The dim layer preserves the underlying Decursive priority color instead of replacing it.",
+                                get = function() return D.profile.OutOfRange121Enabled ~= false end,
+                                set = function(info, value)
+                                    local v = value and true or false
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("OutOfRange121Enabled", v) else D.profile.OutOfRange121Enabled = v end
+                                    if D.Set121OutOfRangeEnabled then D:Set121OutOfRangeEnabled(v) end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1351,
+                            },
+                            OutOfRange121DimAmount = {
+                                type = 'range',
+                                name = "Out-of-range dim amount",
+                                desc = "Controls how strongly out-of-range MUFs are darkened. Higher values make the priority color darker.",
+                                min = 0.10,
+                                max = 0.90,
+                                step = 0.05,
+                                isPercent = true,
+                                get = function() return D.profile.OutOfRange121DimAmount or .60 end,
+                                set = function(info, value)
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("OutOfRange121DimAmount", value) else D.profile.OutOfRange121DimAmount = value end
+                                    if D.Apply121RangeAppearance then D:Apply121RangeAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.OutOfRange121Enabled == false end,
+                                order = 1352,
+                            },
+                            OutOfRange121Color = {
+                                type = 'color',
+                                name = "Out-of-range overlay color",
+                                desc = "Choose the tint placed over an out-of-range MUF. Yellow is the default so an out-of-range unit is immediately recognizable.",
+                                hasAlpha = false,
+                                get = function()
+                                    local c = D.profile.OutOfRange121Color or {1, 1, 0}
+                                    return c[1] or 0, c[2] or 0, c[3] or 0
+                                end,
+                                set = function(info, r, g, b)
+                                    local c = {r, g, b}
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("OutOfRange121Color", c) else D.profile.OutOfRange121Color = c end
+                                    if D.Apply121RangeAppearance then D:Apply121RangeAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.OutOfRange121Enabled == false end,
+                                order = 1353,
+                            },
+                            ResetOutOfRange121Color = {
+                                type = 'execute',
+                                name = "Reset out-of-range color",
+                                desc = "Restore the default yellow range tint and 60% range overlay amount.",
+                                func = function()
+                                    if D.Set121EnvironmentVisualSetting then
+                                        D:Set121EnvironmentVisualSetting("OutOfRange121Color", {1, 1, 0})
+                                        D:Set121EnvironmentVisualSetting("OutOfRange121DimAmount", .60)
+                                    else
+                                        D.profile.OutOfRange121Color = {1, 1, 0}
+                                        D.profile.OutOfRange121DimAmount = .60
+                                    end
+                                    if D.Apply121RangeAppearance then D:Apply121RangeAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1354,
+                            },
+                            CooldownOverlay121Enabled = {
+                                type = "toggle",
+                                name = "Dispel cooldown on remaining targets",
+                                desc = "After you cleanse one MUF, that square clears immediately. If other MUFs still need the same cure priority, they receive the faded cooldown overlay and countdown until your dispel is ready again.",
+                                get = function() return D.profile.CooldownOverlay121Enabled ~= false end,
+                                set = function(info, value)
+                                    local v = value and true or false;
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("CooldownOverlay121Enabled", v) else D.profile.CooldownOverlay121Enabled = v end
+                                    if D.Set121CooldownOverlayEnabled then
+                                        D:Set121CooldownOverlayEnabled(v);
+                                    end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1355,
+                            },
+                            CooldownOverlay121Opacity = {
+                                type = 'range',
+                                name = "Inner cooldown priority tint opacity",
+                                desc = "Adjust the opacity of the faded priority-color cooldown tint shown on other still-dispellable MUFs while your cure is on cooldown.",
+                                min = 0.10,
+                                max = 1,
+                                step = 0.05,
+                                isPercent = true,
+                                get = function() return D.profile.CooldownOverlay121Opacity or .62 end,
+                                set = function(info, value)
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("CooldownOverlay121Opacity", value) else D.profile.CooldownOverlay121Opacity = value end
+                                    if D.Apply121CooldownAppearance then D:Apply121CooldownAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.CooldownOverlay121Enabled == false end,
+                                order = 1356,
+                            },
+                            CooldownOverlay121Numbers = {
+                                type = 'toggle',
+                                name = "Show cooldown countdown number",
+                                desc = "Show the white numeric cooldown countdown on other still-dispellable MUFs after a successful cleanse.",
+                                get = function() return D.profile.CooldownOverlay121Numbers ~= false end,
+                                set = function(info, value)
+                                    local v = value and true or false
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("CooldownOverlay121Numbers", v) else D.profile.CooldownOverlay121Numbers = v end
+                                    if D.Apply121CooldownAppearance then D:Apply121CooldownAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.CooldownOverlay121Enabled == false end,
+                                order = 1357,
+                            },
+                            CooldownPriority2Border121Enabled = {
+                                type = 'toggle',
+                                name = "Show secondary-affliction border",
+                                desc = "Show one border only when the same target has a second simultaneous dispellable affliction. Blizzard supplies that affliction's priority color.",
+                                get = function() return D.profile.CooldownPriority2Border121Enabled ~= false end,
+                                set = function(info, value)
+                                    D.profile.CooldownPriority2Border121Enabled = value and true or false;
+                                    if D.Apply121CooldownAppearance then D:Apply121CooldownAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.CooldownOverlay121Enabled == false end,
+                                order = 1358,
+                            },
+                            CooldownBorder121Alpha = {
+                                type = 'range',
+                                name = "Secondary border opacity",
+                                desc = "Adjust the opacity of the secondary-affliction border.",
+                                min = .1,
+                                max = 1,
+                                step = .05,
+                                isPercent = true,
+                                get = function() return D.profile.CooldownBorder121Alpha or .95 end,
+                                set = function(info, value)
+                                    D.profile.CooldownBorder121Alpha = value;
+                                    if D.Apply121CooldownAppearance then D:Apply121CooldownAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.CooldownOverlay121Enabled == false or D.profile.CooldownPriority2Border121Enabled == false end,
+                                order = 1359,
+                            },
+                            CooldownBorder121Thickness = {
+                                type = 'range',
+                                name = "Secondary border thickness",
+                                desc = "Adjust the thickness of the one secondary-affliction border around each MUF.",
+                                min = 1,
+                                max = 5,
+                                step = 1,
+                                get = function() return D.profile.CooldownBorder121Thickness or 2 end,
+                                set = function(info, value)
+                                    D.profile.CooldownBorder121Thickness = value;
+                                    if D.Apply121CooldownAppearance then D:Apply121CooldownAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.CooldownOverlay121Enabled == false or D.profile.CooldownPriority2Border121Enabled == false end,
+                                order = 1360,
+                            },
+                            CooldownPriority2Pulse121Enabled = {
+                                type = 'toggle',
+                                name = "Pulse secondary-affliction border",
+                                desc = "Pulse the border when a target has a second simultaneous dispellable affliction. This also applies to the MUF visual test.",
+                                get = function() return D.profile.CooldownPriority2Pulse121Enabled ~= false end,
+                                set = function(info, value)
+                                    D.profile.CooldownPriority2Pulse121Enabled = value and true or false;
+                                    if D.Apply121CooldownAppearance then D:Apply121CooldownAppearance() end
+                                end,
+                                disabled = function() return D.Status.Combat or D.profile.CooldownOverlay121Enabled == false or D.profile.CooldownPriority2Border121Enabled == false end,
+                                order = 1360.5,
+                            },
+                            Test121MUFSelect = {
+                                type = 'select',
+                                name = "MUF square to test",
+                                desc = "Choose one currently visible Micro Unit Frame to preview by itself.",
+                                values = function()
+                                    if D.Get121MUFTestChoices then return D:Get121MUFTestChoices() end
+                                    return { [1] = "No visible MUFs" }
+                                end,
+                                get = function()
+                                    if D.Get121MUFTestIndex then return D:Get121MUFTestIndex() end
+                                    return 1
+                                end,
+                                set = function(info, value)
+                                    if D.Set121MUFTestIndex then D:Set121MUFTestIndex(value) end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1361,
+                            },
+                            Test121MUFVisualsOne = {
+                                type = 'execute',
+                                name = "Test selected MUF square",
+                                desc = "Preview the two-layer model: primary affliction in the inner square and one pulsing border for a second simultaneous affliction.",
+                                func = function()
+                                    if D.Test121MUFVisuals then D:Test121MUFVisuals("one", D:Get121MUFTestIndex()) end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1362,
+                            },
+                            Test121MUFVisualsAll = {
+                                type = 'execute',
+                                name = "Test ALL MUF squares",
+                                desc = "Preview the two-layer model on every visible MUF: inner square for the primary affliction and one pulsing border for a second simultaneous affliction.",
+                                func = function()
+                                    if D.Test121MUFVisuals then D:Test121MUFVisuals("all") end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1363,
+                            },
                             CenterTextDisplay = {
                                 type = "select",
                                 style = "dropdown",
                                 name = L["OPT_CENTERTEXT"],
                                 desc = L["OPT_CENTERTEXT_DESC"],
                                 values = {["1_TLEFT"] = L["OPT_CENTERTEXT_TIMELEFT"], ["2_TELAPSED"] = L["OPT_CENTERTEXT_ELAPSED"], ["3_STACKS"] = L["OPT_CENTERTEXT_STACKS"], ["4_NONE"] = L["OPT_CENTERTEXT_DISABLED"]},
-                                order = 1360,
+                                order = 1365,
                             },
                             Show_Stealthed_Status = {
                                 type = "toggle",
@@ -1271,10 +1858,119 @@ local function GetStaticOptions ()
                                 disabled = "disabled",
                                 order = 1600,
                             },
+                            DebuffsFrameRaidAutoLayout121 = {
+                                type = 'toggle',
+                                name = "Automatic raid grid",
+                                desc = "For raids larger than 5 players, automatically reflow MUFs into a compact grid of at most five rows. A 40-player raid becomes 8 columns by 5 rows. DandersFrames integration still controls the unit order; this setting only controls Decursive's grid shape.",
+                                disabled = "disabled",
+                                order = 1605,
+                            },
+                            DebuffsFramePartyPixelSize121 = {
+                                type = 'range',
+                                name = "Party MUF size (pixels)",
+                                desc = "Size of each Micro Unit Frame when you are not in a raid. This includes normal parties, dungeons, Mythic+, follower dungeons, open world, and solo play. Existing profiles initially inherit their current MUF size.",
+                                min = 10,
+                                max = 80,
+                                step = 1,
+                                get = function()
+                                    if D.MicroUnitF and D.MicroUnitF.GetContextMUFSizePixels then
+                                        return D.MicroUnitF:GetContextMUFSizePixels("PARTY");
+                                    end
+                                    return math.floor((D.profile.DebuffsFrameElemScale or 1) * (DC.MFSIZE or 20) + 0.5);
+                                end,
+                                set = function(info, value)
+                                    if D.Status.Combat then return end
+                                    if D.MicroUnitF and D.MicroUnitF.SetContextMUFSizePixels then
+                                        D.MicroUnitF:SetContextMUFSizePixels("PARTY", value);
+                                    end
+                                end,
+                                disabled = "disabled",
+                                order = 1780,
+                            },
+                            DebuffsFrameRaidPixelSize121 = {
+                                type = 'range',
+                                name = "Raid MUF size (pixels)",
+                                desc = "Size of each Micro Unit Frame whenever WoW reports that you are in a raid. The addon switches between Party and Raid sizes automatically.",
+                                min = 10,
+                                max = 80,
+                                step = 1,
+                                get = function()
+                                    if D.MicroUnitF and D.MicroUnitF.GetContextMUFSizePixels then
+                                        return D.MicroUnitF:GetContextMUFSizePixels("RAID");
+                                    end
+                                    return math.floor((D.profile.DebuffsFrameElemScale or 1) * (DC.MFSIZE or 20) + 0.5);
+                                end,
+                                set = function(info, value)
+                                    if D.Status.Combat then return end
+                                    if D.MicroUnitF and D.MicroUnitF.SetContextMUFSizePixels then
+                                        D.MicroUnitF:SetContextMUFSizePixels("RAID", value);
+                                    end
+                                end,
+                                disabled = "disabled",
+                                order = 1785,
+                            },
+                            ResetDebuffsFrameContextPixelSizes121 = {
+                                type = 'execute',
+                                name = "Reset Party & Raid sizes (20 px)",
+                                desc = "Reset both Party and Raid Micro Unit Frame sizes to Decursive's original 20 pixel size.",
+                                func = function()
+                                    if D.Status.Combat then return end
+                                    if D.MicroUnitF and D.MicroUnitF.SetContextMUFSizePixels then
+                                        D.MicroUnitF:SetContextMUFSizePixels("PARTY", 20);
+                                        D.MicroUnitF:SetContextMUFSizePixels("RAID", 20);
+                                        D.MicroUnitF:ApplyContextMUFScale();
+                                    end
+                                end,
+                                disabled = "disabled",
+                                order = 1790,
+                            },
+                            -- Retained internally for backward compatibility. The v11 UI
+                            -- exposes the separate Party/Raid pixel controls above.
+                            DebuffsFramePixelSize = {
+                                type = 'range',
+                                name = "MUF square size (pixels)",
+                                desc = "Legacy single MUF size control.",
+                                min = 10,
+                                max = 80,
+                                step = 1,
+                                hidden = true,
+                                guiHidden = true,
+                                get = function()
+                                    if D.MicroUnitF and D.MicroUnitF.GetActiveMUFSizePixels then
+                                        return D.MicroUnitF:GetActiveMUFSizePixels();
+                                    end
+                                    return math.floor((D.profile.DebuffsFrameElemScale or 1) * (DC.MFSIZE or 20) + 0.5);
+                                end,
+                                set = function(info, value)
+                                    if D.Status.Combat then return end
+                                    if D.MicroUnitF and D.MicroUnitF.SetActiveContextMUFSizePixels then
+                                        D.MicroUnitF:SetActiveContextMUFSizePixels(value);
+                                    end
+                                end,
+                                disabled = "disabled",
+                                order = 1795,
+                            },
+                            ResetDebuffsFramePixelSize = {
+                                type = 'execute',
+                                name = "Reset MUF size (20 px)",
+                                desc = "Legacy single-size reset.",
+                                hidden = true,
+                                guiHidden = true,
+                                func = function()
+                                    if D.Status.Combat then return end
+                                    if D.MicroUnitF and D.MicroUnitF.SetActiveContextMUFSizePixels then
+                                        D.MicroUnitF:SetActiveContextMUFSizePixels(20);
+                                    end
+                                end,
+                                disabled = "disabled",
+                                order = 1796,
+                            },
                             DebuffsFrameElemScale = {
                                 type = 'range',
                                 name = L["OPT_MFSCALE"],
                                 desc = L["OPT_MFSCALE_DESC"],
+                                hidden = true,
+                                guiHidden = true,
                                 min = 0.3,
                                 max = 4,
                                 step = 0.01,
@@ -1446,16 +2142,6 @@ local function GetStaticOptions ()
                                 },
                             },
                         },
-                    },
-
-                    MUFsMouseButtons = {
-                        type = "group",
-                        name = L["OPT_MUFMOUSEBUTTONS"],
-                        desc = L["OPT_MUFMOUSEBUTTONS_DESC"],
-                        order = 3,
-                        disabled = function() return D.Status.Combat or not D.profile.ShowDebuffsFrame and D.profile.AutoHideMUFs == 1;end,
-                        hidden = function () return not D:IsEnabled(); end,
-                        args = {},
                     },
 
                     MUFsColors = {
@@ -1811,6 +2497,20 @@ local function GetStaticOptions ()
                         order = 2,
                     },
 
+                    DetectedDispel121 = {
+                        type = 'description',
+                        name = function()
+                            if D.Get121CooldownDispelSpell then
+                                local id, name = D:Get121CooldownDispelSpell();
+                                if id then
+                                    return "|cFF55DDDD12.1 cooldown dispel detected:|r " .. (name or "Unknown") .. " |cFF888888(" .. tostring(id) .. ")|r";
+                                end
+                            end
+                            return "|cFF55DDDD12.1 cooldown dispel detected:|r |cFFFF5555None|r";
+                        end,
+                        order = 3,
+                    },
+
                     AddCustomSpell = { -- {{{
                         type = 'input',
                         name = L["OPT_ADD_A_CUSTOM_SPELL"],
@@ -1883,9 +2583,91 @@ local function GetStaticOptions ()
                         name = L["OPT_CUSTOMSPELLS"],
                         order = 165,
                         args = {},
+                    },
+
+                    MouseBindings = {
+                        type = "group",
+                        name = L["OPT_MUFMOUSEBUTTONS"],
+                        desc = L["OPT_MUFMOUSEBUTTONS_DESC"],
+                        order = 170,
+                        disabled = function() return D.Status.Combat or not D.profile.ShowDebuffsFrame and D.profile.AutoHideMUFs == 1; end,
+                        hidden = function() return not D:IsEnabled(); end,
+                        args = {},
                     }
                 },
             }, -- }}}
+
+            Compatibility121 = {
+                type = "group",
+                name = D:ColorText("12.1 Status", "FF55DDDD"),
+                desc = "Status and visual tests for the WoW 12.1 Decursive compatibility layer.",
+                order = 55,
+                args = {
+                    Status = {
+                        type = 'description',
+                        name = function()
+                            if D.Get121CompatibilityStatusText then
+                                return D:Get121CompatibilityStatusText();
+                            end
+                            return "WoW 12.1 compatibility layer is not available.";
+                        end,
+                        order = 1,
+                    },
+                    Refresh = {
+                        type = 'execute',
+                        name = "Refresh detected dispel",
+                        desc = "Re-resolve the friendly curing spell used by the cooldown overlay and refresh its display.",
+                        func = function()
+                            if D.Refresh121DispelResolver then D:Refresh121DispelResolver() end
+                        end,
+                        disabled = function() return D.Status.Combat end,
+                        order = 10,
+                    },
+                    TestMUFSelect = {
+                        type = 'select',
+                        name = "MUF square to test",
+                        desc = "Choose one currently visible Micro Unit Frame to test independently.",
+                        values = function()
+                            if D.Get121MUFTestChoices then return D:Get121MUFTestChoices() end
+                            return { [1] = "No visible MUFs" }
+                        end,
+                        get = function()
+                            if D.Get121MUFTestIndex then return D:Get121MUFTestIndex() end
+                            return 1
+                        end,
+                        set = function(info, value)
+                            if D.Set121MUFTestIndex then D:Set121MUFTestIndex(value) end
+                        end,
+                        disabled = function() return D.Status.Combat end,
+                        order = 20,
+                    },
+                    TestVisualsOne = {
+                        type = 'execute',
+                        name = "Test selected MUF square",
+                        desc = "Test only the selected MUF for 8 seconds. This is visual-only and never inspects protected aura data or casts a spell.",
+                        func = function()
+                            if D.Test121MUFVisuals then D:Test121MUFVisuals("one", D:Get121MUFTestIndex()) end
+                        end,
+                        disabled = function() return D.Status.Combat end,
+                        order = 21,
+                    },
+                    TestVisualsAll = {
+                        type = 'execute',
+                        name = "Test ALL MUF squares",
+                        desc = "Test every currently visible MUF simultaneously for 8 seconds. This is visual-only and never inspects protected aura data or casts a spell.",
+                        func = function()
+                            if D.Test121MUFVisuals then D:Test121MUFVisuals("all") end
+                        end,
+                        disabled = function() return D.Status.Combat end,
+                        order = 22,
+                    },
+                    DiagnosticHint = {
+                        type = 'description',
+                        name = "\nFor the original Decursive diagnostic report, use |cFFFFFFFF/dcrdiag|r. The 12.1 status page intentionally reports only public addon/spell state and never protected aura details.",
+                        order = 30,
+                    },
+                },
+            },
 
             DebuffSkip = {
                 -- {{{
@@ -1966,15 +2748,15 @@ local function GetStaticOptions ()
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
                                     "\n\n|cFFDDDD00 %s|r:\n   %s\n\n   %s"
                                 ):format(
-                                    "@project-version@", "John Wellesz", ("@project-date-iso@"):sub(1,10),
+                                    "11.0.10", "John Wellesz", ("2026-08-21T06:20:00Z"):sub(1,10),
                                     L["ABOUT_NOTES"],
-                                    L["ABOUT_LICENSE"],         GetAddOnMetadata("Decursive", "X-License") or 'All Rights Reserved',
-                                    L["ABOUT_SHAREDLIBS"],      GetAddOnMetadata("Decursive", "X-Embeds")  or 'GetAddOnMetadata() failure',
-                                    L["ABOUT_OFFICIALWEBSITE"], GetAddOnMetadata("Decursive", "X-Website") or 'GetAddOnMetadata() failure',
-                                    L["ABOUT_AUTHOREMAIL"],     GetAddOnMetadata("Decursive", "X-eMail")   or 'GetAddOnMetadata() failure',
+                                    L["ABOUT_LICENSE"],         GetAddOnMetadata(addonName, "X-License") or 'All Rights Reserved',
+                                    L["ABOUT_SHAREDLIBS"],      GetAddOnMetadata(addonName, "X-Embeds")  or 'GetAddOnMetadata() failure',
+                                    L["ABOUT_OFFICIALWEBSITE"], GetAddOnMetadata(addonName, "X-Website") or 'GetAddOnMetadata() failure',
+                                    L["ABOUT_AUTHOREMAIL"],     GetAddOnMetadata(addonName, "X-eMail")   or 'GetAddOnMetadata() failure',
                                     L["ABOUT_CREDITS"]
                                     ,    "Decursive is inspired from the original \"Decursive v1.9.4\" released in 2006 by Patrick Bohnet (Quutar of Earthen Ring (US))"
-                                    ,    GetAddOnMetadata("Decursive", "X-Credits") or 'GetAddOnMetadata() failure'
+                                    ,    GetAddOnMetadata(addonName, "X-Credits") or 'GetAddOnMetadata() failure'
                                 ),
                         order = 0,
                     },
@@ -2033,7 +2815,7 @@ local function GetOptions()
     -- add the affliction color pickers there too
     D:CreateAfflictionColorsMenu(options.args.MicroFrameOpt.args.MUFsColors.args);
     -- create MUF's mouse buttons configuration menus
-    options.args.MicroFrameOpt.args.MUFsMouseButtons.args = D:CreateModifierOptionMenu();
+    options.args.CustomSpells.args.MouseBindings.args = D:CreateModifierOptionMenu();
     -- create curring spells addition submenus
     D:CreateAddedSpellsOptionMenu(options.args.CustomSpells.args.CustomSpellsHolder.args);
     -- create bleeding debuffs addition submenus
@@ -2046,6 +2828,61 @@ local function GetOptions()
     options.args.general.args.profiles.hidden = function() return not D:IsEnabled(); end;
     options.args.general.args.profiles.disabled = function() return D.Status.Combat or not D:IsEnabled(); end;
 
+    -- Zhaohu 12.1: profile sharing uses the existing AceDB profile plus AceSerializer.
+    options.args.general.args.profiles.args.DecursiveProfileIO = {
+        type = 'group',
+        name = 'Import / Export',
+        desc = 'Share the active Decursive profile without overwriting global, locale, or class-scoped data.',
+        order = 90,
+        inline = true,
+        args = {
+            CurrentProfile = {
+                type = 'description',
+                name = function()
+                    local name = D.db and D.db:GetCurrentProfile() or 'Unknown'
+                    return '|cff55ffffCurrent profile:|r |cffffffff' .. tostring(name) .. '|r'
+                end,
+                order = 1,
+            },
+            ExportProfile = {
+                type = 'input',
+                name = 'Export current profile',
+                desc = 'Copy this text to share or back up the active Decursive profile.',
+                multiline = 8,
+                width = 'full',
+                get = function() return D:GetProfileExportString() end,
+                set = function() end,
+                order = 10,
+            },
+            ImportProfile = {
+                type = 'input',
+                name = 'Import profile',
+                desc = 'Paste a Decursive profile export here, then click Import.',
+                multiline = 8,
+                width = 'full',
+                get = function() return D:GetProfileImportBuffer() end,
+                set = function(info, value) D:SetProfileImportBuffer(value) end,
+                order = 20,
+            },
+            ImportButton = {
+                type = 'execute',
+                name = 'Import',
+                desc = 'Replace the settings in the active profile with the pasted profile data.',
+                confirm = 'Importing will replace the settings in your current Decursive profile. Continue?',
+                func = function() D:ImportProfileString(D:GetProfileImportBuffer()) end,
+                disabled = function()
+                    return InCombatLockdown() or D:GetProfileImportBuffer():match('^%s*$') ~= nil
+                end,
+                order = 30,
+            },
+            IOStatus = {
+                type = 'description',
+                name = function() return D:GetProfileIOStatus() end,
+                order = 40,
+            },
+        },
+    };
+
     if DC.CATACLYSM or not DC.WOWC then
         -- Add dual-spec support
         local LibDualSpec = LibStub('LibDualSpec-1.0');
@@ -2057,34 +2894,18 @@ local function GetOptions()
 
 end
 
+function D:GetV11OptionsTable ()
+    -- v11 single-UI option model.  The legacy AceConfig schema is retained as
+    -- a behavior/configuration definition only; it is rendered by the native
+    -- Zhaohu v11 window and is no longer registered as a second settings UI.
+    return GetOptions();
+end
+
 function D:ExportOptions ()
-    -- Export the option table to Blizz option UI and to Ace3 option UI
-
-    local prev_CatchAllErrors = T._CatchAllErrors
-    T._CatchAllErrors = "ExportOptions";
-    LibStub("AceConfig-3.0"):RegisterOptionsTable(D.name,  GetOptions, 'dcr');
-    T._CatchAllErrors = prev_CatchAllErrors;
-
-
-    -- Don't feed the interface option panel until Blizz fixes the taint issue...
-    --[=[
-    LibStub("AceConfigDialog-3.0"):AddToBlizOptions(D.name, D.name, nil, "general");
-
-    local SubGroups_ToBlizzOptions = {
-        { D:ColorText(L["OPT_LIVELIST"], "FF22EE33"), "livelistoptions"},
-        { D:ColorText(L["OPT_MESSAGES"], "FF229966"), "MessageOptions"},
-        { D:ColorText(L["OPT_MFSETTINGS"], "FFBBCC33"), "MicroFrameOpt"},
-        { D:ColorText(L["OPT_CURINGOPTIONS"], "FFFF5533"), "CureOptions"},
-        { D:ColorText(L["OPT_CUSTOMSPELLS"], "FF00DDDD"), "CustomSpells"},
-        { D:ColorText(L["OPT_DEBUFFFILTER"], "FF99CCAA"), "DebuffSkip"},
-        { D:ColorText(L["OPT_MACROOPTIONS"], "FFCC99BB"), "Macro"},
-        { D:ColorText(L["OPT_ABOUT"], "FFFFFFFF"), "About"},
-    };
-
-    for key,values in ipairs(SubGroups_ToBlizzOptions) do
-        LibStub("AceConfigDialog-3.0"):AddToBlizOptions(D.name, values[1], D.name, values[2]);
-    end
-    --]=]
+    -- Zhaohu v11 single-UI build: AceConfig/AceGUI are not loaded.
+    -- The mature option definitions and handlers remain an internal model
+    -- consumed directly by Modern/ZD_UI.lua.
+    return true;
 end
 
 
@@ -2121,9 +2942,9 @@ function D:GetCureOrderTable ()
     local generalCureOrder = D.classprofile.CureOrder;
 
     if not activeSpec or activeSpec == 5 then
-        --@debug@
+        --[==[@debug@
         --D:Debug("No active spec, returning general cure order table:", D:tAsString(generalCureOrder));
-        --@end-debug@
+        --@end-debug@]==]
         return generalCureOrder;
     else
         local specCureOrder = "CureOrder-"..activeSpec;
@@ -2134,9 +2955,9 @@ function D:GetCureOrderTable ()
             self:tcopy(D.classprofile[specCureOrder], generalCureOrder);
         end
 
-        --@debug@
+        --[==[@debug@
         --D:Debug("returning specific cure order table ", specCureOrder, " for spec:", activeSpec, "table:", D:tAsString(D.classprofile[specCureOrder]));
-        --@end-debug@
+        --@end-debug@]==]
         return D.classprofile[specCureOrder];
     end
 end
@@ -2234,9 +3055,9 @@ function D:SetCureOrder (ToChange)
             tmpTable[abs(CureOrder[Type])] = Type; -- CureOrder[Type] can have a <0 value if the spell was lost
             FoundSpell = FoundSpell + 1;
         elseif (CureOrder[Type]) then -- if we don't have a spell for this type
-            --@debug@
+            --[==[@debug@
             D:Debug("SetCureOrder(): Adding lost spell", CureOrder[Type], Type)
-            --@end-debug@
+            --@end-debug@]==]
             LostSpells[abs(CureOrder[Type])] = Type;  -- save the position
         end
     end
@@ -2263,9 +3084,9 @@ function D:SetCureOrder (ToChange)
    -- D:PrintLiteral(LostSpells);
    for FormerPrio, Type in ipairs(LostSpells) do
        newCureOrder[Type] = AvailableSpot
-        --@debug@
+        --[==[@debug@
         D:Debug("SetCureOrder(): old lost spell prio:", CureOrder[Type], Type)
-        --@end-debug@
+        --@end-debug@]==]
        AvailableSpot = AvailableSpot - 1;
    end
 
@@ -2278,17 +3099,17 @@ function D:SetCureOrder (ToChange)
         newCureOrder[Type] = Num;
     end
 
-    --@debug@
+    --[==[@debug@
     D:Debug("SetCureOrder(): updated cure order table:", D:tAsString(newCureOrder), ToChange and "(saved)" or "(unsaved)" );
-    --@end-debug@
+    --@end-debug@]==]
 
 
     -- create / update the ReversedCureOrder table (prio => type, ..., )
     D.Status.ReversedCureOrder = D:tReverse(newCureOrder);
 
-    --@debug@
+    --[==[@debug@
     D:Debug("SetCureOrder(): ReversedCureOrder table:", D:tAsString(D.Status.ReversedCureOrder));
-    --@end-debug@
+    --@end-debug@]==]
 
 
     -- Create spell priority table
@@ -2310,9 +3131,9 @@ function D:SetCureOrder (ToChange)
         end
     end
 
-    --@debug@
+    --[==[@debug@
     D:Debug("SetCureOrder(): updated CuringSpells table:", D:tAsString(CuringSpells));
-    --@end-debug@
+    --@end-debug@]==]
 
 
     if DC.MN then
@@ -2331,24 +3152,24 @@ function D:SetCureOrder (ToChange)
             end
         end
 
-        --@debug@
+        --[==[@debug@
         --D:Debug("SetCureOrder(): typeToColor table:", D:tAsString(typeToColor));
-        --@end-debug@
+        --@end-debug@]==]
 
 
         -- update our curve
         dsc:ClearPoints()
         dsc:AddPoint(0, D:NumToColorMixin(mfc[DC.NORMAL]))
         for affType, cm in pairs(typeToColor) do
-            --@debug@
+            --[==[@debug@
             D:Debug("Adding point: ", affType, dtToBT[affType], cm)
-            --@end-debug@
+            --@end-debug@]==]
             dsc:AddPoint(dtToBT[affType], cm)
         end
 
-        --@debug@
+        --[==[@debug@
         --D:Debug("SetCureOrder(): dsCurve points:", dsc:GetPoints());
-        --@end-debug@
+        --@end-debug@]==]
 
     end
 
@@ -2887,8 +3708,8 @@ do
                 name = L[ColorReason];
                 desc = L["COLORCHRONOS_DESC"];
             else
-                name = "AceConfigCmd-3.0 is bugged";
-                desc = "type /decursive to use the graphical UI";
+                name = "Additional color";
+                desc = "Configure this color in the Zhaohu v11 interface.";
                 --D:Debug("ColorReason:", ColorReason);
             end
         end
@@ -3481,7 +4302,7 @@ do
                 desc =  L["OPT_SPELL_DESCRIPTION_LOADING"];
 
                 D:Debug("delayed Bleed Effect option panel refresh scheduled because of spellID: ", spellID);
-                D:ScheduleDelayedCall("refreshBleedEffectList", function () LibStub("AceConfigRegistry-3.0"):NotifyChange(D.name) end, 2);
+                D:ScheduleDelayedCall("refreshBleedEffectList", function () D:NotifyConfigurationChanged() end, 2);
 
             else
                 desc = L["OPT_SPELL_DESCRIPTION_UNAVAILABLE"];
@@ -3813,7 +4634,12 @@ function D:QuickAccess (CallingObject, button) -- {{{
         if (not IsAltKeyDown()) then
             D:Println(L["DEWDROPISGONE"]);
         else
-            LibStub("AceConfigDialog-3.0"):Open(D.name);
+            local modern = T.ZhaohuModern;
+            if modern and modern.ToggleUI then
+                modern:ToggleUI();
+            else
+                D:Println("Zhaohu's Decursive settings are still initializing.");
+            end
         end
 
     elseif (button == "RightButton" and IsShiftKeyDown()) then
@@ -3827,6 +4653,6 @@ function D:QuickAccess (CallingObject, button) -- {{{
 end -- }}}
 
 
-T._LoadedFiles["Dcr_opt.lua"] = "@project-version@";
+T._LoadedFiles["Dcr_opt.lua"] = "11.0.10";
 
 -- Closer

@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v @project-version@) add-on for World of Warcraft UI
+    Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@
     but WITHOUT ANY WARRANTY.
 
 
-    This file was last updated on @file-date-iso@
+    This file was last updated on 2026-08-17T20:37:56Z
 --]]
 -------------------------------------------------------------------------------
 
@@ -175,22 +175,172 @@ function MicroUnitF:RegisterMUFcolors ()
     D:tcopy(MF_colors, D.profile.MF_colors);
 end
 
+-- v11.0.2: Party and raid MUFs may use independent sizes.  The first time
+-- these settings are seen on an existing profile, both inherit the profile's
+-- current legacy MUF scale so upgrading never changes a user's layout by
+-- surprise.  DebuffsFrameElemScale remains the active runtime scale for
+-- compatibility with the original Decursive rendering code.
+local function ClampMUFSizePixels(pixels)
+    pixels = tonumber(pixels) or (DC.MFSIZE or 20)
+    pixels = math.floor(pixels + 0.5)
+    if pixels < 10 then pixels = 10 end
+    if pixels > 80 then pixels = 80 end
+    return pixels
+end
+
+function MicroUnitF:EnsureContextMUFSizeSettings()
+    if not D.profile then return end
+
+    local base = DC.MFSIZE or 20
+    local legacyPixels = ClampMUFSizePixels((tonumber(D.profile.DebuffsFrameElemScale) or 1) * base)
+
+    if type(D.profile.DebuffsFramePartyPixelSize121) ~= "number" then
+        D.profile.DebuffsFramePartyPixelSize121 = legacyPixels
+    end
+    if type(D.profile.DebuffsFrameRaidPixelSize121) ~= "number" then
+        D.profile.DebuffsFrameRaidPixelSize121 = legacyPixels
+    end
+
+    D.profile.DebuffsFramePartyPixelSize121 = ClampMUFSizePixels(D.profile.DebuffsFramePartyPixelSize121)
+    D.profile.DebuffsFrameRaidPixelSize121 = ClampMUFSizePixels(D.profile.DebuffsFrameRaidPixelSize121)
+end
+
+function MicroUnitF:GetActiveMUFSizeContext()
+    if IsInRaid and IsInRaid() then
+        return "RAID"
+    end
+    return "PARTY"
+end
+
+function MicroUnitF:GetContextMUFSizePixels(context)
+    self:EnsureContextMUFSizeSettings()
+    if not D.profile then return DC.MFSIZE or 20 end
+
+    if context == "RAID" then
+        return ClampMUFSizePixels(D.profile.DebuffsFrameRaidPixelSize121)
+    end
+    return ClampMUFSizePixels(D.profile.DebuffsFramePartyPixelSize121)
+end
+
+function MicroUnitF:GetActiveMUFSizePixels()
+    return self:GetContextMUFSizePixels(self:GetActiveMUFSizeContext())
+end
+
+function MicroUnitF:ApplyContextMUFScale()
+    if not D.profile then return false end
+    self:EnsureContextMUFSizeSettings()
+
+    if InCombatLockdown and InCombatLockdown() then
+        self.PendingContextMUFScale121 = true
+        return false
+    end
+
+    local base = DC.MFSIZE or 20
+    local pixels = self:GetActiveMUFSizePixels()
+    local scale = pixels / base
+
+    self.PendingContextMUFScale121 = nil
+    D.profile.DebuffsFrameElemScale = scale
+
+    if self.Frame and self.SetScale then
+        self:SetScale(scale)
+    elseif D.MFContainer and D.MFContainer.SetScale then
+        D.MFContainer:SetScale(scale)
+    end
+
+    if self.ResetAllPositions and D.DcrFullyInitialized then
+        self:ResetAllPositions()
+    end
+    return true
+end
+
+function MicroUnitF:SetContextMUFSizePixels(context, pixels)
+    if not D.profile then return false end
+    if InCombatLockdown and InCombatLockdown() then return false end
+
+    self:EnsureContextMUFSizeSettings()
+    pixels = ClampMUFSizePixels(pixels)
+
+    if context == "RAID" then
+        D.profile.DebuffsFrameRaidPixelSize121 = pixels
+    else
+        D.profile.DebuffsFramePartyPixelSize121 = pixels
+    end
+
+    if self:GetActiveMUFSizeContext() == context then
+        self:ApplyContextMUFScale()
+    end
+    return true
+end
+
+function MicroUnitF:SetActiveContextMUFSizePixels(pixels)
+    return self:SetContextMUFSizePixels(self:GetActiveMUFSizeContext(), pixels)
+end
+
+
+-- v11 alpha.17: treat each MUF as a complete visual cell.  The status light
+-- is one quarter of the square size and sits above the MUF, so every vertical
+-- row reserves enough room for it.  This keeps 30-40 player raid layouts from
+-- stacking a status light into the square on the row above.
+function MicroUnitF:GetStatusLightSize()
+    return (DC.MFSIZE or 20) * 0.25
+end
+
+function MicroUnitF:GetStatusLightGap()
+    return math.max(1, (DC.MFSIZE or 20) * 0.075)
+end
+
+function MicroUnitF:GetStatusLightReserve()
+    return self:GetStatusLightSize() + self:GetStatusLightGap()
+end
+
+function MicroUnitF:GetVerticalCellStride()
+    return (DC.MFSIZE or 20) + (D.profile.DebuffsFrameYSpacing or 0) + self:GetStatusLightReserve()
+end
+
+-- Raid auto-layout targets a compact grid of at most five rows.  In the
+-- default horizontal layout this produces 5 columns at 20/25 players, 6 at
+-- 30, 7 at 35 and 8 at 40 -- matching the visual target for large raids.
+-- DandersFrames integration still controls UNIT ORDER; this only controls how
+-- Decursive lays that ordered sequence out on screen.
+function MicroUnitF:GetEffectivePerLine()
+    local configured = tonumber(D.profile.DebuffsFramePerline) or 10
+    configured = math.max(1, math.min(40, math.floor(configured + 0.5)))
+
+    if D.profile.DebuffsFrameRaidAutoLayout121 ~= false and IsInRaid and IsInRaid() then
+        local count = tonumber(D.Status and D.Status.UnitNum) or tonumber(self.UnitShown) or 0
+        count = math.min(count, tonumber(self.MaxUnit) or count)
+        if count > 5 then
+            if D.profile.DebuffsFrameVerticalDisplay then
+                -- Vertical fill reads down each column.  Five units per column
+                -- yields the same compact 5-row footprint for a 40-player raid.
+                return math.min(5, count)
+            end
+            return math.min(8, math.max(5, math.ceil(count / 5)))
+        end
+    end
+
+    return configured
+end
+
 function MicroUnitF:GetFarthestVerticalMUF()
     -- "Everything pushes me further away..."
 
     if D.profile.DebuffsFrameVerticalDisplay then
 
-        if self.UnitShown > D.profile.DebuffsFramePerline then
-            return D.profile.DebuffsFramePerline;
+        local perLine = self:GetEffectivePerLine()
+        if self.UnitShown > perLine then
+            return perLine;
         else
             return self.UnitShown;
         end
 
     else
 
-        if self.UnitShown > D.profile.DebuffsFramePerline then
-            return floor( self.UnitShown / D.profile.DebuffsFramePerline ) * D.profile.DebuffsFramePerline
-            + ((self.UnitShown % D.profile.DebuffsFramePerline ~= 0) and 1 or - D.profile.DebuffsFramePerline + 1);
+        local perLine = self:GetEffectivePerLine()
+        if self.UnitShown > perLine then
+            return floor( self.UnitShown / perLine ) * perLine
+            + ((self.UnitShown % perLine ~= 0) and 1 or - perLine + 1);
         else
             return 1;
         end
@@ -256,13 +406,15 @@ function MicroUnitF:ResetAllPositions () -- {{{
 
         local Unit_Array = D.Status.Unit_Array;
 
-        D:Debug("Resetting all MF position", 'perRow:', D.profile.DebuffsFramePerline, '#Unit_Array:', #Unit_Array);
+        D:Debug("Resetting all MF position", 'perRow:', self:GetEffectivePerLine(), '#Unit_Array:', #Unit_Array);
 
         for i=1, #Unit_Array do
             local MF = self.ExistingPerUNIT[ Unit_Array[i] ]
 
             if MF then
+                MF.Frame:ClearAllPoints()
                 MF.Frame:SetPoint(unpack(self:GetMUFAnchor(i)));
+                MF.ToPlace = i
             end
         end
 
@@ -279,17 +431,18 @@ do
     function MicroUnitF:GetMUFAnchor (ID) -- {{{
 
         local RowNum, NumOnRow
+        local perLine = self:GetEffectivePerLine()
 
         if not D.profile.DebuffsFrameVerticalDisplay then
-            RowNum =   floor( (ID - 1) / D.profile.DebuffsFramePerline);
-            NumOnRow = fmod( (ID - 1), D.profile.DebuffsFramePerline);
+            RowNum =   floor( (ID - 1) / perLine);
+            NumOnRow = fmod( (ID - 1), perLine);
         else
-            RowNum =   fmod(  (ID - 1),  D.profile.DebuffsFramePerline );
-            NumOnRow = floor( (ID - 1) / D.profile.DebuffsFramePerline );
+            RowNum =   fmod(  (ID - 1),  perLine );
+            NumOnRow = floor( (ID - 1) / perLine );
         end
 
         local x = NumOnRow * (DC.MFSIZE + D.profile.DebuffsFrameXSpacing);
-        local y = (D.profile.DebuffsFrameGrowToTop and 1 or -1) * RowNum * (D.profile.DebuffsFrameYSpacing + DC.MFSIZE);
+        local y = (D.profile.DebuffsFrameGrowToTop and 1 or -1) * RowNum * self:GetVerticalCellStride();
 
         Anchor[2] = x; Anchor[3] = y;
 
@@ -303,13 +456,13 @@ do
         if atBottom then
             -- set Anchor table
             self:GetMUFAnchor(D.profile.DebuffsFrameGrowToTop and 1 or self:GetFarthestVerticalMUF());
-            Anchor[3] = Anchor[3] - (D.profile.DebuffsFrameYSpacing + DC.MFSIZE);
+            Anchor[3] = Anchor[3] - self:GetVerticalCellStride();
 
             return "TOPLEFT", self.Frame, Anchor[2], Anchor[3] * scale, "BOTTOMLEFT";
         else
             -- set Anchor table
             self:GetMUFAnchor(D.profile.DebuffsFrameGrowToTop and self:GetFarthestVerticalMUF() or 1);
-            Anchor[3] = Anchor[3] + (D.profile.DebuffsFrameYSpacing + DC.MFSIZE);
+            Anchor[3] = Anchor[3] + self:GetVerticalCellStride();
 
             return "BOTTOMLEFT", self.Frame, Anchor[2], Anchor[3] * scale, "BOTTOMLEFT";
         end
@@ -368,6 +521,22 @@ function MicroUnitF:MFsDisplay_Update () -- {{{
 
     local Unit_Array_UnitToGUID = D.Status.Unit_Array_UnitToGUID;
     local Unit_Array            = D.Status.Unit_Array;
+
+    -- A raid-size change can alter the automatic grid without changing any
+    -- existing unit's sequence number.  Force all anchors to be recomputed when
+    -- the effective row/column count changes.
+    local effectivePerLine = self:GetEffectivePerLine()
+    if self.LastEffectivePerLine ~= effectivePerLine then
+        self.LastEffectivePerLine = effectivePerLine
+        for idx, orderedUnit in ipairs(Unit_Array) do
+            local orderedMF = self.ExistingPerUNIT[orderedUnit]
+            if orderedMF then
+                orderedMF.Frame:ClearAllPoints()
+                orderedMF.Frame:SetPoint(unpack(self:GetMUFAnchor(idx)))
+                orderedMF.ToPlace = idx
+            end
+        end
+    end
 
 
     -- Scan unit array in display order and show the maximum until NumToShow is reached
@@ -503,9 +672,14 @@ do
 
         -- frame relative position
         local left, bottom, width, height = self.Frame:GetRect();
+        local x = left * FrameScale - xDelta
+        local y = bottom * FrameScale - yDelta
+        local scaledWidth = width * FrameScale
+        local scaledHeightWithStatus = (height + MicroUnitF:GetStatusLightReserve()) * FrameScale
 
-        -- we need to check just one corner (MUFs are fix-sized squares)
-        return TestMUFCorner(left * FrameScale - xDelta, bottom * FrameScale - yDelta, width * FrameScale);
+        if not (x < 0 or x + scaledWidth > DC.ScreenWidth) then x = nil end
+        if not (y < 0 or y + scaledHeightWithStatus > DC.ScreenHeight) then y = nil end
+        return x, y
 
     end -- }}}
 
@@ -557,14 +731,15 @@ do
 
         if D.profile.DebuffsFrameStickToRight then -- {{{
             local FirstLineNum = 0;
+            local perLine = self:GetEffectivePerLine()
             -- get the number of max unit per line/row
             if not D.profile.DebuffsFrameVerticalDisplay then
-                if self.UnitShown > D.profile.DebuffsFramePerline then
-                    FirstLineNum = D.profile.DebuffsFramePerline;
+                if self.UnitShown > perLine then
+                    FirstLineNum = perLine;
                 else FirstLineNum = self.UnitShown; end
             else
-                if self.UnitShown > D.profile.DebuffsFramePerline then
-                    FirstLineNum = floor( (self.UnitShown ) /  D.profile.DebuffsFramePerline ) + ((self.UnitShown % D.profile.DebuffsFramePerline ~= 0) and 1 or 0);
+                if self.UnitShown > perLine then
+                    FirstLineNum = floor( (self.UnitShown ) /  perLine ) + ((self.UnitShown % perLine ~= 0) and 1 or 0);
                 else FirstLineNum = 1; end
             end
 
@@ -609,7 +784,7 @@ do
             if y_out_arrays[1] < 0 then
                 Handle_y_offset = -  y_out_arrays[1];
             else
-                Handle_y_offset = - (y_out_arrays[#y_out_arrays] + DC.MFSIZE * FrameScale - DC.ScreenHeight)
+                Handle_y_offset = - (y_out_arrays[#y_out_arrays] + (DC.MFSIZE + self:GetStatusLightReserve()) * FrameScale - DC.ScreenHeight)
             end
         end
 
@@ -662,16 +837,17 @@ do
             if D.profile.DebuffsFrameStickToRight then -- {{{
 
                 local FirstLineNum;
+                local perLine = self:GetEffectivePerLine()
 
                 if not D.profile.DebuffsFrameVerticalDisplay then
-                    if self.UnitShown > D.profile.DebuffsFramePerline then
-                        FirstLineNum = D.profile.DebuffsFramePerline;
+                    if self.UnitShown > perLine then
+                        FirstLineNum = perLine;
                     else
                         FirstLineNum = self.UnitShown;
                     end
                 else
-                    if self.UnitShown > D.profile.DebuffsFramePerline then
-                        FirstLineNum = floor( self.UnitShown / D.profile.DebuffsFramePerline ) + ((self.UnitShown % D.profile.DebuffsFramePerline ~= 0) and 1 or 0);
+                    if self.UnitShown > perLine then
+                        FirstLineNum = floor( self.UnitShown / perLine ) + ((self.UnitShown % perLine ~= 0) and 1 or 0);
                     else
                         FirstLineNum = 1;
                     end
@@ -757,7 +933,14 @@ do
 
         local icon = index and string.format("|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%d:0|t ", index) or ""
 
-        local coloredUnitName = D:ColorTextNA((D:PetUnitName(unit, true)), ((UnitClass(unit)) and DC.HexClassColor[ (select(2, UnitClass(unit))) ] or "AAAAAA"))
+        -- 12.1 SAFE: Use safe wrapper for unit class
+        local _, className
+        if DC.TWELVEONE then
+            _, className = D:GetUnitClassSafe(unit)
+        else
+            _, className = UnitClass(unit)
+        end
+        local coloredUnitName = D:ColorTextNA((D:PetUnitName(unit, true)), (className and DC.HexClassColor[className] or "AAAAAA"))
         .. "  |cFF3F3F3F(".. unit .. ")|r"
 
         local playerLine = string.format("%s %s", icon or "", coloredUnitName)
@@ -804,6 +987,7 @@ do
         D.Status.MouseOveringMUF = true;
 
         local MF = frame.Object;
+        D.Status.MouseOveringMUFObject = MF;
         local Status;
 
         local Unit = MF.CurrUnit; -- shortcut
@@ -827,8 +1011,11 @@ do
             return; -- If the user overs the MUF before it's completely initialized
         end
 
-        --Test for unstable affliction like spells
-        if MF.Debuffs[1] then
+        -- Test for unstable-affliction-like spells only when legacy aura details
+        -- are authoritative. In WoW 12.1 restricted PvP mode, managed aura
+        -- visuals are authoritative and protected aura details are not inspected.
+        local RestrictedPvP121 = DC.TWELVEONE and D.Should121SuppressLegacyAuraColor and D:Should121SuppressLegacyAuraColor();
+        if not RestrictedPvP121 and MF.Debuffs[1] then
             for i, Debuff in ipairs(MF.Debuffs) do
                 if Debuff.Type then
                     -- Create a warning if an Unstable Affliction like spell is detected
@@ -848,8 +1035,19 @@ do
             Status = bit.band(MF.UnitStatus,  bit.bnot(CHARMED_STATUS));
 
             -- set the status text, just translate the bitfield to readable text
-            if Status == NORMAL then
-                StatusText = L["NORMAL"];
+            if RestrictedPvP121 and (Status == NORMAL or Status == AFFLICTED or Status == AFFLICTED_NIR) then
+                StatusText = "|cFFFFFF00Managed priority mode (protected aura safe)|r";
+
+            elseif Status == NORMAL then
+                -- WoW 12.1 may keep the legacy Decursive scanner at NORMAL while
+                -- Blizzard's managed aura system is displaying a protected
+                -- dispellable affliction.  Do not claim the unit is clean/normal
+                -- when the underlying aura state cannot be safely inspected.
+                if DC.TWELVEONE then
+                    StatusText = "|cFFFFFF00Aura state protected (WoW 12.1)|r";
+                else
+                    StatusText = L["NORMAL"];
+                end
 
             elseif Status == ABSENT then
                 StatusText = L["ABSENT"]:format(Unit);
@@ -916,6 +1114,7 @@ do
 
     function MicroUnitF:OnLeave(frame) -- {{{
         D.Status.MouseOveringMUF = false;
+        D.Status.MouseOveringMUFObject = nil;
         cleanAndHideToolTip();
 
     end -- }}}
@@ -993,7 +1192,9 @@ function MicroUnitF.OnPreClick(frame, Button) -- {{{
     D:Debug("RequestedPrio:", RequestedPrio);
     if frame.Object.UnitStatus == NORMAL and D:tcheckforval(D.Status.CuringSpellsPrio, RequestedPrio) then
 
-        D:Println(L["HLP_NOTHINGTOCURE"]);
+        -- WoW 12.1 can hide the aura details while the Blizzard-managed MUF indicator
+        -- still knows the unit is dispellable. Do not spam "There is nothing to cure!"
+        -- when the legacy Decursive debuff cache is empty.
 
         -- detect wrong button click and prepare for not-in-line-of-sight casting failures in coordination with CLEU (unavailable in MN)
     elseif (frame.Object.UnitStatus == AFFLICTED and frame.Object.Debuffs[1] and not frame.Object.Debuffs[1].secretMode) then
@@ -1025,10 +1226,10 @@ function MicroUnitF.OnPreClick(frame, Button) -- {{{
                 D:errln(L["HLP_WRONGMBUTTON"]);
                 if NeededPrio and MF_colors[NeededPrio] then
                     D:Println(L["HLP_USEXBUTTONTOCURE"], D:ColorText(DC.MouseButtonsReadable[ D.db.global.MouseButtons[NeededPrio] ], D:NumToHexColor(MF_colors[NeededPrio])));
-                    --@debug@
+                    --[==[@debug@
                 else
                     D:AddDebugText("Button wrong click info bug: NeededPrio:", NeededPrio, "Unit:", Unit, "RequestedPrio:", RequestedPrio, "Button clicked:", Button, "MF_colors:", unpack(MF_colors), "Debuff Type:", frame.Object.Debuffs[1].Type);
-                    --@end-debug@
+                    --@end-debug@]==]
                 end
             elseif RequestedPrio and D.Status.HasSpell then -- useless block in Midnight as there is no CLEU anymore to detect cast failures.
                 D.Status.ClickCastingWIP = true;
@@ -1189,9 +1390,9 @@ function MicroUnitF.prototype:Update(SkipSetColor, SkipDebuffs, CheckStealth, o_
         end
         -- if the guid changed we really need to rescan the unit!
         SkipSetColor = false; SkipDebuffs = false; CheckStealth = true;
-        --@debug@
+        --[==[@debug@
         D:Debug("|cFF00CC00MUF:Update(): Guid change rescanning", Unit, "|r");
-        --@end-debug@
+        --@end-debug@]==]
     end
 
     -- Update the frame attributes if necessary (Spells priority or unit id changes)
@@ -1245,9 +1446,9 @@ do
     function MicroUnitF.prototype:SetUnstableAttribute(attribute, value)
         self.Frame:SetAttribute(attribute, value);
         self.usedAttributes[attribute] = self.LastAttribUpdate;
-        --@debug@
+        --[==[@debug@
         D:Debug("SetUnstableAttribute", attribute, value);
-        --@end-debug@
+        --@end-debug@]==]
     end
 
     function MicroUnitF.prototype:CleanDefuncUnstableAttributes()
@@ -1439,6 +1640,15 @@ do
 
         local debuff_1 = self.Debuffs[1]
 
+        -- WoW 12.1 restricted PvP mode: never let the legacy scanner paint the
+        -- MUF as afflicted. Protected PvP aura details can be incomplete or
+        -- misleading. The Blizzard-managed strict-priority AuraContainer is the
+        -- sole live affliction-color authority in this mode. This also prevents
+        -- false Priority #1/red squares when no configured dispel type matches.
+        if DC.TWELVEONE and D.Should121SuppressLegacyAuraColor and D:Should121SuppressLegacyAuraColor() then
+            debuff_1 = nil;
+        end
+
 
         -- D:Debug("in set color", Unit, Status.CenterTextDisplay) TODO: -- optimize when this function is called, with UNIT_AURA, we no longer need to call it several times/s...
 
@@ -1565,9 +1775,11 @@ do
                         self.CenterText = debuff_1.Applications;
                         local appAccess = canaccessvalue(self.CenterText)
 
-                        local appCount = debuff_1.s_color and debuff_1.auraInstanceID and
-                            C_UnitAuras.GetAuraApplicationDisplayCount(Unit, debuff_1.auraInstanceID, 1)
-                            or
+                        -- 12.1 SAFE: Use safe wrapper for aura application count
+                        local safeAppCount = debuff_1.s_color and debuff_1.auraInstanceID and
+                            D:GetAuraApplicationCountSafe(Unit, debuff_1.auraInstanceID)
+                        
+                        local appCount = safeAppCount or
                             (appAccess and self.CenterText > 0 and self.CenterText or "")
 
 
@@ -1683,9 +1895,9 @@ do
 
             if PrioChanged then PrioChanged = false; end
 
-            --@debug@
+            --[==[@debug@
             D:Debug('Setting MUF texture color...');
-            --@end-debug@
+            --@end-debug@]==]
             -- Set the main texture
             self.Texture:SetColorTexture(self.Color[1], self.Color[2], self.Color[3], Alpha);
 
@@ -1694,9 +1906,9 @@ do
                 self.Texture:SetColorTexture(color.r, color.g, color.b, Alpha);
             end
             --self.Texture:SetAlpha(Alpha);
-            --@debug@
+            --[==[@debug@
             D:Debug('Setting MUF texture color... done');
-            --@end-debug@
+            --@end-debug@]==]
 
 
 
@@ -1731,8 +1943,14 @@ do
             self.UnitGUID = D.Status.Unit_Array_UnitToGUID[self.CurrUnit];
 
             if self.UnitGUID then -- can be nil because of focus...
-                -- Get its class
-                Class = (select(2, UnitClass(self.CurrUnit)));
+                -- Get its class (12.1 SAFE)
+                local _, className
+                if DC.TWELVEONE then
+                    _, className = D:GetUnitClassSafe(self.CurrUnit)
+                else
+                    _, className = UnitClass(self.CurrUnit)
+                end
+                Class = className or false
             else
                 Class = false;
             end
@@ -1834,6 +2052,7 @@ do
 
                 MF.ToPlace = MicroFrameUpdateIndex;
 
+                MF.Frame:ClearAllPoints()
                 MF.Frame:SetPoint(unpack(MicroUnitF:GetMUFAnchor(MicroFrameUpdateIndex)));
 
                 if MF.Shown then
@@ -1843,9 +2062,9 @@ do
                 -- test for GUID change and force a debuff update in this case
                 if UnitToGUID[MF.CurrUnit] ~= MF.UnitGUID then
                     MF.UpdateCountDown = 0; -- will force MF:Update() to be called
-                    --@debug@
+                    --[==[@debug@
                     --D:Println("|cFFFFAA55GUID change detected while placing for |r", MicroFrameUpdateIndex, UnitToGUID[MF.CurrUnit], MF.UnitGUID );
-                    --@end-debug@
+                    --@end-debug@]==]
                 end
 
                 ActionsDone = ActionsDone + 1;
@@ -1913,16 +2132,16 @@ local MUF_Status = { -- unused
 
 
 local MF_Textures = { -- unused
-    "Interface/AddOns/Decursive/Textures/BackDrop-red", -- red
-    "Interface/AddOns/Decursive/Textures/BackDrop-blue", -- blue
-    "Interface/AddOns/Decursive/Textures/BackDrop-orange", -- orange
-    ["grey"] = "Interface\\AddOns\\Decursive\\Textures\\BackDrop-grey-medium",
-    ["black"] = "Interface/AddOns/Decursive/Textures/BackDrop",
+    T._AddonPathSlash .. "Textures/BackDrop-red", -- red
+    T._AddonPathSlash .. "Textures/BackDrop-blue", -- blue
+    T._AddonPathSlash .. "Textures/BackDrop-orange", -- orange
+    ["grey"] = T._AddonPath .. "Textures\\BackDrop-grey-medium",
+    ["black"] = T._AddonPathSlash .. "Textures/BackDrop",
 };
 
 
 -- }}}
 
-T._LoadedFiles["Dcr_DebuffsFrame.lua"] = "@project-version@";
+T._LoadedFiles["Dcr_DebuffsFrame.lua"] = "11.0.10";
 
 -- Heresy

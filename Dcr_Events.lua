@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v @project-version@) add-on for World of Warcraft UI
+    Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@
     Decursive is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY.
 
-    This file was last updated on @file-date-iso@
+    This file was last updated on 2026-08-17T20:37:56Z
 --]]
 -------------------------------------------------------------------------------
 
@@ -64,9 +64,6 @@ local DC = T._C;
 
 D.DebuffUpdateRequest = 0;
 
---@alpha@
-D.DetectHistory = {};
---@end-alpha@
 
 local pairs     = _G.pairs;
 local next      = _G.next;
@@ -122,6 +119,12 @@ do
         self.Groups_datas_are_invalid = true;
         self.Status.GroupUpdateEvent = self:NiceTime();
 
+        -- v11.0.2: switch to the appropriate Party/Raid MUF size as the
+        -- roster context changes. Secure frame changes are deferred in combat.
+        if self.MicroUnitF and self.MicroUnitF.ApplyContextMUFScale then
+            self.MicroUnitF:ApplyContextMUFScale();
+        end
+
         if self.profile.ShowDebuffsFrame then
             -- Update the MUFs display in a short moment
             self.MicroUnitF:Delayed_MFsDisplay_Update ();
@@ -161,8 +164,17 @@ function D:PLAYER_ENTERING_WORLD()
         return;
     end
 
+    -- square-sound16: every world/instance transition gets a full MUF/provider
+    -- soft reinitialization. Do not trust the first transient roster snapshot.
+    -- The reinitializer resets visible MUF state, rebuilds Unit_Array, then
+    -- rebinds every protected 12.1 provider once the roster settles.
+    if self.ReinitializeDecursiveAfterZone then
+        self:ReinitializeDecursiveAfterZone("PLAYER_ENTERING_WORLD");
+    else
+        self:GroupChanged("PLAYER_ENTERING_WORLD");
+    end
+
     if time() - self.db.global.LastVersionAnnounce > 3600/2 then
-        -- wait 10 seconds and announce Decursive's version
         self:ScheduleDelayedCall("AnnounceVersion", self.AnnounceVersion, 10, self);
     end
 end
@@ -362,6 +374,12 @@ do
     function D:PLAYER_REGEN_ENABLED() -- LeaveCombat
         --D:Debug("Leaving combat");
         self.Status.Combat = false;
+
+        -- Apply a Party/Raid size transition that was deferred while secure
+        -- frames were locked by combat.
+        if self.MicroUnitF and self.MicroUnitF.PendingContextMUFScale121 and self.MicroUnitF.ApplyContextMUFScale then
+            self.MicroUnitF:ApplyContextMUFScale();
+        end
 
         -- test for debug report
         if #T._DebugTextTable > 0 and GetTime() - LastDebugReportNotification > 300 * 3 then
@@ -567,9 +585,9 @@ do
     --
 
     function D:checkForDebuff(UnitID, secretedName)
-        --@debug@
+        --[==[@debug@
         if self.debug then self:Debug("(UA) Debuff, UnitId: ", UnitID, secretedName); end
-        --@end-debug@
+        --@end-debug@]==]
 
         if self.profile.ShowDebuffsFrame then
             self.MicroUnitF:UpdateMUFUnit(UnitID);
@@ -591,16 +609,17 @@ do
         end
 
 
-        --@debug@
+        --[==[@debug@
         --D:lazy_debug("UNIT_AURA", function() return D:tAsString(o_auraUpdateInfo) end, "UnitID:", UnitID, GetTime() + (GetTime() % 1));
-        --@end-debug@
+        --@end-debug@]==]
 
 
         if DC.MN then -- classic versioins still use CLEU and although they support UNIT_AURA as well CLEU provides more features
-            if o_auraUpdateInfo.removedAuraInstanceIDs then
+            local removedAuraInstanceIDs = o_auraUpdateInfo and o_auraUpdateInfo.removedAuraInstanceIDs
+            if removedAuraInstanceIDs and canaccessvalue(removedAuraInstanceIDs) then
                 self:checkForDebuff(UnitID)
 
-                for _, id in pairs(o_auraUpdateInfo.removedAuraInstanceIDs) do
+                for _, id in pairs(removedAuraInstanceIDs) do
                     if self.Stealthed_Units[UnitID] and self.Stealthed_Units[UnitID] == id then
                         self:Debug("STEALTH LOST: ", UnitID)
                         self.Stealthed_Units[UnitID] = false
@@ -608,7 +627,8 @@ do
                 end
             end
 
-            if o_auraUpdateInfo.updatedAuraInstanceIDs and self.Status.CenterTextDisplay == "3_STACKS" then
+            local updatedAuraInstanceIDs = o_auraUpdateInfo and o_auraUpdateInfo.updatedAuraInstanceIDs
+            if updatedAuraInstanceIDs and canaccessvalue(updatedAuraInstanceIDs) and self.Status.CenterTextDisplay == "3_STACKS" then
                 self:checkForDebuff(UnitID)
             end
 
@@ -643,7 +663,10 @@ do
 
         -- Here we test if the GUID->Unit array is ok if it isn't we need to scan the unit for debuffs
         -- We also scan the unit if it's charmed. The combatLog event manager tends to not detect those properly, the charm effect is a bitch to manage.
-        if unitguid ~= self.Status.Unit_Array_UnitToGUID[UnitID] or UnitID ~= self.Status.Unit_Array_GUIDToUnit[unitguid] or UnitIsCharmed(UnitID) then
+        local isCharmed = UnitIsCharmed(UnitID);
+        if not canaccessvalue(isCharmed) then isCharmed = false end
+
+        if unitguid ~= self.Status.Unit_Array_UnitToGUID[UnitID] or UnitID ~= self.Status.Unit_Array_GUIDToUnit[unitguid] or isCharmed then
 
 
             -- if we updated the unit array but we are here then rebuild the unit array.
@@ -669,9 +692,9 @@ do
                 --]=]
             end
 
-            --@debug@
+            --[==[@debug@
             self:Debug("|cFF552255UNIT_AURA triggers a rescan|r because of", UnitID);
-            --@end-debug@
+            --@end-debug@]==]
 
             if unitguid then
                 self.Status.Unit_Array_UnitToGUID[UnitID] = unitguid;
@@ -755,6 +778,7 @@ do -- Combat log event handling {{{1
 
     local SPELL_FAILED_LINE_OF_SIGHT = _G.SPELL_FAILED_LINE_OF_SIGHT;
     local SPELL_FAILED_BAD_TARGETS =   _G.SPELL_FAILED_BAD_TARGETS;
+    local SPELL_FAILED_OUT_OF_RANGE =  _G.SPELL_FAILED_OUT_OF_RANGE;
 
     local FRIENDLY_TARGET       = bit.bor (_G.COMBATLOG_OBJECT_TARGET, _G.COMBATLOG_OBJECT_REACTION_FRIENDLY);
     local ME                    = _G.COMBATLOG_OBJECT_AFFILIATION_MINE;
@@ -797,9 +821,33 @@ do -- Combat log event handling {{{1
         if event == nil then
             timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellID, spellNAME, _spellSCHOOL, auraTYPE_failTYPE = CombatLogGetCurrentEventInfo()
         end
-                    --@debug@
+                    --[==[@debug@
                     --if self.debug then self:Debug("COMBAT_LOG_EVENT_UNFILTERED: ", timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellID, spellNAME, _spellSCHOOL, auraTYPE_failTYPE); end
-                    --@end-debug@
+                    --@end-debug@]==]
+        -- WoW 12.1 protected sound learning: for SPELL_DISPEL, the first
+        -- event-specific value after the dispel spell fields is extraSpellID.
+        -- The existing auraTYPE_failTYPE local occupies that position in this
+        -- compact handler signature. Only learn a public/non-secret numeric ID.
+        if event == "SPELL_DISPEL" and band(sourceFlags or 0, ME) ~= 0 then
+            -- Diagnostic capture for Midnight 12.1.  Do NOT stringify or otherwise
+            -- inspect a secret value; record only whether Blizzard exposed it.
+            T._AuraSoundDiag = T._AuraSoundDiag or {};
+            local extraSpellID = auraTYPE_failTYPE;
+            local diag = T._AuraSoundDiag;
+            diag.playerDispelEvents = (diag.playerDispelEvents or 0) + 1;
+            diag.lastDispelExtraType = type(extraSpellID);
+            diag.lastDispelExtraAccessible = canaccessvalue(extraSpellID) and true or false;
+            diag.lastDispelExtraSecret = (_G.issecretvalue and _G.issecretvalue(extraSpellID)) and true or false;
+            if type(extraSpellID) == "number" and diag.lastDispelExtraAccessible and not diag.lastDispelExtraSecret then
+                diag.lastDispelExtraPublicID = extraSpellID;
+                if self.profile and self.profile.SoundProtectedAuraAutoLearn and self.LearnProtectedAuraSoundSpellID then
+                    self:LearnProtectedAuraSoundSpellID(extraSpellID, "successful dispel");
+                end
+            else
+                diag.lastDispelExtraPublicID = nil;
+            end
+        end
+
         -- check for exceptions
         if SpecialDebuffs[spellID] and event == SpecialDebuffs[spellID] then
             event = "SPELL_AURA_APPLIED";
@@ -813,6 +861,19 @@ do -- Combat log event handling {{{1
             end
 
             UnitID = self.Status.Unit_Array_GUIDToUnit[destGUID]; -- get the grouped unit associated to the destGUID if there is none then the unit is not in our group or is filtered out
+
+            -- v11.0.7 exact protected-alert debounce. Once a dispellable aura ID
+            -- has been learned from a successful player dispel, future public
+            -- applications to any grouped unit request their sound through the
+            -- same group-wide debounce gate. We intentionally use only the first
+            -- application event; stack changes do not retrigger the alert.
+            if UnitID and event == "SPELL_AURA_APPLIED"
+                and self.profile and self.profile.PlaySound and self.profile.SoundProtectedAuraAlerts
+                and self.IsLearnedProtectedAuraSoundSpellID and self:IsLearnedProtectedAuraSoundSpellID(spellID)
+                and self.PlayDispelNotificationSound
+            then
+                self:PlayDispelNotificationSound("learned protected aura " .. tostring(spellID), false);
+            end
 
             --D:Print("? (source=%s) (dest=|cFF00AA00%s|r -- %X): |cffff0000%s|r", sourceName, destName, destFlags, event);
 
@@ -831,9 +892,9 @@ do -- Combat log event handling {{{1
                     end
                 else
 
-                    --@debug@
+                    --[==[@debug@
                     if self.debug then self:Debug("Debuff, UnitId: ", UnitID, spellNAME, event, time() + (GetTime() % 1), timestamp, "destName:", destName, destFlags, band (destFlags, FRIENDLY_TARGET) == FRIENDLY_TARGET); end
-                    --@end-debug@
+                    --@end-debug@]==]
 
                     if self.profile.ShowDebuffsFrame then
                         self.MicroUnitF:UpdateMUFUnit(UnitID);
@@ -880,6 +941,9 @@ do -- Combat log event handling {{{1
 
             if event == "SPELL_CAST_SUCCESS" then
 
+                if self.Clear121LineOfSightBlocked then self:Clear121LineOfSightBlocked(self.Status.ClickedMF) end
+                if self.Clear121MUFStatusAttempt then self:Clear121MUFStatusAttempt(self.Status.ClickedMF) end
+                if self.Begin121MUFPostCureVerification then self:Begin121MUFPostCureVerification(self.Status.ClickedMF, spellNAME) end
                 if self.debug then self:Debug(L["SUCCESSCAST"], spellNAME, (select(2, GetSpellInfo(spellID))) or "", self:MakePlayerName(destName)); end -- XXX TWW
 
                 --self:Debug("|cFFFF0000XXXXX|r |cFF11FF11Updating color of clicked frame|r");
@@ -902,8 +966,26 @@ do -- Combat log event handling {{{1
 
                 self:Println(L["FAILEDCAST"], spellNAME, (select(2, GetSpellInfo(spellID))) or "", self:MakePlayerName(destName), auraTYPE_failTYPE);
 
-                if (auraTYPE_failTYPE == SPELL_FAILED_LINE_OF_SIGHT or auraTYPE_failTYPE == SPELL_FAILED_BAD_TARGETS) then
+                if SPELL_FAILED_OUT_OF_RANGE and auraTYPE_failTYPE == SPELL_FAILED_OUT_OF_RANGE then
+                    -- Range gets its own yellow per-MUF status light.  Do not turn
+                    -- the status light red for a failure the player can already solve
+                    -- by moving closer.
+                    if self.Mark121MUFStatusRange then self:Mark121MUFStatusRange(self.Status.ClickedMF) end
+                    -- Proactive distance is yellow, but once the player actually
+                    -- attempts the cure and it fails, failure feedback is red.
+                    -- When the red hold expires, live range can return the light
+                    -- to yellow if the unit is still out of range.
+                    if self.Mark121MUFStatusFailure then self:Mark121MUFStatusFailure(self.Status.ClickedMF, auraTYPE_failTYPE) end
 
+                elseif auraTYPE_failTYPE == SPELL_FAILED_LINE_OF_SIGHT then
+                    -- v11: LoS is a transient visual state, not a blacklist.  This
+                    -- keeps the dispel target actionable and lets the player retry
+                    -- as soon as positioning changes.  No protected aura data is read.
+                    if self.Mark121LineOfSightBlocked then self:Mark121LineOfSightBlocked(self.Status.ClickedMF) end
+                    if self.Mark121MUFStatusFailure then self:Mark121MUFStatusFailure(self.Status.ClickedMF, auraTYPE_failTYPE) end
+                    if self.PlayFailureNotificationSound then self:PlayFailureNotificationSound(); else self:SafePlaySoundFile(DC.FailedSound); end
+
+                elseif auraTYPE_failTYPE == SPELL_FAILED_BAD_TARGETS then
                     if self.profile.CureBlacklist > 0 and (
                         not self.profile.DoNot_Blacklist_Prio_List
                         or not self:IsInPriorList(self.Status.Unit_Array_UnitToGUID[self.Status.ClickedMF.CurrUnit])
@@ -914,10 +996,13 @@ do -- Combat log event handling {{{1
                         self:ScheduleDelayedCall("Dcr_Update"..self.Status.ClickedMF.CurrUnit, self.Status.ClickedMF.UpdateSkippingSetBuf, self.db.global.DebuffsFrameRefreshRate, self.Status.ClickedMF);
                     end
 
-                    self:SafePlaySoundFile(DC.FailedSound);
+                    if self.Mark121MUFStatusFailure then self:Mark121MUFStatusFailure(self.Status.ClickedMF, auraTYPE_failTYPE) end
+                    if self.PlayFailureNotificationSound then self:PlayFailureNotificationSound(); else self:SafePlaySoundFile(DC.FailedSound); end
                     --[=[
                     elseif auraTYPE_failTYPE == SPELL_FAILED_BAD_IMPLICIT_TARGETS then
                     self:AddDebugText("ERR_GENERIC_NO_TARGET", "Unit:", self.Status.ClickedMF.CurrUnit, "UE:", UnitExists(self.Status.ClickedMF.CurrUnit), "UiF:",  UnitIsFriend("player",self.Status.ClickedMF.CurrUnit), "CBEs:", timestamp, event, sourceGUID, sourceName, sourceFlags, destGUID, destName, destFlags, spellID, spellNAME, _spellSCHOOL, auraTYPE_failTYPE); --]=]
+                else
+                    if self.Mark121MUFStatusFailure then self:Mark121MUFStatusFailure(self.Status.ClickedMF, auraTYPE_failTYPE) end
                 end
                 self.Status.ClickedMF = false;
 
@@ -925,20 +1010,18 @@ do -- Combat log event handling {{{1
                 destName = self:PetUnitName( self.Status.ClickedMF.CurrUnit, true);
 
                 self:Println(L["FAILEDCAST"], spellNAME, (select(2, GetSpellInfo(spellID))) or "", self:MakePlayerName(destName), auraTYPE_failTYPE);
-                self:SafePlaySoundFile(DC.FailedSound);
+                if self.Mark121MUFStatusFailure then self:Mark121MUFStatusFailure(self.Status.ClickedMF, auraTYPE_failTYPE or event) end
+                if self.PlayFailureNotificationSound then self:PlayFailureNotificationSound(); else self:SafePlaySoundFile(DC.FailedSound); end
                 self.Status.ClickedMF = false;
-                --@alpha@
-                -- self:AddDebugText("sanitycheck ", event, spellNAME); -- It works!
-                --@end-alpha@
             end
             --  }}}
-            --@debug@
+            --[==[@debug@
         elseif self.debug and event then
 
             --self:Debug("event:", event, "self.Status.ClickedMF.CastingSpell", self.Status.ClickedMF and self.Status.ClickedMF.CastingSpell, "band(sourceFlags, ME) ~= 0", band(sourceFlags, ME) ~= 0, "self.Status.ClickCastingWIP", self.Status.ClickCastingWIP);
 
 
-            --@end-debug@
+            --@end-debug@]==]
 
         end
 
@@ -951,9 +1034,6 @@ end --}}}
 
 do -- Communication event handling and broadcasting {{{1
     local alpha = false;
-    --@alpha@
-    alpha = true;
-    --@end-alpha@
 
 
     local function GetDistributionChanel()
@@ -1010,9 +1090,6 @@ do -- Communication event handling and broadcasting {{{1
     function D:OnCommReceived(message, distribution, from)
 
 
-        --@alpha@
-        D:Debug("OnCommReceived:", message, distribution, from);
-        --@end-alpha@
 
         local gettime = GetTime();
 
@@ -1029,9 +1106,6 @@ do -- Communication event handling and broadcasting {{{1
             versionIsAlpha      = tonumber(versionIsAlpha);
             versionEnabled      = tonumber(versionEnabled);
 
-            --@alpha@
-            if self.debug then D:Debug("Version info received from, ", from, "by", distribution, "version:", versionName, "date:", versionTimeStamp, "islpha:", versionIsAlpha, "enabled:", versionEnabled); end
-            --@end-alpha@
 
             if versionName then
                 if not D.versions then
@@ -1058,10 +1132,10 @@ do -- Communication event handling and broadcasting {{{1
                     D:Debug("|cFFFF0000TIME TRAVELER DETECTED!|r");
                 end
 
-                -- delayed call to LibStub("AceConfigRegistry-3.0"):NotifyChange(D.name); plus "spam" prevention system (after receiving version info from someone)
+                -- Delayed v11 UI refresh with spam prevention after receiving version info.
                 -- We don't want to update the thing if the option panel is closed so we update up to 60s after the check version button was used
                 if not D:DelayedCallExixts ("NewversionDatareceived") and gettime - T.LastVCheck < 60 then
-                    D:ScheduleDelayedCall("NewversionDatareceived", LibStub("AceConfigRegistry-3.0").NotifyChange, 1, LibStub("AceConfigRegistry-3.0"), D.name);
+                    D:ScheduleDelayedCall("NewversionDatareceived", function () D:NotifyConfigurationChanged() end, 1);
                     T.LastVCheck = gettime;
                 end
             else
@@ -1103,9 +1177,6 @@ do -- Communication event handling and broadcasting {{{1
             end
             LastVersionAnnouceByDist[distribution]  = gettime;
 
-            --@alpha@
-            if self.debug then D:Debug("Version info sent to, ", from, "by", distribution, ("Version: %s,%u,%d,%d"):format(D.version, D.VersionTimeStamp, alpha and 1 or 0, D:IsEnabled() and 1 or 0 )); end
-            --@end-alpha@
 
         end
     end
@@ -1245,9 +1316,6 @@ do
         return true;
     end -- }}}
 
-    --@alpha@
-    local player_is_almost_alive = false; -- I'm trying to figure out why sometimes talents are not detected while PLAYER_ALIVE event fired
-    --@end-alpha@
 
     local function PollTalentsAvaibility() -- {{{
 
@@ -1261,15 +1329,6 @@ do
             -- dispatch event
             D:SendMessage("DECURSIVE_TALENTS_AVAILABLE");
 
-            --@alpha@
-            if player_is_almost_alive then
-                D:AddDebugText("StartTalentAvaibilityPolling(): Talents were not available after PLAYER_ALIVE was fired, test was made", player_is_almost_alive, "seconds after PLAYER_ALIVE fired. Sucess happened", GetTime() - T.PLAYER_IS_ALIVE, "secondes after PLAYER_ALIVE fired");
-            end
-        else
-            if T.PLAYER_IS_ALIVE and not player_is_almost_alive then
-                player_is_almost_alive = GetTime() - T.PLAYER_IS_ALIVE;
-            end
-            --@end-alpha@
         end
     end -- }}}
 
@@ -1284,6 +1343,6 @@ do
     end
 end
 
-T._LoadedFiles["Dcr_Events.lua"] = "@project-version@";
+T._LoadedFiles["Dcr_Events.lua"] = "11.0.10";
 
 -- The Great Below

@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v @project-version@) add-on for World of Warcraft UI
+    Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@
     Decursive is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY.
 
-    This file was last updated on @file-date-iso@
+    This file was last updated on 2026-08-17T20:37:56Z
 
 --]]
 -------------------------------------------------------------------------------
@@ -172,15 +172,15 @@ function LiveList:DisplayItem (ID, UnitID, Debuff) -- {{{
     --D:Debug("XXXX => Updating ll item %d for %s", ID, UnitID);
 
     if not LVItem.IsShown then
-        --@debug@--
+        --[==[@debug@--
         D:Debug("(LiveList) Showing LVItem %d", ID);
-        --@end-debug@
+        --@end-debug@]==]
 
         LVItem.Frame:Show();
 
-        --@debug@--
+        --[==[@debug@--
         D:Debug("(LiveList) done", ID);
-        --@end-debug@
+        --@end-debug@]==]
 
         self.NumberShown = self.NumberShown + 1;
         LVItem.IsShown = true;
@@ -398,6 +398,28 @@ function LiveList:GetDebuff(UnitID) -- {{{
     return D.UnitDebuffed[UnitID];
 end -- }}}
 
+function LiveList:DisplayProtectedModeMessage() -- {{{
+    -- 12.1 SAFE: The legacy Live List cannot inspect protected aura details.
+    -- Keep the Live List empty and direct the player to the Blizzard-managed MUFs.
+    -- Do not fabricate Live List rows: its rows require real debuff data and the
+    -- old AddLineToFrame/PostCreate helpers do not exist in this implementation.
+    if self.NumberShown > 0 then
+        for i = 1, self.NumberShown do
+            local item = self.ExistingPerID[i];
+            if item and item.IsShown then
+                item.Frame:Hide();
+                item.IsShown = false;
+            end
+        end
+        self.NumberShown = 0;
+    end
+
+    if not self.ProtectedModeMessageShown then
+        self.ProtectedModeMessageShown = true;
+        D:Println("|cFF00FF00Decursive: WoW 12.1 Protected Aura Mode|r - detailed Live List aura data is unavailable; use the Micro Unit Frames for dispel detection.");
+    end
+end -- }}}
+
 function LiveList:DelayedGetDebuff(UnitID, o_auraUpdateInfo) -- {{{
     if not D:DelayedCallExixts("Dcr_GetDebuff"..UnitID) then
         D.DebuffUpdateRequest = D.DebuffUpdateRequest + 1;
@@ -414,6 +436,16 @@ function LiveList:Update_Display() -- {{{
     if not D.DcrFullyInitialized  then
         return;
     end
+    
+    -- 12.1 SAFE: Check if we're in protected aura context
+    if DC.TWELVEONE and D.Compat121 and not D.Compat121.CanUseLegacyScanning() then
+        -- In protected context, the Live List cannot safely read detailed aura data.
+        self:DisplayProtectedModeMessage();
+        return;
+    end
+
+    -- Re-arm the one-time notice after leaving protected mode.
+    self.ProtectedModeMessageShown = false;
 
     --
     self:PreCreate();
@@ -606,4 +638,4 @@ function LiveList:Onclick() -- {{{
     D:Println(L["HLP_LL_ONCLICK_TEXT"]);
 end -- }}}
 
-T._LoadedFiles["Dcr_LiveList.lua"] = "@project-version@";
+T._LoadedFiles["Dcr_LiveList.lua"] = "11.0.10";

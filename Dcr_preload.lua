@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v @project-version@) add-on for World of Warcraft UI
+    Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
@@ -24,10 +24,15 @@
     Decursive is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY.
 
-    This file was last updated on @file-date-iso@
+    This file was last updated on 2025-03-16T19:40:05Z
 --]]
 -------------------------------------------------------------------------------
 local addonName, T = ...;
+
+-- Physical addon identity. Keep this separate from the logical Decursive/AceAddon name.
+T._AddonName = addonName;
+T._AddonPath = "Interface\\AddOns\\" .. addonName .. "\\";
+T._AddonPathSlash = "Interface/AddOns/" .. addonName .. "/";
 
 TTT = 123;
 
@@ -39,4 +44,4 @@ T._LoadedFiles["Dcr_preload.lua"] = false;
 T._OriginalDebugHandler = geterrorhandler();
 
 
-T._LoadedFiles["Dcr_preload.lua"] = "@project-version@";
+T._LoadedFiles["Dcr_preload.lua"] = "11.0.10";

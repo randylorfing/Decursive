@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v @project-version@) add-on for World of Warcraft UI
+    Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@
     Decursive is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY.
 
-    This file was last updated on @file-date-iso@
+    This file was last updated on 2026-08-17T20:37:56Z
 --]]
 -------------------------------------------------------------------------------
 
@@ -95,6 +95,7 @@ local setmetatable          = _G.setmetatable;
 local rawget                = _G.rawget;
 local GetTime               = _G.GetTime;
 local canaccessvalue        = _G.canaccessvalue or function(_) return true; end
+local InCombatLockdown      = _G.InCombatLockdown;
 -------------------------------------------------------------------------------
 
 -- GROUP STATUS UPDATE, these functions update the UNIT table to scan
@@ -137,6 +138,408 @@ DC.ClassNumToUName = {
 
 DC.ClassUNameToNum = D:tReverse(DC.ClassNumToUName);
 
+-- ---------------------------------------------------------------------------
+-- DandersFrames visual-order synchronization (v11 alpha.15)
+-- ---------------------------------------------------------------------------
+-- When the optional DandersFrames provider is active, Decursive keeps its own
+-- secure MUFs but mirrors the order of DandersFrames' unit frames.  We use only
+-- DandersFrames' published external hooks:
+--   * DandersFrames_GetFrameForUnit(unit)
+--   * DandersFrames.RegisterCallback(..., "OnFramesSorted", ...)
+--
+-- No DandersFrames aura internals, sort tables, click-casting configuration, or
+-- layout settings are read.  Secure MUF unit reassignment still obeys combat
+-- lockdown, so a DandersFrames re-sort that occurs during combat is queued and
+-- applied as soon as Decursive is allowed to rebuild its MUF display.
+local DANDERS_ORDER_SYNC = {
+    registered = false,
+    pending = false,
+    lastMethod = "inactive",
+    lastMatched = 0,
+    lastSortType = nil,
+}
+
+local function isDandersOrderActive()
+    return type(D.Is121DandersFramesDetectionActive) == "function"
+        and D:Is121DandersFramesDetectionActive() == true
+end
+
+local function safeFrameCall(frame, methodName)
+    local method = frame and frame[methodName]
+    if type(method) ~= "function" then return nil end
+    local ok, a, b = pcall(method, frame)
+    if not ok then return nil end
+    return a, b
+end
+
+-- v11.0.10 follower/spec roster protection. Follower NPC unit tokens can
+-- temporarily disappear from Blizzard's normal UnitExists()/group snapshot while
+-- a role/spec change is rebuilding secure party headers.  Never let that
+-- transitional snapshot destroy a known-good MUF roster.
+local POST_SPEC_ROSTER_RECOVERY_UNTIL = 0
+local LAST_STABLE_PARTY_ROSTER = nil
+
+local function postSpecRosterRecoveryActive()
+    return (GetTime and GetTime() or 0) < POST_SPEC_ROSTER_RECOVERY_UNTIL
+end
+
+function D:IsPostSpecializationMUFRecoveryActive()
+    return postSpecRosterRecoveryActive()
+end
+
+local function dandersPublicFrameExistsForUnit(unit)
+    if not postSpecRosterRecoveryActive() or not isDandersOrderActive() then
+        return false
+    end
+    local lookup = _G.DandersFrames_GetFrameForUnit
+    if type(lookup) ~= "function" then return false end
+    local ok, frame = pcall(lookup, unit)
+    -- GetFrameForUnit is DandersFrames' published unit->frame lookup. During
+    -- follower/spec transitions it can remain authoritative while Blizzard's
+    -- Lua-facing party membership snapshot is briefly incomplete.
+    return ok and frame ~= nil
+end
+
+local function isCorePartyUnit(unit)
+    return unit == "player"
+        or (type(unit) == "string" and unit:match("^party[1-4]$") ~= nil)
+end
+
+local function copyArray(src)
+    local dst = {}
+    if type(src) == "table" then
+        for i, v in ipairs(src) do dst[i] = v end
+    end
+    return dst
+end
+
+local function copyMap(src)
+    local dst = {}
+    if type(src) == "table" then
+        for k, v in pairs(src) do dst[k] = v end
+    end
+    return dst
+end
+
+local function countCorePartyUnits(unitArray)
+    local count = 0
+    if type(unitArray) == "table" then
+        for _, unit in ipairs(unitArray) do
+            if isCorePartyUnit(unit) then count = count + 1 end
+        end
+    end
+    return count
+end
+
+local function captureStablePartyRoster(status)
+    if type(status) ~= "table" then return end
+    local coreCount = countCorePartyUnits(status.Unit_Array)
+    if coreCount < 2 then return end
+
+    -- While a spec transition is active, a smaller snapshot is exactly the
+    -- state we are protecting against. Keep the larger known-good roster.
+    if postSpecRosterRecoveryActive() and LAST_STABLE_PARTY_ROSTER
+        and coreCount < LAST_STABLE_PARTY_ROSTER.coreCount then
+        return
+    end
+
+    LAST_STABLE_PARTY_ROSTER = {
+        coreCount = coreCount,
+        unitArray = copyArray(status.Unit_Array),
+        guidToUnit = copyMap(status.Unit_Array_GUIDToUnit),
+        unitToGuid = copyMap(status.Unit_Array_UnitToGUID),
+    }
+end
+
+local function restoreStablePartyRoster()
+    local snapshot = LAST_STABLE_PARTY_ROSTER
+    if not snapshot or not D.Status then return false end
+
+    D.Status.Unit_Array = copyArray(snapshot.unitArray)
+    D.Status.Unit_Array_GUIDToUnit = copyMap(snapshot.guidToUnit)
+    D.Status.Unit_Array_UnitToGUID = copyMap(snapshot.unitToGuid)
+
+    -- DandersFrames may already have completed its new role/spec sort even if
+    -- Blizzard's party roster still looks incomplete. Reorder the preserved
+    -- unit tokens against the newest published DF frame positions.
+    if type(D.ApplyDandersFramesUnitOrder) == "function" then
+        D:ApplyDandersFramesUnitOrder(D.Status.Unit_Array)
+    end
+
+    D.Status.UnitNum = #D.Status.Unit_Array
+    D.Status.GroupUpdatedOn = D:NiceTime()
+    return true
+end
+
+local function observedPartyMembersForRecovery()
+    local count = UnitExists("player") and 1 or 0
+    for i = 1, 4 do
+        local unit = "party" .. i
+        if UnitExists(unit) or dandersPublicFrameExistsForUnit(unit) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function uniquePositiveNumericKey(entries, field)
+    local seen = {}
+    for _, entry in ipairs(entries) do
+        local value = entry[field]
+        if type(value) ~= "number" or value <= 0 or seen[value] then
+            return false
+        end
+        seen[value] = true
+    end
+    return #entries > 0
+end
+
+local function uniqueStringKey(entries, field)
+    local seen = {}
+    for _, entry in ipairs(entries) do
+        local value = entry[field]
+        if type(value) ~= "string" or value == "" or seen[value] then
+            return false
+        end
+        seen[value] = true
+    end
+    return #entries > 0
+end
+
+local function frameNameSortKey(frame)
+    local name = safeFrameCall(frame, "GetName")
+    if type(name) ~= "string" or name == "" then return nil end
+    -- Keep the complete name as a deterministic fallback, but pad every digit
+    -- run so Frame2 sorts before Frame10.  This works for both flat and grouped
+    -- DF frame names without assuming a particular naming prefix.
+    return (name:gsub("(%d+)", function(n)
+        return string.format("%08d", tonumber(n) or 0)
+    end))
+end
+
+local function geometrySort(entries)
+    -- Last-resort public-frame fallback.  DandersFrames' normal secure sort
+    -- uses stable slot frames, so GetID()/frame names normally win.  Geometry
+    -- keeps the feature useful if a future DF build stops numbering those
+    -- frames.  Read in conventional screen order: top-to-bottom, left-to-right.
+    for _, entry in ipairs(entries) do
+        entry.x, entry.y = safeFrameCall(entry.frame, "GetCenter")
+        if type(entry.x) ~= "number" or type(entry.y) ~= "number" then
+            return false
+        end
+    end
+    table.sort(entries, function(a, b)
+        if math.abs(a.y - b.y) > 2 then return a.y > b.y end
+        if math.abs(a.x - b.x) > 2 then return a.x < b.x end
+        return a.originalIndex < b.originalIndex
+    end)
+    return true
+end
+
+function D:ApplyDandersFramesUnitOrder(unitArray)
+    if not isDandersOrderActive() or type(unitArray) ~= "table" or #unitArray < 2 then
+        DANDERS_ORDER_SYNC.lastMethod = isDandersOrderActive() and "not-needed" or "inactive"
+        return false
+    end
+    if InCombatLockdown and InCombatLockdown() then
+        DANDERS_ORDER_SYNC.pending = true
+        return false
+    end
+
+    local lookup = _G.DandersFrames_GetFrameForUnit
+    if type(lookup) ~= "function" then
+        DANDERS_ORDER_SYNC.lastMethod = "api-unavailable"
+        return false
+    end
+
+    local matched, unmatched = {}, {}
+    for originalIndex, unit in ipairs(unitArray) do
+        local ok, frame = pcall(lookup, unit)
+        if ok and frame then
+            local id = safeFrameCall(frame, "GetID")
+            matched[#matched + 1] = {
+                unit = unit,
+                originalIndex = originalIndex,
+                frame = frame,
+                frameID = type(id) == "number" and id or nil,
+                frameNameKey = frameNameSortKey(frame),
+            }
+        else
+            unmatched[#unmatched + 1] = { unit = unit, originalIndex = originalIndex }
+        end
+    end
+
+    DANDERS_ORDER_SYNC.lastMatched = #matched
+    if #matched < 2 then
+        DANDERS_ORDER_SYNC.lastMethod = #matched == 1 and "single-match" or "no-matches"
+        return false
+    end
+
+    local method
+    if uniquePositiveNumericKey(matched, "frameID") then
+        table.sort(matched, function(a, b)
+            if a.frameID ~= b.frameID then return a.frameID < b.frameID end
+            return a.originalIndex < b.originalIndex
+        end)
+        method = "frame-id"
+    elseif uniqueStringKey(matched, "frameNameKey") then
+        table.sort(matched, function(a, b)
+            if a.frameNameKey ~= b.frameNameKey then return a.frameNameKey < b.frameNameKey end
+            return a.originalIndex < b.originalIndex
+        end)
+        method = "frame-name"
+    elseif geometrySort(matched) then
+        method = "geometry"
+    else
+        DANDERS_ORDER_SYNC.lastMethod = "unresolved"
+        return false
+    end
+
+    local write = 1
+    for _, entry in ipairs(matched) do
+        unitArray[write] = entry.unit
+        write = write + 1
+    end
+    -- Units that do not have a main DandersFrames unit frame (for example a
+    -- Decursive-only focus entry or pet scanning) remain supported and follow
+    -- the mirrored DF group members in their previous relative order.
+    table.sort(unmatched, function(a, b) return a.originalIndex < b.originalIndex end)
+    for _, entry in ipairs(unmatched) do
+        unitArray[write] = entry.unit
+        write = write + 1
+    end
+
+    DANDERS_ORDER_SYNC.lastMethod = method
+    DANDERS_ORDER_SYNC.pending = false
+    return true
+end
+
+function D:GetDandersFramesOrderSyncStatus()
+    return {
+        active = isDandersOrderActive(),
+        registered = DANDERS_ORDER_SYNC.registered,
+        pending = DANDERS_ORDER_SYNC.pending,
+        method = DANDERS_ORDER_SYNC.lastMethod,
+        matched = DANDERS_ORDER_SYNC.lastMatched,
+        sortType = DANDERS_ORDER_SYNC.lastSortType,
+        rosterRecoveryActive = postSpecRosterRecoveryActive(),
+        stablePartyMembers = LAST_STABLE_PARTY_ROSTER and LAST_STABLE_PARTY_ROSTER.coreCount or 0,
+        observedPartyMembers = observedPartyMembersForRecovery(),
+    }
+end
+
+function D:DandersFrames_OnFramesSorted(event, sortType)
+    if not isDandersOrderActive() then return end
+    DANDERS_ORDER_SYNC.lastSortType = sortType
+    DANDERS_ORDER_SYNC.pending = true
+    -- Mark the roster order dirty so MFsDisplay_Update rebuilds Unit_Array.
+    self.Groups_datas_are_invalid = true
+
+    -- During the short post-spec stabilization window, DF's OnFramesSorted is
+    -- the strongest signal we have that its secure role sort has just settled.
+    -- Rebuild immediately using the protected last-known-good roster rather
+    -- than waiting 1.5 seconds and risking a transient two-unit snapshot.
+    if postSpecRosterRecoveryActive() and type(self.PostSpecializationMUFRecovery) == "function" then
+        self:PostSpecializationMUFRecovery()
+    elseif self.MicroUnitF and self.MicroUnitF.Delayed_MFsDisplay_Update then
+        self.MicroUnitF:Delayed_MFsDisplay_Update()
+    end
+end
+
+function D:RegisterDandersFramesOrderSync()
+    if DANDERS_ORDER_SYNC.registered then return true end
+    if not isDandersOrderActive() then return false end
+    local DF = _G.DandersFrames
+    if type(DF) ~= "table" or type(DF.RegisterCallback) ~= "function" then
+        return false
+    end
+    local ok = pcall(DF.RegisterCallback, self, "OnFramesSorted", "DandersFrames_OnFramesSorted")
+    if ok then
+        DANDERS_ORDER_SYNC.registered = true
+        DANDERS_ORDER_SYNC.pending = true
+        self.Groups_datas_are_invalid = true
+        if self.MicroUnitF and self.MicroUnitF.Delayed_MFsDisplay_Update then
+            self.MicroUnitF:Delayed_MFsDisplay_Update()
+        end
+        return true
+    end
+    return false
+end
+
+-- v11.0.5: specialization changes can cause Blizzard follower-party unit tokens
+-- and DandersFrames' secure sort to settle on slightly different frames.  A
+-- single roster snapshot taken during that transition may therefore be
+-- incomplete even though the final party is still intact.  Re-scan a few
+-- times after the spec swap and always rebuild from Blizzard's current roster
+-- before applying the latest DandersFrames visual order.  This is deliberately
+-- a bounded recovery sequence rather than a permanent polling loop.
+local POST_SPEC_ROSTER_RECOVERY_GENERATION = 0
+local POST_SPEC_ROSTER_RECOVERY_DELAYS = { .10, .35, 1.00, 2.00, 4.00, 7.00, 10.00 }
+
+function D:PostSpecializationMUFRecovery()
+    if not self.DcrFullyInitialized then return false end
+
+    if InCombatLockdown and InCombatLockdown() then
+        DANDERS_ORDER_SYNC.pending = isDandersOrderActive()
+        if self.AddDelayedFunctionCall then
+            self:AddDelayedFunctionCall(
+                "Dcr_PostSpecializationMUFRecovery",
+                self.PostSpecializationMUFRecovery,
+                self
+            )
+        end
+        return false
+    end
+
+    if isDandersOrderActive() then
+        DANDERS_ORDER_SYNC.pending = true
+        if not DANDERS_ORDER_SYNC.registered then
+            self:RegisterDandersFramesOrderSync()
+        end
+    end
+
+    -- Force GetUnitArray() to discard any transitional follower/party snapshot.
+    self.Groups_datas_are_invalid = true
+
+    if self.MicroUnitF and self.MicroUnitF.MFsDisplay_Update then
+        local updated = self.MicroUnitF:MFsDisplay_Update()
+        if updated == false and self.MicroUnitF.Delayed_MFsDisplay_Update then
+            self.MicroUnitF:Delayed_MFsDisplay_Update()
+        end
+    else
+        self:GetUnitArray()
+    end
+
+    return true
+end
+
+function D:SchedulePostSpecializationMUFRecovery()
+    POST_SPEC_ROSTER_RECOVERY_GENERATION = POST_SPEC_ROSTER_RECOVERY_GENERATION + 1
+    local generation = POST_SPEC_ROSTER_RECOVERY_GENERATION
+
+    -- Protect the current known-good follower/party roster while Blizzard and
+    -- DandersFrames rebuild role/spec state. A PLAYER_ROLES_ASSIGNED nudge may
+    -- call this again and naturally extend the protection window.
+    POST_SPEC_ROSTER_RECOVERY_UNTIL = (GetTime and GetTime() or 0) + 12.0
+    captureStablePartyRoster(self.Status)
+
+    DANDERS_ORDER_SYNC.pending = isDandersOrderActive()
+
+    local timer = _G.C_Timer
+    if not timer or type(timer.After) ~= "function" then
+        return self:PostSpecializationMUFRecovery()
+    end
+
+    for _, delay in ipairs(POST_SPEC_ROSTER_RECOVERY_DELAYS) do
+        timer.After(delay, function()
+            if generation ~= POST_SPEC_ROSTER_RECOVERY_GENERATION then return end
+            D:PostSpecializationMUFRecovery()
+        end)
+    end
+
+    return true
+end
+
 
 do
 
@@ -155,7 +558,15 @@ do
     -- define some mock function to make testing easier
     local function _UnitExists (unit)
         if not TestMode then
-            return UnitExists(unit);
+            if UnitExists(unit) then return true end
+            -- Follower dungeon safeguard: while a player spec/role transition is
+            -- active, DandersFrames' public lookup can still own partyN even when
+            -- Blizzard's Lua-facing UnitExists snapshot has temporarily dropped it.
+            if type(unit) == "string" and unit:match("^party[1-4]$")
+                and dandersPublicFrameExistsForUnit(unit) then
+                return true
+            end
+            return false;
         elseif #SortingTable < D.Status.TestLayoutUNum then
             return true;
         else
@@ -252,15 +663,6 @@ do
 
         local guidAccessible = canaccessvalue(GUID)
 
-        --@alpha@
-        --if not guidAccessible then
-            -- fails on high restrictions (secretMapRestrictionsForced while dueling but not in real combat in a real dungeon during an encounter...)
-            -- setting this debug report generation so we can test if this can really happen in normal game conditions
-          --  D:AddDebugText("could not access guid for unit:" .. unit)
-          -- ok it does happen in normal game conditions:
-          --          4225.1120 (tr:'Dcr_Delayed_MFsDisplay_Update' ca:'false' icl:'false' rs:'Ma:1' h28_w29-43fps-Manaforge Oméga): could not access guid for unit:raid1
-        --end
-        --@end-alpha@
 
 		-- this GUID cache was there to map CLEU to unit ids... so it's not really useful in Midnight (I need to check this though)
         self[unit] = guidAccessible and GUID or unit;
@@ -413,11 +815,11 @@ do
         UIa = UnitInfo[ua]; UIb = UnitInfo[ub];
         uaVSub = a_isBefore_b(getMinOf4(IPL[UIa.class], IPL[UIa.group], IPL[UIa.GUID], IPL[UIa.role]), getMinOf4(IPL[UIb.class], IPL[UIb.group], IPL[UIb.GUID], IPL[UIb.role]));
 
-        --@debug@
+        --[==[@debug@
         if ua == "player" or ub == "player" then
             D:Debug("xx", ua, D:tAsString(UIa), ub, D:tAsString(UIb), uaVSub, "GUID comp:", IPL[UIa.GUID], IPL[UIb.GUID])
         end
-        --@end-debug@
+        --@end-debug@]==]
 
         if uaVSub ~= nil then
             return uaVSub;
@@ -502,6 +904,31 @@ do
         if not self.Groups_datas_are_invalid or DC.MyGUID == "NONE" then
             return;
         end
+
+        -- v11.0.10: do not COMMIT a transient follower-dungeon collapse during
+        -- a player spec/role transition. v11.0.5 retried the scan, but the first
+        -- bad scan had already replaced Status.Unit_Array with player(+pet), so
+        -- MFsDisplay_Update legitimately hid every follower MUF. Preserve the
+        -- last stable party snapshot until Blizzard/DF report the full party again.
+        if postSpecRosterRecoveryActive() and LAST_STABLE_PARTY_ROSTER
+            and not self.Status.TestLayout then
+            local inRaid = (_G.IsInRaid and _G.IsInRaid()) or GetNumRaidMembers() > 0
+            local inGroup = (_G.IsInGroup and _G.IsInGroup()) or GetNumPartyMembers() > 0
+            if inGroup and not inRaid then
+                local observed = observedPartyMembersForRecovery()
+                if observed < LAST_STABLE_PARTY_ROSTER.coreCount then
+                    restoreStablePartyRoster()
+                    -- Keep the dirty bit set so the next scheduled recovery pass
+                    -- retries the real roster instead of accepting this snapshot.
+                    self.Groups_datas_are_invalid = true
+                    DANDERS_ORDER_SYNC.pending = isDandersOrderActive()
+                    self:Debug("Post-spec follower roster incomplete; preserving stable MUFs",
+                        observed, LAST_STABLE_PARTY_ROSTER.coreCount)
+                    return;
+                end
+            end
+        end
+
         self.Groups_datas_are_invalid = false;
 
         local pGUID;
@@ -678,7 +1105,18 @@ do
 
         table.sort(Status.Unit_Array, isUnitBeforeUnit);
 
+        -- DandersFrames integration owns dispel detection and, when active,
+        -- also becomes the visual ordering source for Decursive MUFs.  Native
+        -- priority/role ordering remains untouched when the integration is off.
+        if type(self.ApplyDandersFramesUnitOrder) == "function" then
+            self:ApplyDandersFramesUnitOrder(Status.Unit_Array);
+        end
+
         Status.UnitNum = #Status.Unit_Array;
+
+        if Raidnum == 0 then
+            captureStablePartyRoster(Status)
+        end
 
         UnitToGUID = {};
         GUIDToUnit = {};
@@ -686,7 +1124,7 @@ do
 
         self:Debug ("|cFFFF44FF-->|r Update complete!", Status.UnitNum);
 
-        --@debug@
+        --[==[@debug@
         D:Debug("Current group:", CurrentGroup, D:tAsString(IPL));
         D:Debug("Source priority list:", #self.profile.PriorityList, D:tAsString(self.profile.PriorityList));
         for i, unit in ipairs(Status.Unit_Array) do
@@ -697,14 +1135,14 @@ do
                 self:AddDebugText("issue #46 debug:", unit, UnitInfo[unit].class, "_UC: ",  select(2, _UnitClass(unit)));
             end
         end
-        --@end-debug@
+        --@end-debug@]==]
     end
 
 end
 
 
 -------------------------------------------------------------------------------
-T._LoadedFiles["Dcr_Raid.lua"] = "@project-version@";
+T._LoadedFiles["Dcr_Raid.lua"] = "11.0.10";
 
 -- "Your God is dead and no one cares"
 -- "If there is a Hell I'll see you there"

@@ -19,10 +19,10 @@
     <Include file="Libs\AceHook-3.0\AceHook-3.0.xml"/>
     <Include file="Libs\AceDB-3.0\AceDB-3.0.xml"/>
     <Include file="Libs\AceDBOptions-3.0\AceDBOptions-3.0.xml"/>
+    <Include file="Libs\AceSerializer-3.0\AceSerializer-3.0.xml"/>
     <Include file="Libs\AceLocale-3.0\AceLocale-3.0.xml" />
 
-    <Include file="Libs\AceGUI-3.0\AceGUI-3.0.xml"/>
-    <Include file="Libs\AceConfig-3.0\AceConfig-3.0.xml"/>
+    <!-- v11 single UI: AceGUI/AceConfig are intentionally not loaded. -->
 
     <Include file="Libs\AceComm-3.0\AceComm-3.0.xml"/>
 
@@ -49,7 +49,7 @@
 
 
     <Script>
-        DecursiveEmbedsxmlCheck = "@project-version@";
+        DecursiveEmbedsxmlCheck = "11.0.10";
     </Script>
 
 </Ui>

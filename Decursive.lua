@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v @project-version@) add-on for World of Warcraft UI
+    Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@
     Decursive is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY.
 
-    This file was last updated on @file-date-iso@
+    This file was last updated on 2026-08-17T20:37:56Z
 --]]
 -------------------------------------------------------------------------------
 
@@ -150,7 +150,7 @@ function D:HideBar(hide) --{{{
         D:ColorPrint(0.3, 0.5, 1, L["SHOW_MSG"]);
     end
 
-    LibStub("AceConfigRegistry-3.0"):NotifyChange(D.name);
+    D:NotifyConfigurationChanged();
 end --}}}
 
 function D:ShowHidePriorityListUI() --{{{
@@ -251,23 +251,436 @@ function D:ResetWindow() --{{{
 end --}}}
 
 
+local SOUND_NOTIFICATION_FILES = {
+    AFFLICTION = DC.AfflictionSound,
+    QUICK = T._AddonPath .. "Sounds\\G_NecropolisWound-fast.ogg",
+    FAILURE = DC.FailedSound,
+
+    -- v11.0.7 additional short combat tones.
+    BRIGHT_PING = T._AddonPath .. "Sounds\\BrightPing.ogg",
+    DOUBLE_PING = T._AddonPath .. "Sounds\\DoublePing.ogg",
+    TRIPLE_PING = T._AddonPath .. "Sounds\\TriplePing.ogg",
+    HIGH_CHIME = T._AddonPath .. "Sounds\\HighChime.ogg",
+    LOW_CHIME = T._AddonPath .. "Sounds\\LowChime.ogg",
+    PULSE_UP = T._AddonPath .. "Sounds\\PulseUp.ogg",
+    PULSE_DOWN = T._AddonPath .. "Sounds\\PulseDown.ogg",
+
+    -- Original synthesized voice callouts. These are deliberately short so
+    -- they remain useful during combat and all pass through the same shared
+    -- dispel-alert debounce gate.
+    VOICE_DISPEL = T._AddonPath .. "Sounds\\VoiceDispel.ogg",
+    VOICE_CLEANSE = T._AddonPath .. "Sounds\\VoiceCleanse.ogg",
+    VOICE_CURE = T._AddonPath .. "Sounds\\VoiceCure.ogg",
+    VOICE_HELP = T._AddonPath .. "Sounds\\VoiceHelp.ogg",
+    VOICE_CLEANSE_ME = T._AddonPath .. "Sounds\\VoiceCleanseMe.ogg",
+    VOICE_CURE_ME = T._AddonPath .. "Sounds\\VoiceCureMe.ogg",
+    VOICE_HELP_CLEANSE_ME = T._AddonPath .. "Sounds\\VoiceHelpCleanseMe.ogg",
+    VOICE_HELP_CURE_ME = T._AddonPath .. "Sounds\\VoiceHelpCureMe.ogg",
+
+    -- v11.0.10 user-provided natural female voice callouts.
+    FEMALE_DISPEL = T._AddonPath .. "Sounds\\FemaleDispel.ogg",
+    FEMALE_DISPEL_ME = T._AddonPath .. "Sounds\\FemaleDispelMe.ogg",
+    FEMALE_CLEANSE = T._AddonPath .. "Sounds\\FemaleCleanse.ogg",
+    FEMALE_CLEANSE_ME = T._AddonPath .. "Sounds\\FemaleCleanseMe.ogg",
+};
+
+function D:GetDispelNotificationSoundFile()
+    local preset = self.profile and self.profile.SoundNotificationPreset or "FEMALE_DISPEL";
+    return SOUND_NOTIFICATION_FILES[preset] or (self.profile and self.profile.SoundFile) or DC.AfflictionSound;
+end
+
+function D:GetSoundNotificationChannel()
+    local channel = self.profile and self.profile.SoundNotificationChannel or "Master";
+    if channel ~= "Master" and channel ~= "SFX" and channel ~= "Dialog" and channel ~= "Ambience" and channel ~= "Music" then
+        channel = "Master";
+    end
+    return channel;
+end
+
+-- Play one Decursive-owned dispel alert through one deterministic, group-wide
+-- debounce gate. The first accepted alert opens a lockout window; every later
+-- request during that window is discarded. Test sounds can bypass the lockout
+-- without changing its timer.
+function D:PlayDispelNotificationSound(reason, bypassIgnoreWindow)
+    if not self.profile or not self.profile.PlaySound then return false; end
+
+    local now = _G.GetTime();
+    local ignoreSeconds = tonumber(self.profile.SoundNotificationIgnoreSeconds) or 2.0;
+    if ignoreSeconds < 0 then ignoreSeconds = 0; end
+    if ignoreSeconds > 10 then ignoreSeconds = 10; end
+
+    local ignoreUntil = tonumber(T._DispelNotificationIgnoreUntil) or 0;
+    if not bypassIgnoreWindow and now < ignoreUntil then
+        if self.debug then
+            self:Debug("Sound notification suppressed by burst window:", reason, ("%.2fs remaining"):format(ignoreUntil - now));
+        end
+        return false;
+    end
+
+    if not bypassIgnoreWindow then
+        T._DispelNotificationIgnoreUntil = now + ignoreSeconds;
+    end
+
+    self:SafePlaySoundFile(self:GetDispelNotificationSoundFile(), self:GetSoundNotificationChannel());
+    if self.debug then
+        self:Debug("Dispel sound scheduled by", reason or "unknown", "ignore window:", ignoreSeconds);
+    end
+    return true;
+end
+
+function D:PlayFailureNotificationSound()
+    if not self.profile or not self.profile.PlaySound or self.profile.PlayFailureSound == false then return false; end
+    self:SafePlaySoundFile(DC.FailedSound, self:GetSoundNotificationChannel());
+    return true;
+end
+
 function D:PlaySound (UnitID, Caller) --{{{
     if self.profile.PlaySound and not self.Status.SoundPlayed then
         local Debuffs, IsCharmed = self:UnitCurableDebuffs(UnitID, true);
         if Debuffs[1] or IsCharmed then
-
-            -- since WoW 8.2, one has to use ids found at https://wow.tools/files/
-            self:SafePlaySoundFile(self.profile.SoundFile);
-
+            -- Set the one-shot state even if the short burst window suppresses
+            -- this particular call; we do not want a delayed machine-gun alert.
+            self:PlayDispelNotificationSound(Caller or "legacy curable scan", false);
             self.Status.SoundPlayed = true;
-
-            if self.debug then
-                self:Debug("Sound scheduled by", Caller);
-            end
-
         end
     end
 end --}}}
+
+-- ---------------------------------------------------------------------------
+-- WoW 12.1 legacy learned protected-aura sound fallback
+-- ---------------------------------------------------------------------------
+-- AuraContainer/AuraButton visibility is protected and cannot be queried by
+-- addon Lua. Blizzard's C_UnitAuras.AddAuraSound API can play a sound for a
+-- protected aura, but it plays directly inside Blizzard and provides no callback
+-- through which Decursive can apply a group-wide 2-second debounce.
+--
+-- Retained only as a fallback when the v11.0.10 MUF-state ID filter API is unavailable:
+--   1. Learn a public aura spell ID from the player's successful SPELL_DISPEL.
+--   2. On a future public SPELL_AURA_APPLIED combat-log event for that learned ID,
+--      route the alert through PlayDispelNotificationSound().
+--   3. The first group member opens the configured lockout window; simultaneous
+--      applications to other group members are suppressed.
+--
+-- If Blizzard makes the combat-log spell ID secret/unavailable, Decursive does
+-- not play an unthrottled fallback sound. Visual protected detection remains
+-- authoritative in that case.
+
+local function getProtectedAuraSoundContextKey()
+    local classToken = select(2, _G.UnitClass("player")) or "UNKNOWN";
+    local specID = 0;
+    if _G.GetSpecialization and _G.GetSpecializationInfo then
+        local specIndex = _G.GetSpecialization();
+        if specIndex then
+            local id = _G.GetSpecializationInfo(specIndex);
+            if type(id) == "number" and canaccessvalue(id) then
+                specID = id;
+            end
+        end
+    end
+    return classToken .. ":" .. tostring(specID);
+end
+
+-- Local per-expansion dispel database. Friendly harmful entries are eligible for
+-- protected aura sounds; hostile purge entries remain in the DB but are not
+-- registered against party/raid units.
+local function builtinCureTypeEnabled(entry)
+    if type(entry) ~= "table" then return false end
+    if entry.target == "enemy" or entry.alert == false then return false end
+    local key = entry.cureType
+    local dcType = key and DC and DC[key]
+    if not dcType then return false end
+    if not D.Status or type(D.Status.CuringSpells) ~= "table" or not D.Status.CuringSpells[dcType] then
+        return false
+    end
+    if type(D.GetCureOrderTable) == "function" then
+        local order = D:GetCureOrderTable()
+        if type(order) == "table" and not order[dcType] then return false end
+    end
+    return true
+end
+
+local function getBuiltInProtectedAuraSoundEntries()
+    local out = {}
+    local db = D.DispelDB and D.DispelDB.expansions
+    if type(db) ~= "table" then return out end
+    for expansion, bucket in pairs(db) do
+        local entries = bucket and bucket.entries
+        if type(entries) == "table" then
+            for i = 1, #entries do
+                local e = entries[i]
+                if builtinCureTypeEnabled(e) then out[#out + 1] = e end
+            end
+        end
+    end
+    table.sort(out, function(a,b) return (a.id or 0) < (b.id or 0) end)
+    return out
+end
+
+local function getBuiltInProtectedAuraSoundIDs()
+    local out, seen = {}, {}
+    local entries = getBuiltInProtectedAuraSoundEntries()
+    for i = 1, #entries do
+        local id = entries[i].id
+        if type(id) == "number" and id > 0 and not seen[id] then
+            seen[id] = true
+            out[#out + 1] = id
+        end
+    end
+    return out
+end
+
+local function getProtectedAuraSoundIDs()
+    if not D.db or not D.db.global then return nil; end
+
+    if type(D.db.global.SoundProtectedAuraSpellIDsBySpec) ~= "table" then
+        D.db.global.SoundProtectedAuraSpellIDsBySpec = {};
+    end
+
+    local key = getProtectedAuraSoundContextKey();
+    local ids = D.db.global.SoundProtectedAuraSpellIDsBySpec[key];
+    if type(ids) ~= "table" then
+        ids = {};
+        D.db.global.SoundProtectedAuraSpellIDsBySpec[key] = ids;
+    end
+
+    if type(D.db.global.SoundProtectedAuraSpellIDs) == "table" and #D.db.global.SoundProtectedAuraSpellIDs > 0 then
+        local seen = {};
+        for i = 1, #ids do seen[ids[i]] = true; end
+        for i = 1, #D.db.global.SoundProtectedAuraSpellIDs do
+            local spellID = D.db.global.SoundProtectedAuraSpellIDs[i];
+            if type(spellID) == "number" and spellID > 0 and not seen[spellID] then
+                ids[#ids + 1] = spellID;
+                seen[spellID] = true;
+            end
+        end
+        D.db.global.SoundProtectedAuraSpellIDs = nil;
+    end
+
+    while #ids > 32 do table.remove(ids, 1); end
+    return ids, key;
+end
+
+function D:GetProtectedAuraSoundContextKey()
+    return getProtectedAuraSoundContextKey();
+end
+
+function D:GetProtectedAuraSoundIDs()
+    return getProtectedAuraSoundIDs();
+end
+
+function D:IsLearnedProtectedAuraSoundSpellID(spellID)
+    if type(spellID) ~= "number" or spellID <= 0 then return false; end
+    if _G.issecretvalue and _G.issecretvalue(spellID) then return false; end
+    if not canaccessvalue(spellID) then return false; end
+
+    local ids = getProtectedAuraSoundIDs();
+    if not ids then return false; end
+    for i = 1, #ids do
+        if ids[i] == spellID then return true; end
+    end
+    return false;
+end
+
+function D:LearnProtectedAuraSoundSpellID(spellID, source)
+    if not self.profile or (self.profile.SoundProtectedAuraAutoLearn == false and source ~= "manual") then return false; end
+    if type(spellID) ~= "number" or spellID <= 0 then return false; end
+    if _G.issecretvalue and _G.issecretvalue(spellID) then return false; end
+    if not canaccessvalue(spellID) then return false; end
+
+    local ids, contextKey = getProtectedAuraSoundIDs();
+    if not ids then return false; end
+    for i = 1, #ids do
+        if ids[i] == spellID then return false; end
+    end
+
+    ids[#ids + 1] = spellID;
+    while #ids > 32 do table.remove(ids, 1); end
+
+    local spellName;
+    if _G.C_Spell and type(_G.C_Spell.GetSpellName) == "function" then
+        local ok, value = pcall(_G.C_Spell.GetSpellName, spellID);
+        if ok and value and canaccessvalue(value) then spellName = value; end
+    end
+    T._AuraSoundDiag = T._AuraSoundDiag or {};
+    T._AuraSoundDiag.lastLearned = spellID;
+    T._AuraSoundDiag.lastLearnedName = spellName;
+    self:Println(("Sound Notifications: learned dispellable aura %s (%d) for %s. Blizzard aura-sound registration refreshed."):format(spellName or "spell", spellID, contextKey or "current spec"));
+    if type(self.RefreshProtectedAuraSounds) == "function" then
+        self:RefreshProtectedAuraSounds("learned spell " .. tostring(spellID));
+    end
+    return true;
+end
+
+-- ---------------------------------------------------------------------------
+-- WoW 12.1 Blizzard-native protected aura sound registry
+-- ---------------------------------------------------------------------------
+-- C_UnitAuras.AddAuraSound(trigger, info) lets Blizzard play an addon-provided
+-- sound when a known spell ID is applied to a unit token, including while aura
+-- details are protected. This mirrors the architecture used by modern boss
+-- mods: register public spell identities up front and let Blizzard own the
+-- protected detection/playback path.
+local NativeAuraSoundHandles = {};
+T._AuraSoundDiag = T._AuraSoundDiag or { registered = 0, attempted = 0, lastReason = "never", lastError = nil, lastLearned = nil };
+
+function D:IsProtectedAuraSoundEngineAvailable()
+    return _G.C_UnitAuras
+        and type(_G.C_UnitAuras.AddAuraSound) == "function"
+        and type(_G.C_UnitAuras.RemoveAuraSound) == "function";
+end
+
+function D:ClearProtectedAuraSounds()
+    if self:IsProtectedAuraSoundEngineAvailable() then
+        for i = 1, #NativeAuraSoundHandles do
+            local handle = NativeAuraSoundHandles[i];
+            if type(handle) == "number" and canaccessvalue(handle) then
+                pcall(_G.C_UnitAuras.RemoveAuraSound, handle);
+            end
+        end
+    end
+    for i = #NativeAuraSoundHandles, 1, -1 do NativeAuraSoundHandles[i] = nil; end
+end
+
+local function addUniqueUnitToken(out, seen, unit)
+    if type(unit) ~= "string" or seen[unit] then return; end
+    -- UnitExists is intentionally only a roster/token check here. No aura data
+    -- is inspected. PLAYER is useful even when solo.
+    if unit == "player" or not _G.UnitExists or _G.UnitExists(unit) then
+        seen[unit] = true;
+        out[#out + 1] = unit;
+    end
+end
+
+function D:GetProtectedAuraSoundUnitTokens()
+    local units, seen = {}, {};
+    addUniqueUnitToken(units, seen, "player");
+
+    local assigned = self.Status and self.Status.Unit_Array;
+    if type(assigned) == "table" then
+        for i = 1, #assigned do addUniqueUnitToken(units, seen, assigned[i]); end
+    else
+        for i = 1, 4 do addUniqueUnitToken(units, seen, "party" .. i); end
+        for i = 1, 40 do addUniqueUnitToken(units, seen, "raid" .. i); end
+    end
+    return units;
+end
+
+function D:RefreshProtectedAuraSounds(reason)
+    self:ClearProtectedAuraSounds();
+
+    if not self:IsProtectedAuraSoundEngineAvailable() then return 0; end
+    if not self.profile or not self.profile.PlaySound or self.profile.SoundProtectedAuraAlerts == false then return 0; end
+
+    local learnedIDs = getProtectedAuraSoundIDs();
+    local spellIDs, seen = {}, {};
+    local builtIns = getBuiltInProtectedAuraSoundIDs();
+    for i = 1, #builtIns do
+        local id = builtIns[i]; if not seen[id] then seen[id] = true; spellIDs[#spellIDs + 1] = id; end
+    end
+    if type(learnedIDs) == "table" then
+        for i = 1, #learnedIDs do
+            local id = learnedIDs[i]; if not seen[id] then seen[id] = true; spellIDs[#spellIDs + 1] = id; end
+        end
+    end
+    if #spellIDs == 0 then return 0; end
+
+    local soundFile = self:GetDispelNotificationSoundFile();
+    local channel = self:GetSoundNotificationChannel();
+    local units = self:GetProtectedAuraSoundUnitTokens();
+    local trigger = (_G.Enum and _G.Enum.UnitAuraSoundTrigger and _G.Enum.UnitAuraSoundTrigger.Added) or 0;
+    local registered = 0;
+    local attempted = 0;
+    local lastError = nil;
+
+    for u = 1, #units do
+        local unit = units[u];
+        for i = 1, #spellIDs do
+            local spellID = spellIDs[i];
+            if type(spellID) == "number" and spellID > 0 and canaccessvalue(spellID)
+                and (not _G.issecretvalue or not _G.issecretvalue(spellID))
+            then
+                local info = {
+                    unitToken = unit,
+                    spellID = spellID,
+                    soundFileName = soundFile,
+                    outputChannel = channel,
+                };
+                attempted = attempted + 1;
+                local ok, handle = pcall(_G.C_UnitAuras.AddAuraSound, trigger, info);
+                if ok and type(handle) == "number" and canaccessvalue(handle) then
+                    NativeAuraSoundHandles[#NativeAuraSoundHandles + 1] = handle;
+                    registered = registered + 1;
+                elseif not ok then
+                    lastError = tostring(handle);
+                else
+                    lastError = "AddAuraSound returned no usable auraSoundID";
+                end
+            end
+        end
+    end
+
+    T._AuraSoundDiag = T._AuraSoundDiag or {};
+    T._AuraSoundDiag.registered = registered;
+    T._AuraSoundDiag.attempted = attempted;
+    T._AuraSoundDiag.lastReason = reason or "unknown";
+    T._AuraSoundDiag.lastError = lastError;
+    T._AuraSoundDiag.unitCount = #units;
+    T._AuraSoundDiag.spellCount = #spellIDs;
+
+    if self.debug then
+        self:Debug("Native aura sounds refreshed:", registered, "/", attempted, "registrations; reason:", reason or "unknown", lastError or "");
+    end
+    return registered;
+end
+
+function D:PrintAuraSoundDiagnostics()
+    local ids, key = getProtectedAuraSoundIDs();
+    local diag = T._AuraSoundDiag or {};
+    self:Println("--- Zhaohu Sound Diagnostics [square-sound25-root-decursive] ---");
+    self:Println("Build marker: square-sound25-root-decursive");
+    local builtIns = getBuiltInProtectedAuraSoundIDs();
+    self:Println(("Context: %s | learned IDs: %d | built-in active: %d"):format(tostring(key or "unknown"), type(ids) == "table" and #ids or 0, #builtIns));
+    if self.GetDispelDBStats then
+        local ds = self:GetDispelDBStats();
+        self:Println(("Local DispelDB: %d entries | %d friendly | %d enemy/purge"):format(ds.total or 0, ds.friendly or 0, ds.hostile or 0));
+    end
+    if #builtIns > 0 then
+        local bp = {}; for i = 1, #builtIns do bp[#bp + 1] = tostring(builtIns[i]); end
+        self:Println("Built-in IDs: " .. table.concat(bp, ", "));
+    end
+    if type(ids) == "table" and #ids > 0 then
+        local parts = {};
+        for i = 1, #ids do parts[#parts + 1] = tostring(ids[i]); end
+        self:Println("Spell IDs: " .. table.concat(parts, ", "));
+    end
+    self:Println(("Native AddAuraSound: %d/%d registered | units=%s | spells=%s"):format(tonumber(diag.registered) or 0, tonumber(diag.attempted) or 0, tostring(diag.unitCount or 0), tostring(diag.spellCount or 0)));
+    self:Println(("Player SPELL_DISPEL events: %d"):format(tonumber(diag.playerDispelEvents) or 0));
+    if (tonumber(diag.playerDispelEvents) or 0) > 0 then
+        self:Println(("Last dispelled-aura field: type=%s | accessible=%s | secret=%s"):format(
+            tostring(diag.lastDispelExtraType or "nil"),
+            diag.lastDispelExtraAccessible and "yes" or "no",
+            diag.lastDispelExtraSecret and "yes" or "no"));
+        if diag.lastDispelExtraPublicID then
+            self:Println("Public dispelled aura ID: " .. tostring(diag.lastDispelExtraPublicID));
+        else
+            self:Println("Public dispelled aura ID: unavailable");
+        end
+    end
+    self:Println("Last refresh: " .. tostring(diag.lastReason or "never"));
+    if diag.lastLearned then self:Println("Last learned: " .. tostring(diag.lastLearnedName or "spell") .. " (" .. tostring(diag.lastLearned) .. ")"); end
+    if diag.lastError then self:Println("Last AddAuraSound result: " .. tostring(diag.lastError)); end
+    self:Println("-------------------------------");
+end
+
+SLASH_ZHAOHUSOUND1 = "/zdsound";
+SlashCmdList["ZHAOHUSOUND"] = function()
+    if D and D.PrintAuraSoundDiagnostics then D:PrintAuraSoundDiagnostics(); end
+end
+
+SLASH_ZHAOHUDB1 = "/zddb";
+SlashCmdList["ZHAOHUDB"] = function()
+    if D and D.PrintDispelDBDiagnostics then D:PrintDispelDBDiagnostics(); end
+end
+
 
 -- LIVE-LIST DISPLAY functions {{{
 
@@ -455,7 +868,7 @@ do
 
         if D.LiveList.TestItemDisplayed and UnitExists(Unit) then -- and not UnTrustedUnitIDs[Unit] then
             if i == 1 then
-                Name, Texture, Applications, TypeName, Duration, ExpirationTime, SpellID = "Test item", "Interface\\AddOns\\Decursive\\iconON.tga", 2, DC.TypeNames[D.Status.ReversedCureOrder[1]], 70, (D.LiveList.TestItemDisplayed + 70), 0;
+                Name, Texture, Applications, TypeName, Duration, ExpirationTime, SpellID = "Test item", T._AddonPath .. "iconON.tga", 2, DC.TypeNames[D.Status.ReversedCureOrder[1]], 70, (D.LiveList.TestItemDisplayed + 70), 0;
                 -- D:Debug("|cFFFF0000Setting test debuff for ", Unit, " (debuff ", i, ")|r");--, Name, Texture, Applications, TypeName, Duration, ExpirationTime);
                 return true;
             else
@@ -540,7 +953,7 @@ do
                     break;
                 else
                     Name = "*Charm effect*";
-                    Texture = "Interface\\AddOns\\Decursive\\iconON.tga";
+                    Texture = T._AddonPath .. "iconON.tga";
                     ExpirationTime = false;
                     Duration = false;
                     Applications = 0;
@@ -550,7 +963,7 @@ do
 
             local isSpellIDScret = not canaccessvalue(SpellID)
 
-            --@debug@
+            --[==[@debug@
             if isSpellIDScret then
                 D:Debug("spell ids are secret, aura id: ", auraInstanceID)
             end
@@ -558,9 +971,10 @@ do
             if secretMode then
                 D:Debug("Debuff type is secret")
             end
-            --@end-debug@
+            --@end-debug@]==]
 
-            local s_color = DC.MN and auraInstanceID and C_UnitAuras.GetAuraDispelTypeColor(Unit, auraInstanceID, D.Status.dsCurve)
+            -- 12.1 SAFE: Use safe wrapper for dispel type color
+            local s_color = DC.MN and auraInstanceID and D:GetDispelTypeColorSafe(Unit, auraInstanceID)
 
             -- test for a type
             if not secretMode then
@@ -831,9 +1245,9 @@ do
     local Debuffs               = DC.EMPTY_TABLE; local IsCharmed = false; local Unit; local MUF; local IsDebuffed = false; local IsMUFDebuffed = false; local CheckStealth = false;
     local NoScanStatuses        = false;
     local band                  = _G.bit.band;
-    --@debug@
+    --[==[@debug@
     --local debugprofilestop = _G.debugprofilestop;
-    --@end-debug@
+    --@end-debug@]==]
     function D:ScanEveryBody()
 
         if not NoScanStatuses then
@@ -843,10 +1257,10 @@ do
         local UnitArray = self.Status.Unit_Array; local i = 1;
         local CheckStealth = self.profile.Show_Stealthed_Status;
 
-        --@debug@
+        --[==[@debug@
         --local start = debugprofilestop();
         --D:Debug("Scanning everybody...", self.Status.delayedDebuffReportDisabled, self.db.global.MFScanEverybodyReport)
-        --@end-debug@
+        --@end-debug@]==]
 
         while UnitArray[i] do
             Unit = UnitArray[i];
@@ -889,9 +1303,9 @@ do
 
                     self.MicroUnitF:UpdateMUFUnit(Unit, true);
 
-                    --@debug@
+                    --[==[@debug@
                     --D:Println("HAAAAAAA!!!!!");
-                    --@end-debug@
+                    --@end-debug@]==]
                 end
             end
 
@@ -899,9 +1313,9 @@ do
         end
         self.Status.delayedDebuffReportDisabled = false; -- set to true after a reconfiguration, reset only here.
 
-        --@debug@
+        --[==[@debug@
         --D:Debug("|cFF777777Scanning everybody...", i - 1, "units scanned in ", debugprofilestop() - start, "miliseconds|r");
-        --@end-debug@
+        --@end-debug@]==]
     end
 
 
@@ -944,20 +1358,20 @@ do
     local function UnitBuff(unit, BuffNameToCheck)
 
         local restricted = auraAccessRestricted()
-            --@debug@
+            --[==[@debug@
             --D:Debug("UnitBuff", unit, BuffNameToCheck)
-            --@end-debug@
+            --@end-debug@]==]
         if not restricted and GetAuraDataBySpellName and GetAuraDataBySpellName(unit, BuffNameToCheck) then
-            --@debug@
+            --[==[@debug@
             D:Debug("used C_UnitAuras")
-            --@end-debug@
+            --@end-debug@]==]
 
             -- return the aura instance id instead of true so that we can check when it's removed
             return GetAuraDataBySpellName(unit, BuffNameToCheck).auraInstanceID
         elseif not restricted and not GetAuraDataBySpellName then
-            --@debug@
+            --[==[@debug@
             D:Debug("used old buff scan method")
-            --@end-debug@
+            --@end-debug@]==]
 
             for i = 1, 40 do
                 buffName = G_UnitBuff(unit, i)
@@ -1002,6 +1416,6 @@ end
 
 
 
-T._LoadedFiles["Decursive.lua"] = "@project-version@";
+T._LoadedFiles["Decursive.lua"] = "11.0.10";
 
 -- Sin
