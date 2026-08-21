@@ -1,5 +1,8 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## Website update
+- `X-Website` metadata and the Readme.md download link now point to https://github.com/randylorfing/Decursive/.
+
 ## Maintainer contact update
 - Addon `Author` metadata, the `D.author` variable, and the in-game About page now show Randy Lorfing.
 - Bug-report contact (`X-eMail` metadata and the debug-report fallback address) now points to randylorfing@gmail.com.

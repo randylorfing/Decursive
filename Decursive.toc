@@ -40,7 +40,7 @@
 
 ## X-ReleaseDate: "2026-08-21T06:20:00Z"
 ## X-Category: Combat
-## X-Website: http://www.2072productions.com/to/decursive.php
+## X-Website: https://github.com/randylorfing/Decursive/
 ## X-Credits: Sylvin (Full french translation), Peter Sun, Ananhaid (ZhTW and zhCN translation), Fenlis, Chkid (koKR translation), Hemathio, Swix, Athariel, StingerSoft (Russian Translation), Freydis88, Floyddotnet, Vilogity, Dessa, Farook (German translation)
 
 ## X-Curse-Project-ID: 2154

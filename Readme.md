@@ -3,9 +3,7 @@ Decursive for World of Warcraft
 
 Download and documentation:
 
-http://www.2072productions.com/to/decursive.php
-
-http://www.wowace.com/addons/decursive/
+https://github.com/randylorfing/Decursive/
 
 Documentation is also available under the doc/ directory:
 
