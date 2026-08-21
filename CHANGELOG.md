@@ -2,6 +2,10 @@
 
 ## v11.0.26
 
+## Spam-click false red fix
+- Debounced the post-cure status light: re-clicking the same MUF within 2 seconds of a successful cure no longer flashes red when the repeat cast instantly errors ("Nothing to Dispel") against an already-cleared target.
+- Reuses the existing out-of-range suppression mechanism rather than adding new state.
+
 ## Season 2 Mythic+ dispel database
 - Added dispellable-debuff entries for all 8 Season 2 (patch 12.1) Mythic+ dungeons: Altar of Fangs, Murder Row, Den of Nalorakk, The Blinding Vale, Voidscar Arena, Kings' Rest, Ruby Life Pools, and Temple of Sethraliss.
 - Spell IDs cross-checked against Wowhead; entries with an unresolved buff/debuff-direction conflict in source material were left out rather than guessed.

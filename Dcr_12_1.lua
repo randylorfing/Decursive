@@ -2523,6 +2523,13 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
                 lastClickedMUF.Decursive121SuppressFailureUntil = GetTime() + 1.0
                 D:Clear121MUFStatusAttempt(lastClickedMUF)
                 D:Mark121MUFStatusRange(lastClickedMUF)
+            elseif (lastClickedMUF.Decursive121SuppressFailureUntil or 0) > GetTime() then
+                -- A cure just succeeded on this MUF (see the post-cure debounce
+                -- set below). A spam-click re-cast against an already-cleared
+                -- target commonly errors instantly (e.g. "Nothing to Dispel")
+                -- here rather than through UNIT_SPELLCAST_FAILED; without this
+                -- check that error would paint red over the still-visible green
+                -- success result from the click that actually worked.
             else
                 D:Mark121MUFStatusFailure(lastClickedMUF, msg or unit or event)
             end
@@ -2578,6 +2585,12 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
             -- dot is green for three seconds.  Yellow range remains the top layer.
             D:Clear121MUFStatusAttempt(targetMF)
             D:Begin121MUFPostCureVerification(targetMF, nil)
+
+            -- Debounce spam-clicking the same MUF right after a cure lands: a
+            -- repeat cast against an already-cleared target commonly errors
+            -- instantly ("Nothing to Dispel"), which would otherwise paint red
+            -- over the green result from the click that actually worked.
+            targetMF.Decursive121SuppressFailureUntil = GetTime() + 2.0
 
             local function arm() armPriorityCooldown(priority, spellID, targetMF) end
             if C_Timer and C_Timer.After then
