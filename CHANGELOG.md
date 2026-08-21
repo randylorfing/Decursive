@@ -1,5 +1,12 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.26
+
+## Season 2 Mythic+ dispel database
+- Added dispellable-debuff entries for all 8 Season 2 (patch 12.1) Mythic+ dungeons: Altar of Fangs, Murder Row, Den of Nalorakk, The Blinding Vale, Voidscar Arena, Kings' Rest, Ruby Life Pools, and Temple of Sethraliss.
+- Spell IDs cross-checked against Wowhead; entries with an unresolved buff/debuff-direction conflict in source material were left out rather than guessed.
+- Fixed a pre-existing King's Rest entry (spell 270920) that was mislabeled "Seduction" — it's actually "Bind Soul", verified against Wowhead.
+
 ## Website update
 - `X-Website` metadata and the Readme.md download link now point to https://github.com/randylorfing/Decursive/.
 
