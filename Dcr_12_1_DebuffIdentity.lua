@@ -51,7 +51,8 @@
 -- together; usually clear in a 5-man pull.
 local addonName, T = ...
 local D = T and T.Dcr
-if type(D) ~= "table" then return end
+local DC = T and T._C
+if type(D) ~= "table" or not DC or not DC.TWELVEONE then return end
 
 local WATCHED_UNITS = { "boss1", "boss2", "boss3", "boss4", "boss5", "target", "focus" }
 local RECENT_WINDOW = 12 -- seconds; how long a cast stays a plausible guess

@@ -44,7 +44,8 @@
 -- never confidently flags a mechanic it hasn't actually confirmed.
 local addonName, T = ...
 local D = T and T.Dcr
-if type(D) ~= "table" then return end
+local DC = T and T._C
+if type(D) ~= "table" or not DC or not DC.TWELVEONE then return end
 
 local PRIORITY_COLOR = {
     critical = { 1.00, .08, .08, 1.00 }, -- matches Dcr_12_1.lua STATUS_FAILED
