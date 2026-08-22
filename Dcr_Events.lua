@@ -505,7 +505,6 @@ end
 function D:PLAYER_ALIVE()
     D:Debug("|cFFFF0000PLAYER_ALIVE|r");
     self:ScheduleDelayedCall("Dcr_ReConfigure", self.ReConfigure, 4, self);
-    self.eventFrame:UnregisterEvent("PLAYER_ALIVE");
     T.PLAYER_IS_ALIVE = GetTime();
 end
 

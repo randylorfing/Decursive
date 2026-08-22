@@ -1,5 +1,10 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.34
+
+## Fixes MUF squares not repopulating after death/revive
+- `PLAYER_ALIVE` unregistered itself after the first time it fired, so only the very first revival of a session (typically at login) ever triggered a MUF reconfigure. Every death/rez after that -- including the disband/reform cycle in follower dungeons -- silently skipped it, leaving squares missing until a manual `/reload`. The handler now stays registered and reconfigures on every revival.
+
 ## v11.0.33
 
 ## Default to native detection even when DandersFrames is installed
