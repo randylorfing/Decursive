@@ -61,5 +61,6 @@ function D:RegisterEncounterDBExpansion(key, meta, entries)
 end
 
 function D:GetEncounterDBEntry(spellId)
+    if _G.issecretvalue and _G.issecretvalue(spellId) then return nil end
     return self.EncounterDB and self.EncounterDB.bySpellID and self.EncounterDB.bySpellID[spellId]
 end

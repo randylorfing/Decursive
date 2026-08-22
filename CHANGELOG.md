@@ -1,5 +1,10 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.32
+
+## Critical: fixes crash on secret enemy spell IDs
+- `GetDispelDBEntry`/`GetEncounterDBEntry` indexed their spell-ID lookup table directly with the spell ID from `UNIT_SPELLCAST_SUCCEEDED`/`UnitCastingInfo`, which WoW 12.1 can mark secret for some enemy casts -- confirmed in-game ("attempted to index a table that cannot be indexed with secret keys", crashing the debuff-identification cast watcher). Both lookups now bail out safely via `issecretvalue` instead of indexing with a secret key.
+
 ## v11.0.31
 
 ## Critical: fixes "mixed versions detected" false positive
