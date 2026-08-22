@@ -128,12 +128,14 @@ local function latchDetectionProvider()
 
     dandersAutoDetectedAtLatch = loaded and factory ~= nil
 
-    -- First-run/default behavior: if the player has never touched the toggle,
-    -- automatically opt in when DandersFrames is actually usable. Do NOT mark
-    -- this as a user choice; installing/removing DandersFrames before the player
-    -- chooses should continue to follow the detected default.
+    -- First-run/default behavior: default to native detection regardless of
+    -- whether DandersFrames is installed and usable. DandersFrames integration
+    -- is opt-in only -- having it installed should never silently switch the
+    -- provider away from native (native is what Decursive's own features,
+    -- like the debuff-identity tooltip, are built against). Do NOT mark this
+    -- as a user choice; the player can still explicitly enable it later.
     if D.profile and not dandersPreferenceWasExplicitlySet() then
-        D.profile.DandersFramesDispelIntegrationEnabled = dandersAutoDetectedAtLatch and true or false
+        D.profile.DandersFramesDispelIntegrationEnabled = false
     end
 
     detectionProviderConfiguredAtLatch = configuredDandersIntegration()

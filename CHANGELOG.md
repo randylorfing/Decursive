@@ -1,5 +1,10 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.33
+
+## Default to native detection even when DandersFrames is installed
+- Having DandersFrames installed was silently auto-switching Decursive's detection provider away from native on first run, which disables the native-only debuff-identification tooltip with no indication why. Native detection is now the default regardless of DandersFrames' presence; DandersFrames integration is opt-in only.
+
 ## v11.0.32
 
 ## Critical: fixes crash on secret enemy spell IDs
