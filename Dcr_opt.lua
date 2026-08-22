@@ -2746,7 +2746,7 @@ local function GetStaticOptions ()
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
-                                    "\n\n|cFFDDDD00 %s|r:\n   %s\n\n   %s"
+                                    "\n\n|cFFDDDD00 %s|r:\n   %s\n\n   %s\n\n   %s"
                                 ):format(
                                     "11.0.10", "Randy Lorfing", ("2026-08-21T06:20:00Z"):sub(1,10),
                                     L["ABOUT_NOTES"],
@@ -2756,6 +2756,7 @@ local function GetStaticOptions ()
                                     L["ABOUT_AUTHOREMAIL"],     GetAddOnMetadata(addonName, "X-eMail")   or 'GetAddOnMetadata() failure',
                                     L["ABOUT_CREDITS"]
                                     ,    "Decursive is inspired from the original \"Decursive v1.9.4\" released in 2006 by Patrick Bohnet (Quutar of Earthen Ring (US))"
+                                    ,    "John Wellesz (Decursive AT 2072productions.com) took over Decursive after its first year and maintained and developed it for nearly 20 years, from 2006 to 2025."
                                     ,    GetAddOnMetadata(addonName, "X-Credits") or 'GetAddOnMetadata() failure'
                                 ),
                         order = 0,
