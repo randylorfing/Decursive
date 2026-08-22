@@ -1,5 +1,16 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.29
+
+## False green status dot
+- The MUF status light no longer flashes green on a plain successful cast. Decursive can't distinguish "cast completed and actually cured something" from "cast completed against a target with nothing dispellable" (both are secret-safe-invisible to addon Lua), so claiming a confirmed cure was a false positive. The dot now only lights red for a confirmed failure (out of range, LoS, spell error, dispel failed); a no-op cast leaves it hidden instead of falsely claiming success.
+
+## CurseForge changelog fix
+- `.pkgmeta`'s manual changelog was pointed at the legacy `WhatsNew.md` (stuck at "2.8.3", predating this fork's WoW 12.1 work) instead of the actively maintained `CHANGELOG.md`. Every CurseForge upload was embedding the wrong, outdated release notes as a result. Releases from this version onward pull from `CHANGELOG.md`.
+
+## Retail-only CI
+- Removed the classic/mists/bcc packaging jobs from GitHub Actions -- `Decursive.toc` doesn't declare classic-compatible interface versions, and this release line targets retail only.
+
 ## v11.0.28
 
 ## Season 2 Mythic+ interrupt alerts

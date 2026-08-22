@@ -896,10 +896,12 @@ end
 -- appearing only when there's something to flag:
 --   gray   = ready / no known castability problem (rendered fully transparent)
 --   yellow = outside configured cleanse range
---   red    = a cure attempt failed or post-cast verification still sees the affliction
---   green  = the cure cleared the affliction (three-second confirmation)
+--   red    = a cure attempt failed (out of range, LoS, spell error, dispel failed)
+-- There is deliberately no green "success" state: a completed cast and a
+-- no-op cast against a target with nothing dispellable look identical from
+-- here (secret aura data), so claiming a confirmed cure would be a guess.
 -- Yellow wins whenever DandersFrames reports out of range. When in range,
--- red/green transient result feedback wins over normal gray.
+-- the red transient failure result wins over normal gray.
 -- LoS remains red only after an actual failed cleanse because neither WoW nor
 -- DandersFrames exposes a continuous public line-of-sight query.
 local statusLightMUFs = setmetatable({}, { __mode = "k" })
@@ -1836,11 +1838,13 @@ function D:Begin121MUFPostCureVerification(unitOrMF, spellName)
     local priority = resolveCurePriorityFromSpellName(spellName)
     local function enableVerification()
         if not MF or MF.Decursive121VerificationGeneration ~= generation then return end
-        -- Wait one short aura-update beat before showing success. This prevents
-        -- a false green flash on a cast that succeeds but leaves the protected
-        -- dispel need in place. The red DandersFrames verifier is enabled in
-        -- the same update and visually owns the light if the affliction remains.
-        MF.Decursive121StatusSuccessUntil = (GetTime and GetTime() or 0) + 3.0
+        -- Deliberately does NOT set Decursive121StatusSuccessUntil (green).
+        -- A "successful" cast and a no-op cast against a target with nothing
+        -- dispellable are indistinguishable here -- WoW reports both as a
+        -- completed cast, and Decursive cannot read whether the target had a
+        -- dispellable aura before or after (secret aura data). Claiming green
+        -- on cast-completion alone was a false positive; the dot now only
+        -- speaks when it can back the claim (red for a confirmed failure).
         refreshOneMUFStatusLight(MF)
         if nativeProvider then
             local holders = MF.Decursive121VerificationNativeHolders
