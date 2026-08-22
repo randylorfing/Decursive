@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -188,4 +188,4 @@ function D:HideMiniMapIcon()
     icon:Hide();
 end
 
-T._LoadedFiles["Dcr_LDB.lua"] = "11.0.10";
+T._LoadedFiles["Dcr_LDB.lua"] = "@project-version@";

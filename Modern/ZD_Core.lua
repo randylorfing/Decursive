@@ -1,4 +1,4 @@
---[[
+﻿--[[
     Zhaohu's Decursive v11 — Detect • Cleanse • Protect.
 
     This module deliberately keeps the proven v10.43 Decursive backend active
@@ -16,7 +16,7 @@ local ZD = T.ZhaohuModern or {}
 T.ZhaohuModern = ZD
 D.ZhaohuModern = ZD
 
-ZD.version = "11.0.10"
+ZD.version = "@project-version@"
 ZD.build = "single-ui"
 ZD.compatBackend = "10.43 feature engine"
 ZD.editEnvironment = ZD.editEnvironment or nil

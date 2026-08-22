@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -78,7 +78,7 @@ local function RegisterDecursive_Once() -- {{{
     --@end-debug@]==]
 
     D.name = "Decursive";
-    D.version = "11.0.10";
+    D.version = "@project-version@";
     D.author = "Randy Lorfing";
 
     -- v11 has no AceConfig/AceGUI settings stack. Backend code calls this
@@ -932,9 +932,9 @@ local function InitVariables_Once() -- {{{
     -- A table UnitID=>IsDebuffed (boolean)
     D.UnitDebuffed = {};
 
-    D.Revision = "4a1865f"; -- not used here but some other add-on may request it from outside
-    D.date = "2026-08-21T06:20:00Z";
-    D.version = "11.0.10";
+    D.Revision = "@project-abbreviated-hash@"; -- not used here but some other add-on may request it from outside
+    D.date = "@project-date-iso@";
+    D.version = "@project-version@";
 
     if D.date ~= "@project".."-date-iso@" then
         -- 1786999841 doesn't work
@@ -1000,7 +1000,7 @@ function D:VersionWarnings(forceDisplay) -- {{{
 
             if time() - self.db.global.LastExpirationAlert > 48 * 3600 or forceDisplay or debug then
 
-                T._ShowNotice ("|cff00ff00Decursive version: 11.0.10|r\n\n" .. "|cFFFFAA66" .. L["TOC_VERSION_EXPIRED"] .. "|r");
+                T._ShowNotice ("|cff00ff00Decursive version: " .. D.version .. "|r\n\n" .. "|cFFFFAA66" .. L["TOC_VERSION_EXPIRED"] .. "|r");
 
                 self.db.global.LastExpirationAlert = time();
             end
@@ -1009,7 +1009,7 @@ function D:VersionWarnings(forceDisplay) -- {{{
         self.db.global.TocExpiredDetection = false;
     end
 
-    if (("11.0.10"):lower()):find("beta") or ("11.0.10"):find("RC") or ("11.0.10"):find("Candidate") or alpha then
+    if (("@project-version@"):lower()):find("beta") or ("@project-version@"):find("RC") or ("@project-version@"):find("Candidate") or alpha then
 
         D.RunningADevVersion = true;
 
@@ -1022,7 +1022,7 @@ function D:VersionWarnings(forceDisplay) -- {{{
                 DC.DevVersionExpired = true;
                 -- Display the expiration notice only once evry 48 hours
                 if time() - self.db.global.LastExpirationAlert > 48 * 3600 or forceDisplay then
-                    T._ShowNotice ("|cff00ff00Decursive version: 11.0.10|r\n\n" .. "|cFFFFAA66" .. L["DEV_VERSION_EXPIRED"] .. "|r");
+                    T._ShowNotice ("|cff00ff00Decursive version: " .. D.version .. "|r\n\n" .. "|cFFFFAA66" .. L["DEV_VERSION_EXPIRED"] .. "|r");
 
                     self.db.global.LastExpirationAlert = time();
                 end
@@ -1033,16 +1033,16 @@ function D:VersionWarnings(forceDisplay) -- {{{
         end
 
         -- display a warning if this is a developpment version (avoid insults from people who don't know what they're doing)
-        if self.db.global.NonRelease ~= "11.0.10" then
-            self.db.global.NonRelease = "11.0.10";
-            T._ShowNotice ("|cff00ff00Decursive version: 11.0.10|r\n\n" .. "|cFFFFAA66" .. (("11.0.10"):find("RC") and L["ER_VERSION_NOTICE"] or L["DEV_VERSION_ALERT"]) .. "|r");
+        if self.db.global.NonRelease ~= "@project-version@" then
+            self.db.global.NonRelease = "@project-version@";
+            T._ShowNotice ("|cff00ff00Decursive version: " .. D.version .. "|r\n\n" .. "|cFFFFAA66" .. (("@project-version@"):find("RC") and L["ER_VERSION_NOTICE"] or L["DEV_VERSION_ALERT"]) .. "|r");
         end
     end
 
     --[==[@debug@
     fromCheckOut = true;
     if time() - self.db.global.LastUnpackagedAlert > 24 * 3600  then
-        T._ShowNotice ("|cff00ff00Decursive version: 11.0.10|r\n\n" .. "|cFFFFAA66" ..
+        T._ShowNotice ("|cff00ff00Decursive version: " .. D.version .. "|r\n\n" .. "|cFFFFAA66" ..
         [[
         |cFFFF0000You're using an unpackaged version of Decursive.|r
         Decursive is not meant to be used this way.
@@ -2403,7 +2403,7 @@ end -- }}}
 
 
 
-T._LoadedFiles["DCR_init.lua"] = "11.0.10";
+T._LoadedFiles["DCR_init.lua"] = "@project-version@";
 
 -------------------------------------------------------------------------------
 

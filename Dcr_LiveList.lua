@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -638,4 +638,4 @@ function LiveList:Onclick() -- {{{
     D:Println(L["HLP_LL_ONCLICK_TEXT"]);
 end -- }}}
 
-T._LoadedFiles["Dcr_LiveList.lua"] = "11.0.10";
+T._LoadedFiles["Dcr_LiveList.lua"] = "@project-version@";

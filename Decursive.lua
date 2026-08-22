@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -1416,6 +1416,6 @@ end
 
 
 
-T._LoadedFiles["Decursive.lua"] = "11.0.10";
+T._LoadedFiles["Decursive.lua"] = "@project-version@";
 
 -- Sin

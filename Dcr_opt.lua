@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -2748,7 +2748,7 @@ local function GetStaticOptions ()
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
                                     "\n\n|cFFDDDD00 %s|r:\n   %s\n\n   %s\n\n   %s"
                                 ):format(
-                                    "11.0.10", "Randy Lorfing", ("2026-08-21T06:20:00Z"):sub(1,10),
+                                    "@project-version@", "Randy Lorfing", ("@project-date-iso@"):sub(1,10),
                                     L["ABOUT_NOTES"],
                                     L["ABOUT_LICENSE"],         GetAddOnMetadata(addonName, "X-License") or 'All Rights Reserved',
                                     L["ABOUT_SHAREDLIBS"],      GetAddOnMetadata(addonName, "X-Embeds")  or 'GetAddOnMetadata() failure',
@@ -4654,6 +4654,6 @@ function D:QuickAccess (CallingObject, button) -- {{{
 end -- }}}
 
 
-T._LoadedFiles["Dcr_opt.lua"] = "11.0.10";
+T._LoadedFiles["Dcr_opt.lua"] = "@project-version@";
 
 -- Closer

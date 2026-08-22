@@ -1,4 +1,4 @@
---[[
+﻿--[[
     Decursive WoW 12.1 compatibility adapter.
 
     Additive compatibility layer for Decursive 11.0.10.
@@ -37,7 +37,7 @@ local GetBuildInfo = _G.GetBuildInfo
 local GetTime = _G.GetTime
 local IsInInstance = _G.IsInInstance
 
-local PATCH_VERSION = "v11.0.10"
+local PATCH_VERSION = "v@project-version@"
 
 local function safe(label, fn, ...)
     local ok, a, b, c = pcall(fn, ...)

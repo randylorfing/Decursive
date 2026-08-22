@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -531,4 +531,4 @@ function D:PopulateButtonPress(frame) --{{{
 
 end --}}}
 
-T._LoadedFiles["Dcr_lists.lua"] = "11.0.10";
+T._LoadedFiles["Dcr_lists.lua"] = "@project-version@";

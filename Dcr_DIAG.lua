@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -118,7 +118,7 @@ local DebugTextTable    = T._DebugTextTable;
 local Reported          = {};
 
 local UNPACKAGED = "@pro" .. "ject-version@";
-local VERSION = "11.0.10";
+local VERSION = "@project-version@";
 
 if not T._LoadedFiles then
     T._LoadedFiles = {};
@@ -1209,4 +1209,4 @@ do
     end
 end
 
-T._LoadedFiles["Dcr_DIAG.lua"] = "11.0.10";
+T._LoadedFiles["Dcr_DIAG.lua"] = "@project-version@";

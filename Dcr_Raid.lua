@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -1142,7 +1142,7 @@ end
 
 
 -------------------------------------------------------------------------------
-T._LoadedFiles["Dcr_Raid.lua"] = "11.0.10";
+T._LoadedFiles["Dcr_Raid.lua"] = "@project-version@";
 
 -- "Your God is dead and no one cares"
 -- "If there is a Hell I'll see you there"

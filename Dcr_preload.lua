@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -44,4 +44,4 @@ T._LoadedFiles["Dcr_preload.lua"] = false;
 T._OriginalDebugHandler = geterrorhandler();
 
 
-T._LoadedFiles["Dcr_preload.lua"] = "11.0.10";
+T._LoadedFiles["Dcr_preload.lua"] = "@project-version@";

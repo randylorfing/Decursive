@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -81,7 +81,7 @@ T._LoadedFiles["koKR.lua"] = false;
 local L = LibStub("AceLocale-3.0"):NewLocale("Decursive", "koKR");
 
 if not L then
-    T._LoadedFiles["koKR.lua"] = "11.0.10";
+    T._LoadedFiles["koKR.lua"] = "@project-version@";
     return;
 end;
 
@@ -501,4 +501,4 @@ L["UNSTABLERELEASE"] = "비안정화판 배포"
 
 
 
-T._LoadedFiles["koKR.lua"] = "11.0.10";
+T._LoadedFiles["koKR.lua"] = "@project-version@";

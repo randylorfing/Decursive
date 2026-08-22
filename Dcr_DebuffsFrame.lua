@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -2142,6 +2142,6 @@ local MF_Textures = { -- unused
 
 -- }}}
 
-T._LoadedFiles["Dcr_DebuffsFrame.lua"] = "11.0.10";
+T._LoadedFiles["Dcr_DebuffsFrame.lua"] = "@project-version@";
 
 -- Heresy

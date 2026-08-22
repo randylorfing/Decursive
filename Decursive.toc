@@ -20,7 +20,7 @@
 
 ## SavedVariables: DecursiveDB
 
-## Version: 11.0.10
+## Version: @project-version@
 ## X-Zhaohu-Build: square-sound25-root-decursive
 ## X-Zhaohu-12.1-Patch: v11.0.10-square-sound6-safe-visual-restore
 ## X-Zhaohu-Backend: v10.43-feature-engine
@@ -38,7 +38,7 @@
 
 ## X-Embeds: Ace3, LibQTip-1.0, LibDataBroker-1.1, LibDBIcon-1.0, !BugGrabber, LibDualSpec-1.0
 
-## X-ReleaseDate: "2026-08-21T06:20:00Z"
+## X-ReleaseDate: "@project-date-iso@"
 ## X-Category: Combat
 ## X-Website: https://github.com/randylorfing/Decursive/
 ## X-Credits: Sylvin (Full french translation), Peter Sun, Ananhaid (ZhTW and zhCN translation), Fenlis, Chkid (koKR translation), Hemathio, Swix, Athariel, StingerSoft (Russian Translation), Freydis88, Floyddotnet, Vilogity, Dessa, Farook (German translation)

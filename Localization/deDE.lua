@@ -1,4 +1,4 @@
---[[
+﻿--[[
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
@@ -77,7 +77,7 @@ T._LoadedFiles["deDE.lua"] = false;
 local L = LibStub("AceLocale-3.0"):NewLocale("Decursive", "deDE");
 
 if not L then
-    T._LoadedFiles["deDE.lua"] = "11.0.10";
+    T._LoadedFiles["deDE.lua"] = "@project-version@";
     return;
 end;
 
@@ -430,4 +430,4 @@ L["UNSTABLERELEASE"] = "Instabile Veröffentlichung"
 
 
 
-T._LoadedFiles["deDE.lua"] = "11.0.10";
+T._LoadedFiles["deDE.lua"] = "@project-version@";
