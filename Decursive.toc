@@ -19,7 +19,6 @@
 ## IconTexture: Interface/AddOns/Decursive/iconON.tga
 
 ## SavedVariables: DecursiveDB
-## SavedVariables: DCRREPORTS_DB
 
 ## Version: 11.0.10
 ## X-Zhaohu-Build: square-sound25-root-decursive
@@ -99,7 +98,6 @@ Dcr_12_1.lua
 Dcr_12_1_Utils.lua
 Dcr_12_1_Encounters.lua
 Dcr_12_1_DebuffIdentity.lua
-Dcr_12_1_Reports.lua
 
 Dcr_LiveList.lua
 Dcr_LiveList.xml
