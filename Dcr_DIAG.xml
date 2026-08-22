@@ -143,6 +143,6 @@
     <Script>
         local T = DecursiveRootTable or {};
 
-        T._LoadedFiles["Dcr_DIAG.xml"] = "11.0.10";
+        T._LoadedFiles["Dcr_DIAG.xml"] = "@project-version@";
     </Script>
 </Ui>

@@ -1,5 +1,10 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.31
+
+## Critical: fixes "mixed versions detected" false positive
+- The `@project-version@` restoration in v11.0.29 only covered `.lua` files -- the 7 `.xml` files (`embeds.xml`, `Dcr_DIAG.xml`, `Decursive.xml`, `Dcr_lists.xml`, `Dcr_LiveList.xml`, `Dcr_DebuffsFrame.xml`, `Localization/load.xml`) still had their version stamps hardcoded to the literal "11.0.10". Now that `dcrDiag`'s mixed-version detection actually works (fixed in v11.0.29), this stale stamp made every real release since then falsely report "installation is corrupted, mixed versions detected!" on load. Fixed by applying the same token restoration to all 7 XML files.
+
 ## v11.0.30
 
 ## Critical: fixes "Decursive installation is corrupted!" on load

@@ -337,7 +337,7 @@
     <Script>
         local T = DecursiveRootTable or {};
 
-        T._LoadedFiles["Decursive.xml"] = "11.0.10";
+        T._LoadedFiles["Decursive.xml"] = "@project-version@";
     </Script>
 
 

@@ -184,6 +184,6 @@
     <Script>
         local T = DecursiveRootTable or {};
 
-        T._LoadedFiles["Dcr_DebuffsFrame.xml"] = "11.0.10";
+        T._LoadedFiles["Dcr_DebuffsFrame.xml"] = "@project-version@";
     </Script>
 </Ui>
