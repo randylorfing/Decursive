@@ -1,5 +1,20 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.28
+
+## Season 2 Mythic+ interrupt alerts
+- New EncounterDB (`Database/EncounterDB_Core.lua`, `Database/Encounters/Midnight.lua`) covering 36 verified priority interrupts across all 8 Season 2 dungeons.
+- An enemy-cast watcher (`Dcr_12_1_Encounters.lua`) drives an on-screen alert popup and a chat message when a tracked interrupt is cast nearby, plus an optional DBM early-warning bridge.
+- Detection is native (`UNIT_SPELLCAST_START` on nameplates/boss/target/focus units) -- no external addon required.
+
+## Debuff identification on MUF hover
+- WoW 12.1 blocks any secure-click addon from reading a debuff's real identity through any API (live query, the newer `C_UnitAuras.GetUnitAuras`, or the combat log) -- confirmed this patch via extensive in-game testing, matching the exact restriction DandersFrames itself hits.
+- New: a real, secret-safe native Blizzard tooltip on hover, modeled on DandersFrames' own mechanism (a dedicated AuraSlot with `SetTooltipAnchorPoint`/`SetHideTooltipInCombat`), created safely at MUF-init time. Shows dispellable debuffs by default; `/dcridentity alldebuffs` toggles to show all harmful debuffs.
+- Falls back to a "best guess" from the enemy's own recent cast when the native tooltip isn't available (e.g. DandersFrames integration active).
+
+## Status dot
+- The MUF status light now stays hidden while idle instead of always showing gray, appearing only for range/fail/success states that need attention.
+
 ## v11.0.26
 
 ## Spam-click false red fix
