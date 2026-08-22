@@ -1,5 +1,13 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.30
+
+## Critical: fixes "Decursive installation is corrupted!" on load
+- The packager's `--@debug@`/`--@end-debug@` inline preprocessing was duplicating the closing `]==]` bracket on these blocks in every packaged build, producing a Lua syntax error that aborted the whole file and cascaded into a fatal "installation is corrupted!" popup on every login. This is what actually broke v11.0.28 and v11.0.29 in-game. Fixed by making these blocks permanently inert instead of packager-processed (no behavior change for our retail build, which never used the debug-activation path anyway).
+
+## OnBackdropSizeChanged warning fix
+- `BackdropTemplateMixin` exists in 12.1 but no longer defines `OnBackdropSizeChanged`, producing a Lua warning on the main bar frame. Now copies Blizzard's mixin and backfills only the missing method instead of an all-or-nothing fallback.
+
 ## v11.0.29
 
 ## CurseForge changelog fix
