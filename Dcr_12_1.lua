@@ -892,8 +892,9 @@ end
 -- ---------------------------------------------------------------------------
 -- The original hidden move handle is intentionally untouched.  Every shown MUF
 -- gets one dedicated, non-interactive status light centered above the square.
--- The light is one quarter of the MUF's base size and is always visible:
---   gray   = ready / no known castability problem
+-- The light is one quarter of the MUF's base size and is hidden while idle,
+-- appearing only when there's something to flag:
+--   gray   = ready / no known castability problem (rendered fully transparent)
 --   yellow = outside configured cleanse range
 --   red    = a cure attempt failed or post-cast verification still sees the affliction
 --   green  = the cure cleared the affliction (three-second confirmation)
@@ -902,7 +903,7 @@ end
 -- LoS remains red only after an actual failed cleanse because neither WoW nor
 -- DandersFrames exposes a continuous public line-of-sight query.
 local statusLightMUFs = setmetatable({}, { __mode = "k" })
-local STATUS_READY   = { .34, .34, .34, .95 }
+local STATUS_READY   = { .34, .34, .34, 0 }
 local STATUS_RANGE   = { 1.00, .82, 0.00, 1.00 }
 local STATUS_FAILED  = { 1.00, .08, .08, 1.00 }
 local STATUS_SUCCESS = { .10, 1.00, .24, 1.00 }
