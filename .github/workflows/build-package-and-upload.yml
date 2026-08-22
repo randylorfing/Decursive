@@ -1,5 +1,8 @@
 name: Check and build addon
 
+permissions:
+  contents: write
+
 on:
   push:
     branches:
