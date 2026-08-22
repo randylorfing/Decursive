@@ -2943,9 +2943,9 @@ function D:GetCureOrderTable ()
     local generalCureOrder = D.classprofile.CureOrder;
 
     if not activeSpec or activeSpec == 5 then
-        --[==[@debug@
+        --[==[
         --D:Debug("No active spec, returning general cure order table:", D:tAsString(generalCureOrder));
-        --@end-debug@]==]
+        ]==]
         return generalCureOrder;
     else
         local specCureOrder = "CureOrder-"..activeSpec;
@@ -2956,9 +2956,9 @@ function D:GetCureOrderTable ()
             self:tcopy(D.classprofile[specCureOrder], generalCureOrder);
         end
 
-        --[==[@debug@
+        --[==[
         --D:Debug("returning specific cure order table ", specCureOrder, " for spec:", activeSpec, "table:", D:tAsString(D.classprofile[specCureOrder]));
-        --@end-debug@]==]
+        ]==]
         return D.classprofile[specCureOrder];
     end
 end
@@ -3056,9 +3056,9 @@ function D:SetCureOrder (ToChange)
             tmpTable[abs(CureOrder[Type])] = Type; -- CureOrder[Type] can have a <0 value if the spell was lost
             FoundSpell = FoundSpell + 1;
         elseif (CureOrder[Type]) then -- if we don't have a spell for this type
-            --[==[@debug@
+            --[==[
             D:Debug("SetCureOrder(): Adding lost spell", CureOrder[Type], Type)
-            --@end-debug@]==]
+            ]==]
             LostSpells[abs(CureOrder[Type])] = Type;  -- save the position
         end
     end
@@ -3085,9 +3085,9 @@ function D:SetCureOrder (ToChange)
    -- D:PrintLiteral(LostSpells);
    for FormerPrio, Type in ipairs(LostSpells) do
        newCureOrder[Type] = AvailableSpot
-        --[==[@debug@
+        --[==[
         D:Debug("SetCureOrder(): old lost spell prio:", CureOrder[Type], Type)
-        --@end-debug@]==]
+        ]==]
        AvailableSpot = AvailableSpot - 1;
    end
 
@@ -3100,17 +3100,17 @@ function D:SetCureOrder (ToChange)
         newCureOrder[Type] = Num;
     end
 
-    --[==[@debug@
+    --[==[
     D:Debug("SetCureOrder(): updated cure order table:", D:tAsString(newCureOrder), ToChange and "(saved)" or "(unsaved)" );
-    --@end-debug@]==]
+    ]==]
 
 
     -- create / update the ReversedCureOrder table (prio => type, ..., )
     D.Status.ReversedCureOrder = D:tReverse(newCureOrder);
 
-    --[==[@debug@
+    --[==[
     D:Debug("SetCureOrder(): ReversedCureOrder table:", D:tAsString(D.Status.ReversedCureOrder));
-    --@end-debug@]==]
+    ]==]
 
 
     -- Create spell priority table
@@ -3132,9 +3132,9 @@ function D:SetCureOrder (ToChange)
         end
     end
 
-    --[==[@debug@
+    --[==[
     D:Debug("SetCureOrder(): updated CuringSpells table:", D:tAsString(CuringSpells));
-    --@end-debug@]==]
+    ]==]
 
 
     if DC.MN then
@@ -3153,24 +3153,24 @@ function D:SetCureOrder (ToChange)
             end
         end
 
-        --[==[@debug@
+        --[==[
         --D:Debug("SetCureOrder(): typeToColor table:", D:tAsString(typeToColor));
-        --@end-debug@]==]
+        ]==]
 
 
         -- update our curve
         dsc:ClearPoints()
         dsc:AddPoint(0, D:NumToColorMixin(mfc[DC.NORMAL]))
         for affType, cm in pairs(typeToColor) do
-            --[==[@debug@
+            --[==[
             D:Debug("Adding point: ", affType, dtToBT[affType], cm)
-            --@end-debug@]==]
+            ]==]
             dsc:AddPoint(dtToBT[affType], cm)
         end
 
-        --[==[@debug@
+        --[==[
         --D:Debug("SetCureOrder(): dsCurve points:", dsc:GetPoints());
-        --@end-debug@]==]
+        ]==]
 
     end
 

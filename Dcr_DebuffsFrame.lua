@@ -1226,10 +1226,10 @@ function MicroUnitF.OnPreClick(frame, Button) -- {{{
                 D:errln(L["HLP_WRONGMBUTTON"]);
                 if NeededPrio and MF_colors[NeededPrio] then
                     D:Println(L["HLP_USEXBUTTONTOCURE"], D:ColorText(DC.MouseButtonsReadable[ D.db.global.MouseButtons[NeededPrio] ], D:NumToHexColor(MF_colors[NeededPrio])));
-                    --[==[@debug@
+                    --[==[
                 else
                     D:AddDebugText("Button wrong click info bug: NeededPrio:", NeededPrio, "Unit:", Unit, "RequestedPrio:", RequestedPrio, "Button clicked:", Button, "MF_colors:", unpack(MF_colors), "Debuff Type:", frame.Object.Debuffs[1].Type);
-                    --@end-debug@]==]
+                    ]==]
                 end
             elseif RequestedPrio and D.Status.HasSpell then -- useless block in Midnight as there is no CLEU anymore to detect cast failures.
                 D.Status.ClickCastingWIP = true;
@@ -1390,9 +1390,9 @@ function MicroUnitF.prototype:Update(SkipSetColor, SkipDebuffs, CheckStealth, o_
         end
         -- if the guid changed we really need to rescan the unit!
         SkipSetColor = false; SkipDebuffs = false; CheckStealth = true;
-        --[==[@debug@
+        --[==[
         D:Debug("|cFF00CC00MUF:Update(): Guid change rescanning", Unit, "|r");
-        --@end-debug@]==]
+        ]==]
     end
 
     -- Update the frame attributes if necessary (Spells priority or unit id changes)
@@ -1446,9 +1446,9 @@ do
     function MicroUnitF.prototype:SetUnstableAttribute(attribute, value)
         self.Frame:SetAttribute(attribute, value);
         self.usedAttributes[attribute] = self.LastAttribUpdate;
-        --[==[@debug@
+        --[==[
         D:Debug("SetUnstableAttribute", attribute, value);
-        --@end-debug@]==]
+        ]==]
     end
 
     function MicroUnitF.prototype:CleanDefuncUnstableAttributes()
@@ -1895,9 +1895,9 @@ do
 
             if PrioChanged then PrioChanged = false; end
 
-            --[==[@debug@
+            --[==[
             D:Debug('Setting MUF texture color...');
-            --@end-debug@]==]
+            ]==]
             -- Set the main texture
             self.Texture:SetColorTexture(self.Color[1], self.Color[2], self.Color[3], Alpha);
 
@@ -1906,9 +1906,9 @@ do
                 self.Texture:SetColorTexture(color.r, color.g, color.b, Alpha);
             end
             --self.Texture:SetAlpha(Alpha);
-            --[==[@debug@
+            --[==[
             D:Debug('Setting MUF texture color... done');
-            --@end-debug@]==]
+            ]==]
 
 
 
@@ -2062,9 +2062,9 @@ do
                 -- test for GUID change and force a debuff update in this case
                 if UnitToGUID[MF.CurrUnit] ~= MF.UnitGUID then
                     MF.UpdateCountDown = 0; -- will force MF:Update() to be called
-                    --[==[@debug@
+                    --[==[
                     --D:Println("|cFFFFAA55GUID change detected while placing for |r", MicroFrameUpdateIndex, UnitToGUID[MF.CurrUnit], MF.UnitGUID );
-                    --@end-debug@]==]
+                    ]==]
                 end
 
                 ActionsDone = ActionsDone + 1;

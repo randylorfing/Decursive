@@ -815,11 +815,11 @@ do
         UIa = UnitInfo[ua]; UIb = UnitInfo[ub];
         uaVSub = a_isBefore_b(getMinOf4(IPL[UIa.class], IPL[UIa.group], IPL[UIa.GUID], IPL[UIa.role]), getMinOf4(IPL[UIb.class], IPL[UIb.group], IPL[UIb.GUID], IPL[UIb.role]));
 
-        --[==[@debug@
+        --[==[
         if ua == "player" or ub == "player" then
             D:Debug("xx", ua, D:tAsString(UIa), ub, D:tAsString(UIb), uaVSub, "GUID comp:", IPL[UIa.GUID], IPL[UIb.GUID])
         end
-        --@end-debug@]==]
+        ]==]
 
         if uaVSub ~= nil then
             return uaVSub;
@@ -1124,7 +1124,7 @@ do
 
         self:Debug ("|cFFFF44FF-->|r Update complete!", Status.UnitNum);
 
-        --[==[@debug@
+        --[==[
         D:Debug("Current group:", CurrentGroup, D:tAsString(IPL));
         D:Debug("Source priority list:", #self.profile.PriorityList, D:tAsString(self.profile.PriorityList));
         for i, unit in ipairs(Status.Unit_Array) do
@@ -1135,7 +1135,7 @@ do
                 self:AddDebugText("issue #46 debug:", unit, UnitInfo[unit].class, "_UC: ",  select(2, _UnitClass(unit)));
             end
         end
-        --@end-debug@]==]
+        ]==]
     end
 
 end

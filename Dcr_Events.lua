@@ -585,9 +585,9 @@ do
     --
 
     function D:checkForDebuff(UnitID, secretedName)
-        --[==[@debug@
+        --[==[
         if self.debug then self:Debug("(UA) Debuff, UnitId: ", UnitID, secretedName); end
-        --@end-debug@]==]
+        ]==]
 
         if self.profile.ShowDebuffsFrame then
             self.MicroUnitF:UpdateMUFUnit(UnitID);
@@ -609,9 +609,9 @@ do
         end
 
 
-        --[==[@debug@
+        --[==[
         --D:lazy_debug("UNIT_AURA", function() return D:tAsString(o_auraUpdateInfo) end, "UnitID:", UnitID, GetTime() + (GetTime() % 1));
-        --@end-debug@]==]
+        ]==]
 
 
         if DC.MN then -- classic versioins still use CLEU and although they support UNIT_AURA as well CLEU provides more features
@@ -692,9 +692,9 @@ do
                 --]=]
             end
 
-            --[==[@debug@
+            --[==[
             self:Debug("|cFF552255UNIT_AURA triggers a rescan|r because of", UnitID);
-            --@end-debug@]==]
+            ]==]
 
             if unitguid then
                 self.Status.Unit_Array_UnitToGUID[UnitID] = unitguid;
@@ -821,9 +821,9 @@ do -- Combat log event handling {{{1
         if event == nil then
             timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellID, spellNAME, _spellSCHOOL, auraTYPE_failTYPE = CombatLogGetCurrentEventInfo()
         end
-                    --[==[@debug@
+                    --[==[
                     --if self.debug then self:Debug("COMBAT_LOG_EVENT_UNFILTERED: ", timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellID, spellNAME, _spellSCHOOL, auraTYPE_failTYPE); end
-                    --@end-debug@]==]
+                    ]==]
         -- WoW 12.1 protected sound learning: for SPELL_DISPEL, the first
         -- event-specific value after the dispel spell fields is extraSpellID.
         -- The existing auraTYPE_failTYPE local occupies that position in this
@@ -892,9 +892,9 @@ do -- Combat log event handling {{{1
                     end
                 else
 
-                    --[==[@debug@
+                    --[==[
                     if self.debug then self:Debug("Debuff, UnitId: ", UnitID, spellNAME, event, time() + (GetTime() % 1), timestamp, "destName:", destName, destFlags, band (destFlags, FRIENDLY_TARGET) == FRIENDLY_TARGET); end
-                    --@end-debug@]==]
+                    ]==]
 
                     if self.profile.ShowDebuffsFrame then
                         self.MicroUnitF:UpdateMUFUnit(UnitID);
@@ -1015,13 +1015,13 @@ do -- Combat log event handling {{{1
                 self.Status.ClickedMF = false;
             end
             --  }}}
-            --[==[@debug@
+            --[==[
         elseif self.debug and event then
 
             --self:Debug("event:", event, "self.Status.ClickedMF.CastingSpell", self.Status.ClickedMF and self.Status.ClickedMF.CastingSpell, "band(sourceFlags, ME) ~= 0", band(sourceFlags, ME) ~= 0, "self.Status.ClickCastingWIP", self.Status.ClickCastingWIP);
 
 
-            --@end-debug@]==]
+            ]==]
 
         end
 

@@ -73,9 +73,9 @@ local function RegisterDecursive_Once() -- {{{
     T.Dcr = LibStub("AceAddon-3.0"):NewAddon("Decursive", "AceConsole-3.0", "AceEvent-3.0", "AceTimer-3.0", "AceHook-3.0"); -- XXX test this when a library is missing
     D     = T.Dcr;
 
-    --[==[@debug@
+    --[==[
     --Dcr = T.Dcr;
-    --@end-debug@]==]
+    ]==]
 
     D.name = "Decursive";
     D.version = "@project-version@";
@@ -981,9 +981,9 @@ function D:VersionWarnings(forceDisplay) -- {{{
     local alpha = false;
     local debug = false;
     local fromCheckOut = false;
-    --[==[@debug@
+    --[==[
     debug = true;
-    --@end-debug@]==]
+    ]==]
 
 
     -- test if WoW's TOC version is superior to Decursive's, wait 40 days and warn the users that this version has expired
@@ -1039,7 +1039,7 @@ function D:VersionWarnings(forceDisplay) -- {{{
         end
     end
 
-    --[==[@debug@
+    --[==[
     fromCheckOut = true;
     if time() - self.db.global.LastUnpackagedAlert > 24 * 3600  then
         T._ShowNotice ("|cff00ff00Decursive version: " .. D.version .. "|r\n\n" .. "|cFFFFAA66" ..
@@ -1059,7 +1059,7 @@ function D:VersionWarnings(forceDisplay) -- {{{
 
         self.db.global.LastUnpackagedAlert = time();
     end
-    --@end-debug@]==]
+    ]==]
 
     -- re-enable new version pop-up alerts when a newer version is installed
     if D.db.global.NewVersionsBugMeNot and D.db.global.NewVersionsBugMeNot < D.VersionTimeStamp then
@@ -1176,9 +1176,9 @@ end -- // }}}
 
 local FirstEnable = true;
 
---[==[@debug@
+--[==[
 D.debug = true
---@end-debug@]==]
+]==]
 
 function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
 
@@ -1426,9 +1426,9 @@ function D:SetConfiguration() -- {{{
                 return spellData.IsItem and (GetItemInfo(spellOrItemID * -1)) or (GetSpellName(spellOrItemID))
             end)) then
             D.classprofile.UserSpells[spellOrItemID] = nil;
-            --[==[@debug@
+            --[==[
             D:AddDebugText("Invalid spell/item id detected and removed:", spellOrItemID, spellData.MacroText)
-            --@end-debug@]==]
+            ]==]
         end
     end
 
@@ -1651,26 +1651,26 @@ local function SpellIterator() -- {{{
         if currentKey == nil and currentSpellTable == DC.SpellsToUse then
             -- it was the base table now use the user defined one
             currentSpellTable = D.classprofile.UserSpells;
-            --[==[@debug@
+            --[==[
             D:Debug("|cFF00FF00Shifting to user spells|r");
-            --@end-debug@]==]
+            ]==]
             return iter(); -- continue with the other table
         elseif currentSpellTable == DC.SpellsToUse and D.classprofile.UserSpells[currentKey] and not D.classprofile.UserSpells[currentKey].Hidden and not D.classprofile.UserSpells[currentKey].Disabled and currentSpellTable[currentKey].MacroText then
             -- if the user actively redefined that spell then skip the default one
-            --[==[@debug@
+            --[==[
             D:Debug("Skipping default", currentKey);
-            --@end-debug@]==]
+            ]==]
             return iter(); -- aka 'continue'
         end
 
         -- if it's already defined in the base table (but not editable) or if it's hidden, skip it
         if ST and (currentSpellTable ~= DC.SpellsToUse and (DC.SpellsToUse[currentKey] and not currentSpellTable[currentKey].MacroText or currentSpellTable[currentKey].Hidden)) then
-            --[==[@debug@
+            --[==[
             D:Debug("Skipping", currentKey);
             if currentSpellTable ~= DC.SpellsToUse and DC.SpellsToUse[currentKey] then
                 D:Print("|cFFFF0000Ignored custom spell id|r", currentKey, "remove this spell from the custom spells list or re-add it with the edit macro option checked.");
             end
-            --@end-debug@]==]
+            ]==]
 
             return iter(); -- aka 'continue'
         end

@@ -963,7 +963,7 @@ do
 
             local isSpellIDScret = not canaccessvalue(SpellID)
 
-            --[==[@debug@
+            --[==[
             if isSpellIDScret then
                 D:Debug("spell ids are secret, aura id: ", auraInstanceID)
             end
@@ -971,7 +971,7 @@ do
             if secretMode then
                 D:Debug("Debuff type is secret")
             end
-            --@end-debug@]==]
+            ]==]
 
             -- 12.1 SAFE: Use safe wrapper for dispel type color
             local s_color = DC.MN and auraInstanceID and D:GetDispelTypeColorSafe(Unit, auraInstanceID)
@@ -1245,9 +1245,9 @@ do
     local Debuffs               = DC.EMPTY_TABLE; local IsCharmed = false; local Unit; local MUF; local IsDebuffed = false; local IsMUFDebuffed = false; local CheckStealth = false;
     local NoScanStatuses        = false;
     local band                  = _G.bit.band;
-    --[==[@debug@
+    --[==[
     --local debugprofilestop = _G.debugprofilestop;
-    --@end-debug@]==]
+    ]==]
     function D:ScanEveryBody()
 
         if not NoScanStatuses then
@@ -1257,10 +1257,10 @@ do
         local UnitArray = self.Status.Unit_Array; local i = 1;
         local CheckStealth = self.profile.Show_Stealthed_Status;
 
-        --[==[@debug@
+        --[==[
         --local start = debugprofilestop();
         --D:Debug("Scanning everybody...", self.Status.delayedDebuffReportDisabled, self.db.global.MFScanEverybodyReport)
-        --@end-debug@]==]
+        ]==]
 
         while UnitArray[i] do
             Unit = UnitArray[i];
@@ -1303,9 +1303,9 @@ do
 
                     self.MicroUnitF:UpdateMUFUnit(Unit, true);
 
-                    --[==[@debug@
+                    --[==[
                     --D:Println("HAAAAAAA!!!!!");
-                    --@end-debug@]==]
+                    ]==]
                 end
             end
 
@@ -1313,9 +1313,9 @@ do
         end
         self.Status.delayedDebuffReportDisabled = false; -- set to true after a reconfiguration, reset only here.
 
-        --[==[@debug@
+        --[==[
         --D:Debug("|cFF777777Scanning everybody...", i - 1, "units scanned in ", debugprofilestop() - start, "miliseconds|r");
-        --@end-debug@]==]
+        ]==]
     end
 
 
@@ -1358,20 +1358,20 @@ do
     local function UnitBuff(unit, BuffNameToCheck)
 
         local restricted = auraAccessRestricted()
-            --[==[@debug@
+            --[==[
             --D:Debug("UnitBuff", unit, BuffNameToCheck)
-            --@end-debug@]==]
+            ]==]
         if not restricted and GetAuraDataBySpellName and GetAuraDataBySpellName(unit, BuffNameToCheck) then
-            --[==[@debug@
+            --[==[
             D:Debug("used C_UnitAuras")
-            --@end-debug@]==]
+            ]==]
 
             -- return the aura instance id instead of true so that we can check when it's removed
             return GetAuraDataBySpellName(unit, BuffNameToCheck).auraInstanceID
         elseif not restricted and not GetAuraDataBySpellName then
-            --[==[@debug@
+            --[==[
             D:Debug("used old buff scan method")
-            --@end-debug@]==]
+            ]==]
 
             for i = 1, 40 do
                 buffName = G_UnitBuff(unit, i)

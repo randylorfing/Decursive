@@ -172,15 +172,15 @@ function LiveList:DisplayItem (ID, UnitID, Debuff) -- {{{
     --D:Debug("XXXX => Updating ll item %d for %s", ID, UnitID);
 
     if not LVItem.IsShown then
-        --[==[@debug@--
+        --[==[--
         D:Debug("(LiveList) Showing LVItem %d", ID);
-        --@end-debug@]==]
+        ]==]
 
         LVItem.Frame:Show();
 
-        --[==[@debug@--
+        --[==[--
         D:Debug("(LiveList) done", ID);
-        --@end-debug@]==]
+        ]==]
 
         self.NumberShown = self.NumberShown + 1;
         LVItem.IsShown = true;

@@ -104,9 +104,9 @@ D.IsSpellInRange = function (spellName, unit)
     if range ~= nil then
         return range;
     else
-        --[==[@debug@
+        --[==[
         --D:Debug('IsSpellInRange() returned nil for', spellName, unit);
-        --@end-debug@]==]
+        ]==]
         if unit == 'player' or unit == 'pet' then
             return 1;
         else
@@ -904,23 +904,23 @@ do
 
 
     function D:ScheduleDelayedCall(RefName, FunctionRef, Delay, arg1, ...)
-        --[==[@debug@
+        --[==[
     --  D:Debug('|cFFFF0000SDC:|r|cFF00FFAA', RefName, Delay, arg1, unpack({...}));
-        --@end-debug@]==]
+        ]==]
 
         argCount = select('#', ...);
 
         if DcrTimers[RefName] and DcrTimers[RefName][1] then -- a timer with the same refname still exists
             -- we test up to two arguments to avoid the cancellation->re-creation of the timer (AceTimers doesn't remove them right away)
             if (argCount == 0 or argCount == 1 and  select(1, ...) == DcrTimers[RefName][2][2]) and arg1 == DcrTimers[RefName][2][1] then
-                --[==[@debug@
+                --[==[
                 D:Debug("Timer |cFF0000DDcancellation-creation canceled|r for", RefName, "Arg:", arg1, "indargcount:", argCount);
-                --@end-debug@]==]
+                ]==]
                 return;
-                --[==[@debug@
+                --[==[
             else
                 D:Debug("Timer |cFF0066DD-replaced-|r for", RefName, "argcount:", argCount);
-                --@end-debug@]==]
+                ]==]
             end
             if not self:CancelTimer(DcrTimers[RefName][1]) then
                 self:AddDebugText("Timer cancellation failed in ScheduleDelayedCall() for", RefName);
@@ -979,9 +979,9 @@ do
             );
         end
 
-        --[==[@debug@
+        --[==[
     --  D:Debug('|cFFFF0000SDC:|r ACEID:|cFF00FFAA', DcrTimers[RefName][1]);
-        --@end-debug@]==]
+        ]==]
         return DcrTimers[RefName][1];
     end
 
@@ -1031,18 +1031,18 @@ do
         for RefName, timer in pairs(DcrTimers) do
             if timer[1] then
                 dcrCount = dcrCount + 1;
-                --[==[@debug@
+                --[==[
                 self:Debug("|cff00AA00TimerRef:|r ", RefName, "ARGS:",timer[2] and unpack (timer[2]) or 'NONE', 'ACEID: |cffaa8833', timer[1], '|r', AceTimer.activeTimers[timer[1]] and 'active' or 'UNKNOWN');
-                --@end-debug@]==]
+                ]==]
             end
         end
         local libTimerCount = 0;
         for id,timer in pairs(AceTimer.activeTimers) do
             if timer.object == D then
                 libTimerCount = libTimerCount + 1;
-                --[==[@debug@
+                --[==[
                 self:Debug("|cff00AA00AceRef:", id,'|r');
-                --@end-debug@]==]
+                ]==]
             end
         end
         return dcrCount, libTimerCount, Yields, LongestExecBesidesYields, LargestBatch, TimersTotalExecs;

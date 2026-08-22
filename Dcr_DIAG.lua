@@ -819,15 +819,15 @@ function T._RegisterBugGrabberCallBacks()
         EventRegistry:RegisterCallback("BugGrabber.BugGrabbed", T._onError)
         -- necessary to hide the message printed by buggrabber
 		EventRegistry:TriggerEvent("BugGrabber.DisplayRegistered")
-        --[==[@debug@
+        --[==[
         print("dcr: new BG registered")
-        --@end-debug@]==]
+        ]==]
     else
         -- there is no way to know which version of Buggraber the user might have so stay compatible with older versions
         pcall (BugGrabber.RegisterCallback, T, "BugGrabber_BugGrabbed", T._onError)
-        --[==[@debug@
+        --[==[
         print("dcr: old BG registered")
-        --@end-debug@]==]
+        ]==]
     end
 
     return true
