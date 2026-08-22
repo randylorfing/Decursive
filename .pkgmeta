@@ -59,6 +59,6 @@ enable-nolib-creation: yes
 license-output: LICENSE.txt
 
 manual-changelog:
-    filename: WhatsNew.md
+    filename: CHANGELOG.md
     markup-type: markdown
 
