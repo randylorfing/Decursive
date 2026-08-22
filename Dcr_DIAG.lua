@@ -56,10 +56,20 @@ local addonName, T = ...;
 DecursiveRootTable = T; -- needed until we get rid of the xml based UI. -- Also used by HHTD from 2013-04-05
 
 -- a necessray compatibility layer between WoW 9 and WoW classic since we still have old xml UI stuff
-DecursiveTemplateMixin = BackdropTemplateMixin and BackdropTemplateMixin or {
-    OnBackdropLoaded = function() end;
-    OnBackdropSizeChanged = function() end;
-}
+-- 12.1: BackdropTemplateMixin exists but no longer defines OnBackdropSizeChanged,
+-- so an all-or-nothing fallback left our XML <OnSizeChanged> hookup pointing at a
+-- missing method ("Unknown method OnBackdropSizeChanged"). Copy Blizzard's mixin
+-- (never mutate the shared global) and backfill only what's actually missing.
+DecursiveTemplateMixin = {}
+if type(BackdropTemplateMixin) == "table" then
+    for k, v in pairs(BackdropTemplateMixin) do DecursiveTemplateMixin[k] = v end
+end
+if type(DecursiveTemplateMixin.OnBackdropLoaded) ~= "function" then
+    DecursiveTemplateMixin.OnBackdropLoaded = function() end
+end
+if type(DecursiveTemplateMixin.OnBackdropSizeChanged) ~= "function" then
+    DecursiveTemplateMixin.OnBackdropSizeChanged = function() end
+end
 
 T._FatalError_Diaplayed = false;
 
