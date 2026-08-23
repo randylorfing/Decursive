@@ -153,7 +153,26 @@ do
     end
 
     D.PARTY_LEADER_CHANGED = D.GroupChanged;
-    D.GROUP_ROSTER_UPDATE = D.GroupChanged;
+
+    -- A follower-dungeon death/disband/revive/reform cycle never fires
+    -- PLAYER_ENTERING_WORLD (you never actually leave the instance), only a
+    -- burst of GROUP_ROSTER_UPDATE -- so it only ever got GroupChanged's
+    -- lightweight scheduled display update, never the thorough
+    -- resetMUFsForZoneReinit()+staged-rebuild that ReinitializeDecursiveAfterZone
+    -- does. Confirmed via diagnostic log: MUFs randomly missing after that
+    -- cycle, always fixed by a full /reload (which forces the equivalent of
+    -- a clean rebuild). Same "prefer the thorough path if available" pattern
+    -- already used for PLAYER_ENTERING_WORLD -- safe to call repeatedly in
+    -- quick succession (confirmed back-to-back in the log) since it's
+    -- generation-counter guarded internally; only the latest call's staged
+    -- rebuild actually completes.
+    D.GROUP_ROSTER_UPDATE = function(self, reason)
+        if self.ReinitializeDecursiveAfterZone then
+            self:ReinitializeDecursiveAfterZone(reason or "GROUP_ROSTER_UPDATE");
+        else
+            self:GroupChanged(reason);
+        end
+    end
 end
  -- }}}
 

@@ -1111,6 +1111,7 @@ local function initializeMUFStatusLight(MF)
     MF.Decursive121StatusSuccessUntil = 0
     MF.Decursive121StatusFailureReason = nil
     MF.Decursive121VerificationGeneration = 0
+    MF.Decursive121SoulLinkRangeActive = false
     statusLightMUFs[MF] = true
 end
 
@@ -1139,6 +1140,20 @@ local function refreshOneMUFStatusLight(MF, now)
         resultColor = STATUS_FAILED
     elseif (MF.Decursive121StatusSuccessUntil or 0) > now then
         resultColor = STATUS_SUCCESS
+    end
+
+    -- Soul Link out-of-range: a dead ally you're relying on Soul Link (not a
+    -- normal battle-rez) to revive, but you're outside its 5-yard cast range.
+    -- Persistent (not a timed flash). Short-circuits entirely rather than
+    -- flowing into the DandersFrames/native range layers below: those compute
+    -- range against the player's configured DISPEL spell, which is meaningless
+    -- against a dead target and would otherwise silently override this.
+    if MF.Decursive121SoulLinkRangeActive then
+        fill:SetVertexColor(unpack(STATUS_RANGE))
+        if rangeFill then rangeFill:SetVertexColor(unpack(STATUS_CLEAR)) end
+        if rangeLayer then rangeLayer:Show() end
+        light:Show()
+        return
     end
 
     -- DandersFrames mode: yellow is authoritative and always wins.  The range
@@ -1222,6 +1237,16 @@ function D:Mark121MUFStatusFailure(unitOrMF, reason)
     parkDandersVerificationHandles(MF)
     MF.Decursive121StatusFailureReason = reason and tostring(reason) or nil
     MF.Decursive121StatusFailureUntil = (GetTime and GetTime() or 0) + 3.0
+    refreshOneMUFStatusLight(MF)
+end
+
+function D:Set121MUFSoulLinkRangeActive(unitOrMF, active)
+    local MF = resolveStatusMUF(unitOrMF)
+    if not MF then return end
+    initializeMUFStatusLight(MF)
+    active = active and true or false
+    if MF.Decursive121SoulLinkRangeActive == active then return end
+    MF.Decursive121SoulLinkRangeActive = active
     refreshOneMUFStatusLight(MF)
 end
 

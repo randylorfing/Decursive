@@ -98,6 +98,7 @@ Dcr_12_1.lua
 Dcr_12_1_Utils.lua
 Dcr_12_1_Encounters.lua
 Dcr_12_1_DebuffIdentity.lua
+Dcr_12_1_SoulLink.lua
 
 Dcr_LiveList.lua
 Dcr_LiveList.xml

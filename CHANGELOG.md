@@ -1,5 +1,20 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.35
+
+## New: battle-rez / Emergency Soul Link on dead allies
+- Clicking a dead ally's MUF square now attempts a battle-rez instead of the (otherwise useless against a corpse) cure-spell click. Tries your own known battle-rez spell first (Rebirth, Raise Ally, or Intercession -- detected automatically per class, normal cast range, no item needed), then falls back to Emergency Soul Link (Midnight Engineering item, 5-yard range) if you don't have one. Both draw from the same shared Combat Resurrection charge pool, so this is "try the free option, then the item" -- either line is a harmless no-op via WoW's own handling when unavailable/on cooldown/unknown. Soulstone is intentionally excluded -- it's a pre-placement buff on a living target, not something you click a corpse for.
+- New persistent yellow status-dot indicator on a dead ally's square specifically when Soul Link is your only option and you're outside its 5-yard range -- clears the instant you're back in range or the situation changes.
+- New on-screen alert (WoW's native error-banner style) naming who you're too far from, shown when you actually attempt to use Soul Link while still out of range.
+- New option: "Emergency Soul Link on dead allies" (Interface Options -> Decursive), on by default. Also available via `/dcrsoullink`.
+- Confirmed via testing: players cannot battle-rez AI followers in solo Follower Dungeons at all -- that's a hard Blizzard restriction with no addon workaround, not a bug. Works as expected against real players in a real group.
+
+## Fix: DandersFrames installed no longer silently disables native-only features
+- Having DandersFrames installed was auto-opting Decursive into the DandersFrames detection provider on first run whenever it was detected as usable, with no visible indication. Since native-only features (the debuff-identity tooltip, and now the battle-rez indicator above) depend on the native provider, this silently broke them the moment DandersFrames was present. Native detection is now always the default; DandersFrames integration requires an explicit opt-in.
+
+## Fix: MUF squares not repopulating after a follower-dungeon death/disband/reform cycle
+- A follower-dungeon death/disband/revive/reform cycle never fires `PLAYER_ENTERING_WORLD` (you never actually leave the instance), only a burst of `GROUP_ROSTER_UPDATE` -- which only ever triggered a lightweight scheduled display update, never the thorough reset-and-rebuild that a real zone transition gets. Confirmed via diagnostic logging: MUFs randomly missing (often just the player and pet) after that cycle, always fixed by a full `/reload`. `GROUP_ROSTER_UPDATE` now triggers the same thorough rebuild zone transitions already used.
+
 ## v11.0.34
 
 ## Fixes MUF squares not repopulating after death/revive

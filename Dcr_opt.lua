@@ -1687,6 +1687,18 @@ local function GetStaticOptions ()
                                 disabled = function() return D.Status.Combat end,
                                 order = 1355,
                             },
+                            SoulLink121Enabled = {
+                                type = "toggle",
+                                name = "Emergency Soul Link on dead allies",
+                                desc = "When you have no other battle-rez available, clicking a dead ally's square uses Emergency Soul Link (Midnight Engineering) instead of the useless cure-spell click. Also shows a persistent yellow dot on that square, and an on-screen alert if you try while out of its 5-yard range.",
+                                get = function() return not D.profile or D.profile.SoulLink121Enabled ~= false end,
+                                set = function(info, value)
+                                    D.profile.SoulLink121Enabled = value and true or false
+                                    if D.UpdateMacro then D:UpdateMacro() end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1355.5,
+                            },
                             CooldownOverlay121Opacity = {
                                 type = 'range',
                                 name = "Inner cooldown priority tint opacity",

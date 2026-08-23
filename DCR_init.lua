@@ -2301,16 +2301,48 @@ do
 
             if not D.Status.FoundSpells[Spell][5] then -- if using the default macro mechanism
 
+                    -- On a dead target, use a battle-rez instead of the
+                    -- (otherwise useless against a corpse) cure spell. Tried in
+                    -- order: your own known battle-rez spell (Rebirth/Raise
+                    -- Ally/Intercession -- normal range, no item needed;
+                    -- Soulstone excluded, it's a pre-placement mechanic on a
+                    -- living target, not something you click a corpse for),
+                    -- then Emergency Soul Link (5-yard item) as the fallback.
+                    -- Both draw from the same shared Combat Resurrection charge
+                    -- pool, so this is "try the free option, then the item" --
+                    -- either line is a harmless no-op via WoW's own handling
+                    -- when unavailable/on cooldown/unknown, same as any other
+                    -- spell click. [@unit,dead] short-circuits before the
+                    -- cure-spell line for a dead target; that line's own
+                    -- [help][harm] conditions never match a dead unit, so it
+                    -- correctly no-ops there regardless.
+                    local battleRezLines = ""
+                    if DC.TWELVEONE and (not D.profile or D.profile.SoulLink121Enabled ~= false) then
+                        for _, brezSpellID in ipairs(DC.BattleRezSpellIDs or {}) do
+                            if IsPlayerSpell and IsPlayerSpell(brezSpellID) then
+                                battleRezLines = ("/cast [@%s,dead] spell:%d\n"):format(unit, brezSpellID)
+                                break
+                            end
+                        end
+                        battleRezLines = battleRezLines .. ("/use [@%s,dead] item:269586\n"):format(unit)
+                    end
+
                     --the [target=%s, help][target=%s, harm] prevents the 'please select a unit' cursor problem (Blizzard should fix this...)
-                    prio_macro[Prio] = {
-                        macroText = ("%s/%s [@%s, help][@%s, harm] %s"):format(
-                          not D.Status.FoundSpells[Spell][1] and "/stopcasting\n" or "", -- pet test
-                          D.Status.FoundSpells[Spell][2] > 0 and "cast" or "use", -- item test
-                          unit, unit,
-                          Spell
-                        ),
-                        unitFiltering = D.Status.FoundSpells[Spell][6]
-                    }
+                    local defaultMacroText = ("%s%s/%s [@%s, help][@%s, harm] %s"):format(
+                      battleRezLines,
+                      not D.Status.FoundSpells[Spell][1] and "/stopcasting\n" or "", -- pet test
+                      D.Status.FoundSpells[Spell][2] > 0 and "cast" or "use", -- item test
+                      unit, unit,
+                      Spell
+                    )
+                    if defaultMacroText:len() < 256 then -- same guard as the custom-macro branch below
+                        prio_macro[Prio] = {
+                            macroText = defaultMacroText,
+                            unitFiltering = D.Status.FoundSpells[Spell][6]
+                        }
+                    else
+                        D:errln("Macro too long for prio", Prio);
+                    end
             else
                 tmp = D.Status.FoundSpells[Spell][5];
                 tmp = tmp:gsub("UNITID", unit);
