@@ -2293,6 +2293,40 @@ do
         return true;
     end -- }}}
 
+    -- Battle-rez/Soul Link script fragment, on a dead target only. Kept as
+    -- its own dedicated builder (a genuinely separate "script") even though
+    -- it's combined with the dispel script into one macro on the same
+    -- click below -- WoW does not allow an addon to swap a secure button's
+    -- macro text based on live mouseover state (especially not in combat),
+    -- so "one click, two behaviors chosen by target state" can only be done
+    -- via in-macro [dead]/[nodead] conditionals, not via two physically
+    -- separate macros dynamically selected. skipStopCasting lets the
+    -- combined builder below supply its own single /stopcasting at the top
+    -- instead of getting two redundant copies.
+    --
+    -- Tried in order: your own known battle-rez spell (Rebirth/Raise
+    -- Ally/Intercession -- normal range, no item needed; Soulstone
+    -- excluded, it's a pre-placement mechanic on a living target, not
+    -- something you click a corpse for), then Emergency Soul Link (5-yard
+    -- item) as the fallback. Both draw from the same shared Combat
+    -- Resurrection charge pool, so this is "try the free option, then the
+    -- item" -- either line is a harmless no-op via WoW's own handling when
+    -- unavailable/on cooldown/unknown, same as any other spell click.
+    function D:GetBattleRezMacroText(unit, skipStopCasting)
+        if not (DC.TWELVEONE and (not D.profile or D.profile.SoulLink121Enabled ~= false)) then
+            return ""
+        end
+        local lines = skipStopCasting and "" or "/stopcasting\n"
+        for _, brezSpellID in ipairs(DC.BattleRezSpellIDs or {}) do
+            if IsPlayerSpell and IsPlayerSpell(brezSpellID) then
+                lines = lines .. ("/cast [@%s,dead] spell:%d\n"):format(unit, brezSpellID)
+                break
+            end
+        end
+        lines = lines .. ("/use [@%s,dead] item:269586\n"):format(unit)
+        return lines
+    end
+
     function D:SetMacrosPerPrioTable(unit)
         local prio_macro = D.Status.prio_macro;
         local tmp;
@@ -2301,36 +2335,24 @@ do
 
             if not D.Status.FoundSpells[Spell][5] then -- if using the default macro mechanism
 
-                    -- On a dead target, use a battle-rez instead of the
-                    -- (otherwise useless against a corpse) cure spell. Tried in
-                    -- order: your own known battle-rez spell (Rebirth/Raise
-                    -- Ally/Intercession -- normal range, no item needed;
-                    -- Soulstone excluded, it's a pre-placement mechanic on a
-                    -- living target, not something you click a corpse for),
-                    -- then Emergency Soul Link (5-yard item) as the fallback.
-                    -- Both draw from the same shared Combat Resurrection charge
-                    -- pool, so this is "try the free option, then the item" --
-                    -- either line is a harmless no-op via WoW's own handling
-                    -- when unavailable/on cooldown/unknown, same as any other
-                    -- spell click. [@unit,dead] short-circuits before the
-                    -- cure-spell line for a dead target; that line's own
-                    -- [help][harm] conditions never match a dead unit, so it
-                    -- correctly no-ops there regardless.
-                    local battleRezLines = ""
-                    if DC.TWELVEONE and (not D.profile or D.profile.SoulLink121Enabled ~= false) then
-                        for _, brezSpellID in ipairs(DC.BattleRezSpellIDs or {}) do
-                            if IsPlayerSpell and IsPlayerSpell(brezSpellID) then
-                                battleRezLines = ("/cast [@%s,dead] spell:%d\n"):format(unit, brezSpellID)
-                                break
-                            end
-                        end
-                        battleRezLines = battleRezLines .. ("/use [@%s,dead] item:269586\n"):format(unit)
-                    end
+                    -- Two scripts combined into one macro on this same
+                    -- click: the battle-rez fragment (dead target only) and
+                    -- the dispel line (nodead-guarded, so it can never fire
+                    -- on a corpse). /stopcasting sits once at the very top
+                    -- -- it must only ever cancel something left over from
+                    -- BEFORE this click; putting it after the battle-rez
+                    -- line would immediately cancel Rebirth's real
+                    -- (non-instant) cast the instant it started, on the
+                    -- same click.
+                    local battleRezLines = D:GetBattleRezMacroText(unit, true)
 
                     --the [target=%s, help][target=%s, harm] prevents the 'please select a unit' cursor problem (Blizzard should fix this...)
-                    local defaultMacroText = ("%s%s/%s [@%s, help][@%s, harm] %s"):format(
+                    local defaultMacroText = ("%s%s/%s [@%s, help, nodead][@%s, harm, nodead] %s"):format(
+                      -- battle-rez always needs /stopcasting regardless of
+                      -- the cure spell's own pet-test, since it's included
+                      -- here with its own copy skipped
+                      (not D.Status.FoundSpells[Spell][1] or battleRezLines ~= "") and "/stopcasting\n" or "", -- pet test
                       battleRezLines,
-                      not D.Status.FoundSpells[Spell][1] and "/stopcasting\n" or "", -- pet test
                       D.Status.FoundSpells[Spell][2] > 0 and "cast" or "use", -- item test
                       unit, unit,
                       Spell

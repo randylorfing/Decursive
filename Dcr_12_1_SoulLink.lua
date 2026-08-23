@@ -155,28 +155,137 @@ end
 -- On-screen text notification when the item is actually attempted out of
 -- range, on top of the persistent yellow dot -- WoW's own native "Out of
 -- range" error doesn't say WHICH ability, so this names Soul Link and the
--- target explicitly. UNIT_SPELLCAST_FAILED_QUIET is what fires for an
--- instant, range-blocked item use; UNIT_SPELLCAST_FAILED is the fallback for
--- anything that reaches a full cast attempt first.
------------------------------------------------------------------
+-- target explicitly.
+--
+-- UI_ERROR_MESSAGE is the reliable path for this (same pattern Dcr_12_1.lua's
+-- own cooldownEvents handler already uses for instant/item-use range
+-- failures); UNIT_SPELLCAST_FAILED_QUIET/FAILED are kept as a secondary path
+-- in case a given cast reaches a full spell-cast attempt instead. Since
+-- UI_ERROR_MESSAGE carries no spellID (its args are actually (errorType,
+-- message), not a real unit/castGUID/spellID triple), it can't be filtered
+-- by spell -- gated instead on "a dead ally currently needs Soul Link and is
+-- out of range" (lastOutOfRangeCount > 0), which keeps it from firing on an
+-- unrelated out-of-range error most of the time.
+-- Dedicated center-screen text instead of UIErrorsFrame -- that frame is
+-- shared with every other error message in the game (all addons, all "out
+-- of range"/"not enough mana" text), so repositioning it would move
+-- everyone else's messages too. This is Decursive's own frame instead.
+local centerAlertFrame
 
-local failWatcher = CreateFrame("Frame")
-failWatcher:RegisterUnitEvent("UNIT_SPELLCAST_FAILED_QUIET", "player")
-failWatcher:RegisterUnitEvent("UNIT_SPELLCAST_FAILED", "player")
-failWatcher:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
-    if spellID ~= SOUL_LINK_SPELL_ID then return end
-    if not lastOutOfRangeUnit or (lastOutOfRangeCount or 0) < 1 then return end
+local DEFAULT_ALERT_FONT_SIZE = 24
+local DEFAULT_ALERT_COLOR = { 1, 0.15, 0.15 }
+
+-- Applies D.profile.Alert121FontSize/Alert121Color to the live text object --
+-- called both at creation and whenever the options panel changes either
+-- setting, so changes take effect without a /reload. These are shared,
+-- general on-screen-alert settings (Dcr_opt.lua), not Soul-Link-specific --
+-- Dcr_12_1_Encounters.lua's D:Apply121EncounterAlertStyle applies the same
+-- two profile keys to the interrupt alert's title text.
+function D:Apply121SoulLinkAlertStyle()
+    if not centerAlertFrame or not centerAlertFrame.Text then return end
+    local text = centerAlertFrame.Text
+    local size = (D.profile and D.profile.Alert121FontSize) or DEFAULT_ALERT_FONT_SIZE
+    local fontPath = select(1, GameFontNormalHuge:GetFont())
+    text:SetFont(fontPath, size, "THICKOUTLINE")
+    local color = (D.profile and D.profile.Alert121Color) or DEFAULT_ALERT_COLOR
+    text:SetTextColor(color[1], color[2], color[3])
+end
+
+local function ensureCenterAlertFrame()
+    if centerAlertFrame then return centerAlertFrame end
+    local f = CreateFrame("Frame", "DecursiveSoulLinkAlert", UIParent)
+    f:SetSize(700, 80)
+    -- Anchored to the shared alert position (Dcr_12_1.lua:Get121AlertAnchor)
+    -- so it moves together with the interrupt alert; /dcralerts move
+    -- repositions both at once.
+    if D.Get121AlertAnchor then
+        f:SetPoint("CENTER", D:Get121AlertAnchor(), "CENTER", 0, 0)
+    else
+        f:SetPoint("CENTER", UIParent, "CENTER", 0, 150)
+    end
+    f:SetFrameStrata("HIGH")
+    local text = f:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+    text:SetPoint("CENTER")
+    f.Text = text
+    f:Hide()
+    centerAlertFrame = f
+    D:Apply121SoulLinkAlertStyle()
+    return f
+end
+
+local function showCenterAlert(message)
+    local f = ensureCenterAlertFrame()
+    f.Text:SetText(message)
+    f:Show()
+    f.generation = (f.generation or 0) + 1
+    local generation = f.generation
+    if C_Timer and C_Timer.After then
+        C_Timer.After(2.5, function()
+            if f.generation == generation then f:Hide() end
+        end)
+    end
+end
+
+local function showAlert()
+    if D.profile and D.profile.Alert121SoulLinkEnabled == false then
+        if D.AlertDiag then D:AlertDiag("BATTLEREZ alert suppressed by toggle") end
+        return
+    end
+    if not lastOutOfRangeUnit or (lastOutOfRangeCount or 0) < 1 then
+        if D.AlertDiag then D:AlertDiag("BATTLEREZ showAlert called but no out-of-range unit tracked") end
+        return
+    end
 
     local name = UnitName(lastOutOfRangeUnit) or "your target"
     local message = lastOutOfRangeCount > 1
-        and ("Emergency Soul Link: move within range of %s (and %d other%s)!"):format(
+        and ("Battle rez: move within range of %s (and %d other%s)!"):format(
             name, lastOutOfRangeCount - 1, lastOutOfRangeCount - 1 > 1 and "s" or "")
-        or ("Emergency Soul Link: move within range of %s!"):format(name)
+        or ("Battle rez: move within range of %s!"):format(name)
 
-    if UIErrorsFrame then
-        UIErrorsFrame:AddMessage(message, 1.0, 0.1, 0.1, 1.0)
+    -- Don't log the full `message` -- it embeds UnitName(lastOutOfRangeUnit),
+    -- which can be a secret string in some contexts (same class of issue
+    -- fixed in Dcr_12_1_Encounters.lua's cast-name logging), and a secret
+    -- value embedded in a logged string silently wipes that whole entry to
+    -- nil on SavedVariables save.
+    if D.AlertDiag then D:AlertDiag("BATTLEREZ alert firing (count=%d)", lastOutOfRangeCount) end
+    showCenterAlert(message)
+end
+
+local failWatcher = CreateFrame("Frame")
+pcall(failWatcher.RegisterEvent, failWatcher, "UI_ERROR_MESSAGE")
+failWatcher:RegisterUnitEvent("UNIT_SPELLCAST_FAILED_QUIET", "player")
+failWatcher:RegisterUnitEvent("UNIT_SPELLCAST_FAILED", "player")
+failWatcher:SetScript("OnEvent", function(_, event, arg1, arg2, spellID)
+    if event == "UI_ERROR_MESSAGE" then
+        -- (errorType, message) here -- see comment above.
+        local msg = arg2
+        local isRangeError = (SPELL_FAILED_OUT_OF_RANGE and msg == SPELL_FAILED_OUT_OF_RANGE)
+            or (ERR_OUT_OF_RANGE and msg == ERR_OUT_OF_RANGE)
+        if isRangeError then
+            -- Ground-truth logging: this handler has no way to know WHICH
+            -- action actually caused the error (UI_ERROR_MESSAGE carries no
+            -- spellID), so it reacts to ANY out-of-range error in the game,
+            -- not just Soul Link attempts. Logging the raw errorType/msg
+            -- here so a real report of "I was in range" can be checked
+            -- against exactly what WoW said, instead of guessing.
+            if D.AlertDiag then
+                D:AlertDiag("BATTLEREZ saw a range-classified UI_ERROR_MESSAGE (raw errorType=%s msg=%s)",
+                    tostring(arg1), tostring(msg))
+            end
+            showAlert()
+        end
+        return
     end
+    if spellID == SOUL_LINK_SPELL_ID then showAlert() end
 end)
+
+-- Manual test trigger for the options-panel button (Dcr_opt.lua) -- shows
+-- the same on-screen banner used for a real out-of-range attempt, using a
+-- fixed placeholder name, so the rendering/styling can be verified on demand
+-- without needing to actually reproduce a dead-ally-out-of-range situation.
+function D:Test121SoulLinkAlert()
+    showCenterAlert("Battle rez: move within range of Test Target!")
+end
 
 -----------------------------------------------------------------
 -- Slash command: /dcrsoullink -- toggles D.profile.SoulLink121Enabled
@@ -188,7 +297,7 @@ if D.RegisterChatCommand then
     D:RegisterChatCommand("dcrsoullink", function()
         local currentlyEnabled = not D.profile or D.profile.SoulLink121Enabled ~= false
         D.profile.SoulLink121Enabled = not currentlyEnabled
-        print(("|cFF29B8A8[Decursive]|r Soul Link %s."):format(
+        print(("|cFF29B8A8[Decursive]|r Battle rez %s."):format(
             D.profile.SoulLink121Enabled == false and "disabled" or "enabled"))
         if D.UpdateMacro then D:UpdateMacro() end
         updateAll()

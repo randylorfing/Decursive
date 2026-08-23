@@ -2074,8 +2074,30 @@ function ZD:BuildLists(parent)
         end, "danger")
         clear:SetPoint("LEFT", add, "RIGHT", 8, 0)
 
+        -- Role-based priority: mixes freely with individual "Add Target"
+        -- entries in the same list (raiding tends to want specific people
+        -- pinned; dungeons tend to want "tanks/healers first" in general) --
+        -- see D:AddRoleToPriorityList in Dcr_lists.lua. Priority list only;
+        -- skipping by whole role isn't part of this request.
+        local scrollTopOffset = -82
+        if kind == "priority" then
+            local function roleButton(roleName, roleLabel, xOffset)
+                local b = button(card, roleLabel, 90, 26, function()
+                    if not ZD:CanConfigure() then return end
+                    local ok = D:AddRoleToPriorityList(roleName)
+                    ZD:SetStatus(ok and (roleLabel .. " added to priority list.") or (roleLabel .. " could not be added (already in list?)."), not ok)
+                    p:Refresh()
+                end)
+                b:SetPoint("TOPLEFT", xOffset, -74)
+            end
+            roleButton("TANK", "Tank", 14)
+            roleButton("HEALER", "Healer", 108)
+            roleButton("DAMAGER", "DPS", 202)
+            scrollTopOffset = -108
+        end
+
         local scroll = CreateFrame("ScrollFrame", nil, card, "UIPanelScrollFrameTemplate")
-        scroll:SetPoint("TOPLEFT", 12, -82)
+        scroll:SetPoint("TOPLEFT", 12, scrollTopOffset)
         scroll:SetPoint("BOTTOMRIGHT", -28, 12)
         local child = CreateFrame("Frame", nil, scroll)
         child:SetWidth(270); child:SetHeight(1)

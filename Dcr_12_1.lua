@@ -1102,6 +1102,24 @@ local function initializeMUFStatusLight(MF)
     rangeFill:SetVertexColor(unpack(STATUS_CLEAR))
     if rangeFill.SetIgnoreParentAlpha then rangeFill:SetIgnoreParentAlpha(true) end
 
+    -- Text label for Soul Link range: distance in yards isn't available
+    -- through any public API (only an in-range/out-of-range boolean is, via
+    -- C_Spell.IsSpellInRange -- same constraint documented throughout this
+    -- session's other range checks), so this shows status text rather than
+    -- a numeric yard readout.
+    local soulLinkLabel = MF.Frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    soulLinkLabel:SetPoint("BOTTOM", MF.Frame, "BOTTOM", 0, 2)
+    soulLinkLabel:SetText("BATTLE REZ: OUT OF RANGE")
+    soulLinkLabel:SetTextColor(1, .15, .15)
+    if soulLinkLabel.SetIgnoreParentAlpha then soulLinkLabel:SetIgnoreParentAlpha(true) end
+    if light.GetFrameLevel then
+        local labelParent = soulLinkLabel:GetParent()
+        if labelParent and labelParent.SetFrameLevel then
+            labelParent:SetFrameLevel(light:GetFrameLevel() + 60)
+        end
+    end
+    soulLinkLabel:Hide()
+
     MF.Decursive121StatusLight = light
     MF.Decursive121StatusLightFill = fill
     MF.Decursive121StatusRangeLayer = rangeLayer
@@ -1112,6 +1130,7 @@ local function initializeMUFStatusLight(MF)
     MF.Decursive121StatusFailureReason = nil
     MF.Decursive121VerificationGeneration = 0
     MF.Decursive121SoulLinkRangeActive = false
+    MF.Decursive121SoulLinkLabel = soulLinkLabel
     statusLightMUFs[MF] = true
 end
 
@@ -1124,10 +1143,12 @@ local function refreshOneMUFStatusLight(MF, now)
 
     if MF.Shown == false or not MF.Frame:IsShown() then
         light:Hide()
+        if MF.Decursive121SoulLinkLabel then MF.Decursive121SoulLinkLabel:Hide() end
         return
     end
 
     now = now or (GetTime and GetTime() or 0)
+    if MF.Decursive121SoulLinkLabel then MF.Decursive121SoulLinkLabel:Hide() end
 
     -- Determine the transient result color WITHOUT deciding DandersFrames range.
     -- Range is potentially secret and is applied afterward through Blizzard's
@@ -1153,6 +1174,7 @@ local function refreshOneMUFStatusLight(MF, now)
         if rangeFill then rangeFill:SetVertexColor(unpack(STATUS_CLEAR)) end
         if rangeLayer then rangeLayer:Show() end
         light:Show()
+        if MF.Decursive121SoulLinkLabel then MF.Decursive121SoulLinkLabel:Show() end
         return
     end
 
@@ -2513,6 +2535,17 @@ local function reconcileActivePriorityCooldowns()
     D:Apply121CooldownAppearance()
 end
 
+-- Confirmed live via BugGrabber: this MUST be declared before cooldownEvents
+-- below, which references it starting at its very first event branch.
+-- Originally declared much further down the file (near attachClickTracking)
+-- -- a Lua local only exists for code AFTER its declaration in the same
+-- chunk, so every earlier use here was silently resolving to a nonexistent
+-- GLOBAL instead, throwing "attempt to perform arithmetic on ... a nil
+-- value" on literally every click outcome (success, failure, and range
+-- alike) this entire session, aborting Decursive's own post-cast
+-- confirmation/cooldown-arming logic right after the real spell cast fired.
+local clickDiagGeneration = 0
+
 local cooldownEvents = CreateFrame("Frame")
 cooldownEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 cooldownEvents:RegisterEvent("ZONE_CHANGED_NEW_AREA")
@@ -2525,6 +2558,7 @@ cooldownEvents:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 cooldownEvents:RegisterEvent("SPELL_UPDATE_CHARGES")
 cooldownEvents:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 cooldownEvents:RegisterEvent("UNIT_SPELLCAST_FAILED")
+pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UNIT_SPELLCAST_FAILED_QUIET")
 pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UNIT_SPELLCAST_INTERRUPTED")
 pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UI_ERROR_MESSAGE")
 cooldownEvents:RegisterEvent("UNIT_AURA")
@@ -2551,6 +2585,17 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
                 lastClickedMUF.Decursive121SuppressFailureUntil = GetTime() + 1.0
                 D:Clear121MUFStatusAttempt(lastClickedMUF)
                 D:Mark121MUFStatusRange(lastClickedMUF)
+                clickDiagGeneration = clickDiagGeneration + 1
+                -- Logs the raw errorType/message verbatim too -- classified
+                -- as "range" here, but a report that the player was
+                -- actually in range means this classification itself may
+                -- be catching something else (e.g. line of sight) that
+                -- isn't really a range problem. Ground truth beats the
+                -- classification next time this fires.
+                if D.AlertDiag then
+                    D:AlertDiag("CLICK outcome: OUT OF RANGE (raw errorType=%s msg=%s)",
+                        tostring(unit), tostring(msg))
+                end
             elseif (lastClickedMUF.Decursive121SuppressFailureUntil or 0) > GetTime() then
                 -- A cure just succeeded on this MUF (see the post-cure debounce
                 -- set below). A spam-click re-cast against an already-cleared
@@ -2558,9 +2603,28 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
                 -- here rather than through UNIT_SPELLCAST_FAILED; without this
                 -- check that error would paint red over the still-visible green
                 -- success result from the click that actually worked.
+                clickDiagGeneration = clickDiagGeneration + 1
+                if D.AlertDiag then D:AlertDiag("CLICK outcome: suppressed (recent success debounce), msg=%s", tostring(msg)) end
             else
                 D:Mark121MUFStatusFailure(lastClickedMUF, msg or unit or event)
+                clickDiagGeneration = clickDiagGeneration + 1
+                if D.AlertDiag then D:AlertDiag("CLICK outcome: FAILED (UI_ERROR_MESSAGE), msg=%s", tostring(msg)) end
             end
+        end
+        return
+    end
+
+    if event == "UNIT_SPELLCAST_FAILED_QUIET" then
+        -- Diagnostic only -- deliberately does NOT touch the status light.
+        -- WoW fires this (not the loud UNIT_SPELLCAST_FAILED) for routine,
+        -- expected failures like a GCD-blocked cast, so it's silent by
+        -- design and was previously invisible to this whole tracker. Logged
+        -- here specifically to tell "silently blocked by GCD" apart from
+        -- "genuinely nothing happened" when chasing the multi-click report.
+        if unit == "player" and isFriendlyConfiguredDispelSpellID(spellID)
+            and lastClickedMUF and (GetTime() - (lastClickedAt or 0)) <= 2.0 then
+            clickDiagGeneration = clickDiagGeneration + 1
+            if D.AlertDiag then D:AlertDiag("CLICK outcome: FAILED_QUIET (likely GCD or similar routine block)") end
         end
         return
     end
@@ -2578,6 +2642,8 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
             -- yellow range layer masks this red flash whenever the unit is
             -- currently out of range.
             D:Mark121MUFStatusFailure(lastClickedMUF, event)
+            clickDiagGeneration = clickDiagGeneration + 1
+            if D.AlertDiag then D:AlertDiag("CLICK outcome: FAILED (%s)", event) end
         end
         return
     end
@@ -2606,6 +2672,9 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
                 targetMF = lastClickedMUF
             end
             if not targetMF then return end
+
+            clickDiagGeneration = clickDiagGeneration + 1
+            if D.AlertDiag then D:AlertDiag("CLICK outcome: SUCCESS (priority=%s)", tostring(priority)) end
 
             -- Modern 12.1 success/result path.  A successful spellcast is only
             -- the start of verification: DandersFrames' protected verifier paints
@@ -3265,6 +3334,14 @@ local pendingDandersAttach = setmetatable({}, { __mode = "k" })
 local pendingNativeAttach = setmetatable({}, { __mode = "k" })
 local attachManagedAura
 
+-- Diagnostic-only click-outcome tracker: logs what actually happens after a
+-- MUF click (success / range-blocked / other failure / no event at all,
+-- e.g. a silently-ignored GCD-blocked click) so a real "click didn't work"
+-- report can be root-caused from /dcralertdiag instead of guessed at.
+-- clickDiagGeneration itself is declared once, near cooldownEvents above --
+-- NOT re-declared here, since that would shadow it with a second, separate
+-- counter unsynchronized with the one cooldownEvents reads/writes.
+
 local function attachClickTracking(MF)
     if MF.Frame and MF.Frame.HookScript and not clickHookedFrames[MF.Frame] then
         clickHookedFrames[MF.Frame] = true
@@ -3272,6 +3349,20 @@ local function attachClickTracking(MF)
             lastClickedMUF = MF
             lastClickedPriority = getClickedCurePriority(button)
             lastClickedAt = GetTime()
+
+            if D.AlertDiag then
+                clickDiagGeneration = clickDiagGeneration + 1
+                local myGen = clickDiagGeneration
+                D:AlertDiag("CLICK priority=%s button=%s", tostring(lastClickedPriority), tostring(button))
+                if C_Timer and C_Timer.After then
+                    C_Timer.After(1.3, function()
+                        if clickDiagGeneration == myGen then
+                            D:AlertDiag("CLICK priority=%s -> no success/failure/range event observed within 1.3s (likely silently blocked, e.g. GCD)",
+                                tostring(lastClickedPriority))
+                        end
+                    end)
+                end
+            end
         end)
     end
 end
@@ -3698,5 +3789,167 @@ if C_Timer and C_Timer.After then
         refreshCooldownOverlay()
     end)
 end
+
+-----------------------------------------------------------------
+-- Movable on-screen alert anchor
+--
+-- Dcr_12_1_SoulLink.lua's battle-rez-out-of-range alert positions its frame
+-- relative to this anchor. The anchor itself is invisible outside move
+-- mode; a small placeholder becomes visible+draggable only while
+-- repositioning, then hides again.
+-----------------------------------------------------------------
+
+local alert121Anchor
+local alert121MoveMode = false
+
+function D:Get121AlertAnchor()
+    if alert121Anchor then return alert121Anchor end
+
+    local f = CreateFrame("Frame", "Decursive121AlertAnchor", UIParent)
+    f:SetSize(340, 80)
+    f:SetClampedToScreen(true)
+    f:SetFrameStrata("HIGH")
+
+    local saved = D.profile and D.profile.Alert121Point
+    if saved and saved.point then
+        f:SetPoint(saved.point, UIParent, saved.point, saved.x or 0, saved.y or 0)
+    else
+        f:SetPoint("TOP", UIParent, "TOP", 0, -160)
+    end
+
+    if f.SetBackdrop then
+        f:SetBackdrop({
+            bgFile = [[Interface\Buttons\WHITE8X8]],
+            edgeFile = [[Interface\Buttons\WHITE8X8]],
+            edgeSize = 2,
+        })
+        f:SetBackdropColor(.29, .18, .55, .55)
+        f:SetBackdropBorderColor(.6, .4, 1, .9)
+    end
+    -- Named/labeled distinctly from Decursive's existing, unrelated "Decursive
+    -- Text Anchor" (the custom chat-frame mover in the Messages options
+    -- panel) -- confirmed in testing that a similar-sounding label caused the
+    -- wrong anchor to get dragged. This one is a big purple box specifically
+    -- to be visually unmistakable from that small text-style anchor.
+    local label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    label:SetPoint("CENTER")
+    label:SetText("|cFFFFD200Decursive ALERT POSITION|r\n(battle-rez range -- NOT the chat text anchor)\ndrag to move, /dcralerts move to lock")
+    label:SetJustifyH("CENTER")
+    f.Label = label
+
+    f:SetMovable(true)
+    f:EnableMouse(false)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function(self) if not InCombatLockdown() then self:StartMoving() end end)
+    f:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        D:Save121AlertPosition()
+    end)
+    f:Hide()
+
+    alert121Anchor = f
+    return f
+end
+
+-- Called from OnDragStop for a clean release, and also from locking via
+-- /dcralerts move as a safety net -- if the slash command locks it while a
+-- drag gesture hasn't cleanly released (StopMovingOrSizing never called),
+-- the position would otherwise never get saved despite visually having
+-- moved. Confirmed in testing: the anchor visually moved but
+-- D.profile.Alert121Point stayed nil until this was added.
+function D:Save121AlertPosition()
+    local f = alert121Anchor
+    if not f then return end
+    if f.StopMovingOrSizing then f:StopMovingOrSizing() end
+    local point, _, _, x, y = f:GetPoint(1)
+    if D.profile and point then
+        D.profile.Alert121Point = { point = point, x = x, y = y }
+    end
+end
+
+function D:Set121AlertMoveMode(enabled)
+    local f = self:Get121AlertAnchor()
+    alert121MoveMode = enabled and true or false
+    if not alert121MoveMode then
+        D:Save121AlertPosition()
+    end
+    f:EnableMouse(alert121MoveMode)
+    if alert121MoveMode then f:Show() else f:Hide() end
+end
+
+if D.RegisterChatCommand then
+    D:RegisterChatCommand("dcralerts", function(msg)
+        if msg == "move" then
+            D:Set121AlertMoveMode(not alert121MoveMode)
+            print(("|cFF29B8A8[Decursive]|r Alert position %s. Drag the purple box to move it, then run this again to lock it."):format(
+                alert121MoveMode and "unlocked" or "locked"))
+        else
+            print("|cFF29B8A8[Decursive]|r /dcralerts move to reposition where Decursive's battle-rez range alert appears.")
+        end
+    end)
+end
+
+----------------------------------------------------------------
+-- Alert diagnostic log: a small ring buffer of what the alert system
+-- (interrupts, debuff-landed, Soul Link) actually decided, so testing
+-- doesn't require guessing/round-tripping every time something doesn't
+-- fire. Piggybacks D.db.global (a fresh top-level SavedVariables entry was
+-- confirmed NOT to persist reliably this session; DecursiveDB already
+-- does). Always uses plain print() to the single default chat frame, never
+-- D:Println -- that one fans out to TWO possible windows (default chat
+-- frame vs. Decursive's separate custom message frame, per Print_ChatFrame/
+-- Print_CustomFrame), which is exactly the kind of "which window did it go
+-- to" ambiguity a diagnostic tool must not have.
+----------------------------------------------------------------
+
+local MAX_ALERT_DIAG_LINES = 150
+
+function D:AlertDiag(fmt, ...)
+    if not D.db or not D.db.global then return end
+    D.db.global.DcrAlertDiag = D.db.global.DcrAlertDiag or {}
+    local log = D.db.global.DcrAlertDiag
+    table.insert(log, ("[%s] %s"):format(date("%H:%M:%S"), fmt:format(...)))
+    while #log > MAX_ALERT_DIAG_LINES do
+        table.remove(log, 1)
+    end
+end
+
+function D:PrintAlertDiag(count)
+    local log = D.db and D.db.global and D.db.global.DcrAlertDiag
+    if not log or #log == 0 then
+        print("|cFF29B8A8[Decursive]|r Alert diagnostic log is empty.")
+        return
+    end
+    count = math.min(count or 25, #log)
+    print(("|cFF29B8A8[Decursive]|r Last %d alert diagnostic lines (default chat frame only):"):format(count))
+    for i = #log - count + 1, #log do
+        print("|cFF6B7686" .. log[i] .. "|r")
+    end
+end
+
+if D.RegisterChatCommand then
+    D:RegisterChatCommand("dcralertdiag", function(msg)
+        if msg == "clear" then
+            if D.db and D.db.global then D.db.global.DcrAlertDiag = {} end
+            print("|cFF29B8A8[Decursive]|r Alert diagnostic log cleared.")
+            return
+        end
+        D:PrintAlertDiag(tonumber(msg) or 25)
+    end)
+end
+
+-- Marks every addon load/reload directly in the log, so reload timing can
+-- be read straight from the file instead of relying on manual play-by-play.
+-- Deferred to PLAYER_ENTERING_WORLD: D.db isn't set up yet at this point in
+-- file load (AceDB initializes later, during OnInitialize), so calling
+-- D:AlertDiag directly here always silently no-op'd (D.db.global didn't
+-- exist yet) -- confirmed live: the marker never once appeared in the saved
+-- log across several reload cycles.
+local alertDiagLoadMarker = CreateFrame("Frame")
+alertDiagLoadMarker:RegisterEvent("PLAYER_ENTERING_WORLD")
+alertDiagLoadMarker:SetScript("OnEvent", function(self)
+    if D.AlertDiag then D:AlertDiag("===== addon loaded/reloaded =====") end
+    self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+end)
 
 D:Debug("WoW 12.1 managed-aura + cooldown compatibility adapter loaded")

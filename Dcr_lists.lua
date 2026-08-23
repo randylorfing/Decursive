@@ -300,6 +300,40 @@ function D:AddTargetToPriorityList() --{{{
     return D:AddElementToPriorityList("target", true);
 end --}}}
 
+-- Role-based priority (Tank/Healer/Damager first) -- the sort comparator in
+-- Dcr_Raid.lua (isUnitBeforeUnit) already reads a role's rank straight out
+-- of the same PriorityList via a negative index (setInternalList: ListEntry
+-- < 0 == roles, roles = {"HEALER", "TANK", "DAMAGER", "NONE"}), so this is
+-- a real, existing sort dimension -- it just never had an "add" path, since
+-- AddElementToPriorityList/AddElementToList only understand player GUIDs
+-- and positive (class/group) numbers. Mixes freely with individual-player
+-- entries already in the list (useful for raiding, per the user); reorder
+-- with the same up/down/top/bottom controls as everything else.
+local ROLE_TO_NEGATIVE_INDEX = { HEALER = -1, TANK = -2, DAMAGER = -3 }
+local ROLE_DISPLAY_NAME = { HEALER = "Healer", TANK = "Tank", DAMAGER = "DPS" }
+
+function D:AddRoleToPriorityList(roleName) --{{{
+    local negIndex = ROLE_TO_NEGATIVE_INDEX[roleName]
+    if not negIndex then return false end
+    if not D.DcrFullyInitialized then return false end
+
+    D.profile.PriorityList = D.profile.PriorityList or {}
+    for _, existing in ipairs(D.profile.PriorityList) do
+        if existing == negIndex then return false end -- already in the list
+    end
+    if #D.profile.PriorityList > 99 then return false end
+
+    table.insert(D.profile.PriorityList, negIndex)
+    D.profile.PrioGUIDtoNAME = D.profile.PrioGUIDtoNAME or {}
+    D.profile.PrioGUIDtoNAME[negIndex] = str_format("[ %s ]", ROLE_DISPLAY_NAME[roleName])
+
+    DecursivePriorityListFrame.UpdateYourself = true;
+    D.Status.PrioChanged                      = true;
+    D:GroupChanged("AddRoleToPriorityList");
+    D:Debug("Role %s added to the prio list", roleName);
+    return true
+end --}}}
+
 local function AddElementToList(element, checkIfExist, list, listGUIDtoName, listClass) -- {{{
 
     if not D.DcrFullyInitialized then

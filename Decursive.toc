@@ -83,9 +83,6 @@ Database\Dispels\Dragonflight.lua
 Database\Dispels\TheWarWithin.lua
 Database\Dispels\Midnight.lua
 
-Database\EncounterDB_Core.lua
-Database\Encounters\Midnight.lua
-
 Decursive.lua
 Decursive.xml
 
@@ -96,7 +93,6 @@ Dcr_DebuffsFrame.lua
 Dcr_DebuffsFrame.xml
 Dcr_12_1.lua
 Dcr_12_1_Utils.lua
-Dcr_12_1_Encounters.lua
 Dcr_12_1_DebuffIdentity.lua
 Dcr_12_1_SoulLink.lua
 

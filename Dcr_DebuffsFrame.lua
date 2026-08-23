@@ -1551,6 +1551,15 @@ do
             end
         end
 
+        -- Right-click (priority 2) guaranteed battle-rez-on-dead fallback:
+        -- battle-rez is already merged into every configured cure priority
+        -- above, but a spec with only one registered cure spell (e.g.
+        -- Mistweaver's single Detox) never claims priority 2 at all, which
+        -- would otherwise leave right-click doing nothing. This only fills
+        -- the slot in if no real cure spell already claimed it.
+        if not D.Status.prio_macro[2] and D.GetBattleRezMacroText then
+            self:SetUnstableAttribute(MouseButtons[2]:format("macrotext"), D:GetBattleRezMacroText(Unit));
+        end
 
         -- clean unused attributes...
         self:CleanDefuncUnstableAttributes();

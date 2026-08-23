@@ -1426,6 +1426,73 @@ local function GetStaticOptions ()
                         end,
                         order = 123
                     },
+                    Alert121SoulLinkEnabled = {
+                        type = "toggle",
+                        width = 'full',
+                        name = "Battle rez range alerts",
+                        desc = "Show the on-screen banner when you attempt a battle-rez out of range. (Turning this off only disables the banner -- battle-rez click-to-use itself is controlled separately below.)",
+                        get = function() return not D.profile or D.profile.Alert121SoulLinkEnabled ~= false end,
+                        set = function(info, value) D.profile.Alert121SoulLinkEnabled = value and true or false end,
+                        order = 123.04,
+                    },
+                    PrintAlertDiag = {
+                        type = 'execute',
+                        name = "Show alert diagnostic log",
+                        desc = "Prints the last 25 alert-system decisions (casts seen, why an alert did or didn't fire) to your default chat frame -- always the same single window, regardless of your Print_ChatFrame/Print_CustomFrame settings. Same as |cFFFFFFFF/dcralertdiag|r.",
+                        func = function() if D.PrintAlertDiag then D:PrintAlertDiag(25) end end,
+                        order = 123.045,
+                    },
+                    Show121AlertAnchor = {
+                        type = "toggle",
+                        width = 'full',
+                        name = "Show alert position anchor",
+                        desc = "Shows a purple, draggable box for repositioning where Decursive's battle-rez range alert appears. Toggle off to lock the position in place. Same as |cFFFFFFFF/dcralerts move|r.",
+                        get = function() return D.Get121AlertAnchor and D:Get121AlertAnchor():IsShown() end,
+                        set = function()
+                            if D.Set121AlertMoveMode and D.Get121AlertAnchor then
+                                D:Set121AlertMoveMode(not D:Get121AlertAnchor():IsShown())
+                            end
+                        end,
+                        order = 124
+                    },
+                    TestSoulLinkAlert = {
+                        type = 'execute',
+                        name = "Test message notifications",
+                        desc = "Shows the same on-screen banner used when you attempt a battle-rez out of range, with a placeholder name, so you can check its appearance and text size/color without needing to reproduce the real situation.",
+                        func = function()
+                            if D.Test121SoulLinkAlert then D:Test121SoulLinkAlert() end
+                        end,
+                        order = 125,
+                    },
+                    Alert121FontSize = {
+                        type = 'range',
+                        name = "On-screen alert text size",
+                        desc = "Font size for Decursive's battle-rez range warning banner.",
+                        min = 12,
+                        max = 48,
+                        step = 1,
+                        get = function() return (D.profile.Alert121FontSize) or 24 end,
+                        set = function(info, value)
+                            D.profile.Alert121FontSize = value
+                            if D.Apply121SoulLinkAlertStyle then D:Apply121SoulLinkAlertStyle() end
+                        end,
+                        order = 126,
+                    },
+                    Alert121Color = {
+                        type = "color",
+                        name = "Battle rez alert text color",
+                        desc = "Color of the battle-rez on-screen alert text.",
+                        hasAlpha = false,
+                        get = function()
+                            local c = D.profile.Alert121Color or {1, 0.15, 0.15}
+                            return c[1], c[2], c[3]
+                        end,
+                        set = function(info, r, g, b)
+                            D.profile.Alert121Color = {r, g, b}
+                            if D.Apply121SoulLinkAlertStyle then D:Apply121SoulLinkAlertStyle() end
+                        end,
+                        order = 127,
+                    },
                 }
             }, -- }}}
 
@@ -1689,8 +1756,8 @@ local function GetStaticOptions ()
                             },
                             SoulLink121Enabled = {
                                 type = "toggle",
-                                name = "Emergency Soul Link on dead allies",
-                                desc = "When you have no other battle-rez available, clicking a dead ally's square uses Emergency Soul Link (Midnight Engineering) instead of the useless cure-spell click. Also shows a persistent yellow dot on that square, and an on-screen alert if you try while out of its 5-yard range.",
+                                name = "Battle rez on dead allies",
+                                desc = "Clicking a dead ally's square tries your battle-rez spell (if you know one), then falls back to the Emergency Soul Link item (Midnight Engineering), instead of the useless cure-spell click. Also shows a persistent yellow dot on that square, and an on-screen alert if you try while out of the item's 5-yard range.",
                                 get = function() return not D.profile or D.profile.SoulLink121Enabled ~= false end,
                                 set = function(info, value)
                                     D.profile.SoulLink121Enabled = value and true or false

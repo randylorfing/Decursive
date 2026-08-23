@@ -400,6 +400,20 @@ do
             self.MicroUnitF:ApplyContextMUFScale();
         end
 
+        -- Catch-up MUF rebuild: ReinitializeDecursiveAfterZone's staged
+        -- passes call UpdateAttributes(..., true) (DoNotDelay=true) -- if
+        -- combat was STILL active when every one of those passes fired
+        -- (e.g. a mid-fight revive, PLAYER_ALIVE firing but the fight isn't
+        -- over yet), that DoNotDelay=true means UpdateAttributes silently
+        -- gives up with no retry scheduled, and nothing else re-triggers a
+        -- rebuild once combat actually ends -- a real, previously-unclosed
+        -- gap alongside the PLAYER_ALIVE one above. Cheap to call here
+        -- unconditionally: generation-counter guarded internally, same as
+        -- every other call site of this function.
+        if self.ReinitializeDecursiveAfterZone and D.DcrFullyInitialized then
+            self:ReinitializeDecursiveAfterZone("PLAYER_REGEN_ENABLED");
+        end
+
         -- test for debug report
         if #T._DebugTextTable > 0 and GetTime() - LastDebugReportNotification > 300 * 3 then
             if LastDebugReportNotification == 0 then
@@ -523,6 +537,16 @@ end
 
 function D:PLAYER_ALIVE()
     D:Debug("|cFFFF0000PLAYER_ALIVE|r");
+    -- ReConfigure only re-checks which spells/items you can currently use
+    -- (spec/talent/item changes) -- it does NOTHING for MUF display. The
+    -- actual MUF-repopulation path (proven necessary for the identical
+    -- "squares missing until /reload" symptom on GROUP_ROSTER_UPDATE,
+    -- see the comment there) was never added here, even though a
+    -- death/revive is exactly the kind of roster-churn event that symptom
+    -- was about. Same "prefer the thorough path if available" pattern.
+    if self.ReinitializeDecursiveAfterZone then
+        self:ReinitializeDecursiveAfterZone("PLAYER_ALIVE");
+    end
     self:ScheduleDelayedCall("Dcr_ReConfigure", self.ReConfigure, 4, self);
     T.PLAYER_IS_ALIVE = GetTime();
 end
