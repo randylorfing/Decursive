@@ -165,47 +165,83 @@ end
 -- with this slot layered on top; that's the one real regression risk here.
 ----------------------------------------------------------------
 
--- This is what the feature was built for -- active in dungeons/M+, not
--- disabled there. "party" instanceType covers both regular dungeons and
--- Mythic+ (IsInInstance() doesn't distinguish the two).
+-- Originally scoped to dungeons/M+ only ("party" instanceType covers both,
+-- IsInInstance() doesn't distinguish the two). Extended to also cover raids
+-- ("raid" instanceType) per user request -- same feature, same behavior,
+-- just widened to the same content type it already worked in for parties.
 local function inDungeonInstance()
     local inInstance, instanceType = IsInInstance()
-    return inInstance and instanceType == "party"
+    return inInstance and (instanceType == "party" or instanceType == "raid")
 end
 
+-- Re-enabled with genuine isolation, after a live report that core
+-- affliction detection stopped working entirely in the session where this
+-- ran. The earlier version added its own aura slot ("zhaohu-identity-
+-- tooltip") to MF.ManagedAuraContainer -- the SAME container object the
+-- core detection slots live on, not an isolated one -- so even with the
+-- taint crash on its follow-up setup calls caught (pcall), the AddAuraSlot
+-- call itself still succeeded and still touched that shared container. This
+-- version instead builds its own separate AuraContainer, the exact same
+-- proven-safe way Dcr_12_1.lua's own core detection container is built
+-- (CreateFrame("AuraContainer", ..., "CustomAuraContainerTemplate"),
+-- parented to MF.Frame, positioned via container:SetAllPoints(MF.Frame) --
+-- that specific call already runs safely there every MUF init). Any failure
+-- in this feature now has zero path back to the container core detection
+-- depends on.
 local function ensureIdentityTooltipSlot(MF)
     if MF.DcrIdentitySlot then return MF.DcrIdentitySlot end
-    local container = MF.ManagedAuraContainer
-    if not container or not container.AddAuraSlot then return nil end
+    if not MF or not MF.Frame then return nil end
+
+    local containerOk, container = pcall(CreateFrame, "AuraContainer", nil, MF.Frame, "CustomAuraContainerTemplate")
+    if not containerOk or not container then return nil end
+    local posOk = pcall(function() container:SetAllPoints(MF.Frame) end)
+    if not posOk then return nil end
 
     local options = {
+        -- Confirmed live via BugGrabber: this callback is invoked by
+        -- Blizzard's own AddAuraSlot machinery, apparently lazily/later --
+        -- NOT synchronously inside the pcall(container.AddAuraSlot, ...)
+        -- call below, since the exact same "forbidden object" taint crash
+        -- (this time on btn:SetTooltipAnchorPoint/SetHideTooltipInCombat)
+        -- still happened even after that call was wrapped. Wrapping the
+        -- callback's own body directly so it can't escape protection
+        -- regardless of when Blizzard actually calls it.
         initializeFrame = function(btn)
-            if btn.EnableMouse then btn:EnableMouse(true) end
-            if btn.SetMouseClickEnabled then btn:SetMouseClickEnabled(false) end
-            if btn.SetMouseMotionEnabled then btn:SetMouseMotionEnabled(true) end
-            if btn.SetTooltipAnchorPoint and btn.SetHideTooltipInCombat then
-                btn:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)
-                btn:SetHideTooltipInCombat(false)
-            end
+            pcall(function()
+                if btn.EnableMouse then btn:EnableMouse(true) end
+                if btn.SetMouseClickEnabled then btn:SetMouseClickEnabled(false) end
+                if btn.SetMouseMotionEnabled then btn:SetMouseMotionEnabled(true) end
+                if btn.SetTooltipAnchorPoint and btn.SetHideTooltipInCombat then
+                    btn:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)
+                    btn:SetHideTooltipInCombat(false)
+                end
+            end)
         end,
     }
     -- Toggle: D.profile.DcrIdentityShowAllDebuffs (default false, dispellable
     -- only). "HARMFUL" is a strict superset of "HARMFUL|RAID_PLAYER_DISPELLABLE"
     -- (every dispellable debuff is already harmful), so this just widens or
-    -- narrows the same one slot rather than adding a second overlapping one
-    -- (which would compete for the same mouse hit-test on the same square).
+    -- narrows the same one slot rather than adding a second overlapping one.
     -- Baked in at slot-creation time -- /reload to apply after toggling.
     local filter = (D.profile and D.profile.DcrIdentityShowAllDebuffs)
         and "HARMFUL" or "HARMFUL|RAID_PLAYER_DISPELLABLE"
-    local ok, slot = pcall(container.AddAuraSlot, container,
+    local addOk, slot = pcall(container.AddAuraSlot, container,
         "zhaohu-identity-tooltip", filter, options)
-    if not ok or not slot then return nil end
+    if not addOk or not slot then return nil end
 
-    if slot.SetAllPoints then slot:SetAllPoints(MF.Frame) end
-    if slot.SetAlpha then slot:SetAlpha(0) end -- invisible; only its built-in tooltip matters
-    if slot.SetFrameLevel and MF.Frame.GetFrameLevel then
-        slot:SetFrameLevel(MF.Frame:GetFrameLevel() + 200)
-    end
+    local setupOk = pcall(function()
+        -- Positioned relative to OUR OWN isolated container, not directly to
+        -- MF.Frame -- slot:SetAllPoints(MF.Frame) was the exact line that
+        -- threw the original taint crash.
+        if slot.SetAllPoints then slot:SetAllPoints(container) end
+        if slot.SetAlpha then slot:SetAlpha(0) end -- invisible; only its built-in tooltip matters
+        if slot.SetFrameLevel and MF.Frame.GetFrameLevel then
+            slot:SetFrameLevel(MF.Frame:GetFrameLevel() + 200)
+        end
+    end)
+    if not setupOk then return nil end
+
+    MF.DcrIdentityContainer = container
     MF.DcrIdentitySlot = slot
     return slot
 end
