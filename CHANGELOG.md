@@ -1,5 +1,16 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.38
+
+## PvP parity, licensing/attribution fixes, and version-announce channel fix
+- PvP's visual profile (out-of-range dim, cooldown overlay opacity/numbers, pulse, etc.) now exactly matches the DUNGEON preset instead of having its own separately-tuned values -- arena/battleground teams are party-sized content, not raid-sized, so there was no reason for a distinct profile.
+- The debuff-identity hover-tooltip and unit-name label, already extended to raids in v11.0.37, now also work in PvP (`pvp`/`arena` instance types).
+- Per direct guidance from John Wellesz (original Decursive author):
+  - Renamed the AceComm version-announce prefix `"DecursiveVersion"` to `"ZhaohuDecursiveVersion"` (`Dcr_Events.lua`, `DCR_init.lua`). The two forks now diverge in release dates and version numbers, so sharing one announce channel was generating false "new version available" alerts for both projects' users.
+  - Corrected John Wellesz's copyright year (2006-2025 -> 2006-2026) across every file carrying his header.
+  - Added Randy Lorfing's attribution alongside John's in the original files actually modified for WoW 12.1 compatibility.
+  - Files created solely by Randy Lorfing (`Dcr_12_1.lua`, `Dcr_12_1_Utils.lua`, `Dcr_12_1_SoulLink.lua`, `Dcr_12_1_DebuffIdentity.lua`) now carry only his copyright, per John's explicit instruction.
+
 ## v11.0.37
 
 ## Fix: taint crashes in the debuff-identity tooltip; extended to raids
