@@ -1,5 +1,25 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.37
+
+## Fix: taint crashes in the debuff-identity tooltip; extended to raids
+- Positioning the native identity-tooltip aura slot against Decursive's own secure frame during MUF creation could throw "Attempt to access forbidden object from code tainted by an AddOn" (confirmed via BugGrabber), happening inside MUF construction itself and potentially leaving that MUF's setup incomplete.
+- The feature now builds its own fully isolated `AuraContainer`, instead of sharing the one core affliction detection depends on -- after a live report that detection stopped working entirely in the same session as an earlier, narrower crash fix.
+- Fixed a second taint crash in the `AddAuraSlot` `initializeFrame` callback, which runs outside the `pcall` protecting the call that registers it.
+- The hover-tooltip and unit-name label were originally scoped to dungeons only; extended to also work in raids.
+
+## v11.0.36
+
+## Fix: dispel reliability, split dispel/battle-rez macros, MUF repopulation on revive
+- Fixed a severe scoping bug: a variable used by the click-outcome tracker was declared after its first use, silently crashing Decursive's own success/failure/cooldown-arming logic on every single cast outcome -- including successful ones. The real spell cast wasn't affected (WoW's secure macro engine handles that independently), but Decursive's own confirmation feedback and cooldown display were dying on every cast.
+- The dispel macro now excludes dead targets (`nodead`) instead of wastefully attempting (and failing) a cure cast on a corpse.
+- `/stopcasting` reordered to the top of the macro -- it could previously cancel a battle-rez cast the same click had just started, since Rebirth has a real (non-instant) cast time.
+- Battle-rez is now guaranteed on right-click for classes with only one registered cure spell (e.g. single-cure Mistweaver), without affecting classes that already use right-click for a second real cure spell.
+- `PLAYER_ALIVE` and `PLAYER_REGEN_ENABLED` now trigger MUF repopulation after a death/revive cycle -- neither did before, leaving squares missing until a manual `/reload` in some cases.
+- Renamed "Soul Link" references to "battle rez" throughout user-facing text.
+- Removed the interrupt/debuff-landed encounter-alert feature (pilot scope cut).
+- Added role-based priority list sorting (Tank/Healer/DPS) alongside existing per-player priority entries, a movable on-screen alert anchor, and an alert diagnostic log (`/dcralertdiag`) for troubleshooting.
+
 ## v11.0.35
 
 ## New: battle-rez / Emergency Soul Link on dead allies
