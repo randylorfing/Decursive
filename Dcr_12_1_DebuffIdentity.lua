@@ -1,8 +1,9 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v 11.0.10) add-on for World of Warcraft UI
-    Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
+    WoW 12.1 compatibility module for Decursive. This file was solely
+    written by Randy Lorfing.
+    Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -16,14 +17,6 @@
 
     You should have received a copy of the GNU General Public License
     along with Decursive.  If not, see <https://www.gnu.org/licenses/>.
-
-    Decursive is inspired from the original "Decursive v1.9.4" by Patrick Bohnet (Quu).
-    The original "Decursive 1.9.4" is in public domain ( www.quutar.com )
-
-    Decursive is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY.
-
-    This file was last updated on 2026-08-22T00:00:00Z
 --]]
 -------------------------------------------------------------------------------
 -- Zhaohu's Decursive - debuff identification via enemy-cast inference (12.1-safe)
@@ -167,11 +160,14 @@ end
 
 -- Originally scoped to dungeons/M+ only ("party" instanceType covers both,
 -- IsInInstance() doesn't distinguish the two). Extended to also cover raids
--- ("raid" instanceType) per user request -- same feature, same behavior,
--- just widened to the same content type it already worked in for parties.
+-- ("raid") and PvP ("pvp"/"arena" -- matches the exact same pair
+-- Dcr_12_1.lua's own detectAutomaticEnvironment() already checks for PvP
+-- content) per user request -- same feature, same behavior, just widened to
+-- the content types it already worked in for parties.
 local function inDungeonInstance()
     local inInstance, instanceType = IsInInstance()
-    return inInstance and (instanceType == "party" or instanceType == "raid")
+    return inInstance and (instanceType == "party" or instanceType == "raid"
+        or instanceType == "pvp" or instanceType == "arena")
 end
 
 -- Re-enabled with genuine isolation, after a live report that core

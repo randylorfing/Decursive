@@ -1,9 +1,26 @@
 --[[
-    Decursive WoW 12.1 Compatibility Utilities
-    
+    This file is part of Decursive.
+
+    WoW 12.1 compatibility module for Decursive. This file was solely
+    written by Randy Lorfing.
+    Copyright (C) 2026 Randy Lorfing
+
+    Decursive is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Decursive is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Decursive.  If not, see <https://www.gnu.org/licenses/>.
+
     Safe wrapper functions for APIs that return secrets or are restricted
     in WoW 12.1 protected contexts (combat, raids, M+, PvP).
-    
+
     This module provides safe alternatives to dangerous API calls.
 --]]
 

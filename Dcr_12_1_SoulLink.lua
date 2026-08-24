@@ -1,8 +1,9 @@
 --[[
     This file is part of Decursive.
 
-    Decursive (v 11.0.10) add-on for World of Warcraft UI
-    Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
+    WoW 12.1 compatibility module for Decursive. This file was solely
+    written by Randy Lorfing.
+    Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -16,14 +17,6 @@
 
     You should have received a copy of the GNU General Public License
     along with Decursive.  If not, see <https://www.gnu.org/licenses/>.
-
-    Decursive is inspired from the original "Decursive v1.9.4" by Patrick Bohnet (Quu).
-    The original "Decursive 1.9.4" is in public domain ( www.quutar.com )
-
-    Decursive is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY.
-
-    This file was last updated on 2026-08-22T00:00:00Z
 --]]
 -------------------------------------------------------------------------------
 -- Zhaohu's Decursive - Emergency Soul Link range indicator

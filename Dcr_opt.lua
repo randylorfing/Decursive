@@ -2,7 +2,7 @@
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
-    Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
+    Copyright (C) 2006-2026 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -273,7 +273,11 @@ function D:GetDefaultsSettings()
                 RAID = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .45, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .50, CooldownOverlay121Numbers = false, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = false, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
                 MYTHIC_PLUS = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .70, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .70, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
                 DUNGEON = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
-                PVP = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .75, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .65, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
+                -- Matches DUNGEON exactly, per user request: arena teams are
+                -- party-sized (2-5 players), the same scale as dungeon
+                -- content, not raid-sized -- no reason for PVP to have its
+                -- own separately-tuned visual profile.
+                PVP = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
                 OPEN_WORLD = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .62, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
             },
 

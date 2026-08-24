@@ -2,7 +2,7 @@
     This file is part of Decursive.
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
-    Copyright (C) 2006-2025 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
+    Copyright (C) 2006-2026 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
 
     Decursive is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -1160,7 +1160,7 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
 
     SetRuntimeConstants_Once();
 
-    LibStub("AceComm-3.0"):RegisterComm("DecursiveVersion", D.OnCommReceived);
+    LibStub("AceComm-3.0"):RegisterComm("ZhaohuDecursiveVersion", D.OnCommReceived);
 
     -- Handle events directly without relying on AceEvent to prevent undue
     -- "script ran too long" errors caused by the queuing of event handler
