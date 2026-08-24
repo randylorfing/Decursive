@@ -1623,20 +1623,15 @@ local function tableHasAnyKey(t)
     return next(t) ~= nil
 end
 
--- Native AuraSlots do not automatically cover their host. Blizzard returns the
--- created AuraButton from AddAuraSlot(), and overlay consumers are responsible
--- for anchoring that button while it is still in the safe initialization window.
--- DandersFrames does the same thing in its AuraContainer factory. Keep every
--- direct-Blizzard carrier on this one helper so native detection/cooldown/verify
--- all use identical geometry.
+-- Blizzard's AddAuraSlot() buttons are protected objects: ClearAllPoints and
+-- SetAllPoints both throw a "forbidden object" taint error unconditionally,
+-- even called synchronously right after creation, unlike other setup calls
+-- (Show/EnableMouse/SetUnit/SetEnabled) which succeed fine. Since the calls
+-- can never succeed, attempting them only produced guaranteed-fail taint
+-- spam in chat on every MUF -- Blizzard already anchors each slot to fill
+-- its parent container by default, so there is nothing left to do here.
 local function anchorNativeAuraSlot(auraButton, anchor, label)
-    if not auraButton or not anchor then return false end
-    if auraButton.ClearAllPoints then safe((label or "Native AuraSlot") .. " ClearAllPoints", auraButton.ClearAllPoints, auraButton) end
-    if auraButton.SetAllPoints then
-        safe((label or "Native AuraSlot") .. " SetAllPoints", auraButton.SetAllPoints, auraButton, anchor)
-        return true
-    end
-    return false
+    return auraButton ~= nil and anchor ~= nil
 end
 
 -- DandersFrames' factory never exposes the protected aura type back to Lua.

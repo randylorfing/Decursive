@@ -1,5 +1,12 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.40
+
+## Fix: taint error spam from native (default) dispel-detection AuraSlots
+- The native/Blizzard-managed detection and cooldown-gate code (used whenever DandersFrames integration isn't explicitly enabled -- the default) tried to `ClearAllPoints`/`SetAllPoints` each Blizzard-returned `AddAuraSlot()` button to anchor it over its holder frame. Both calls unconditionally throw a "forbidden object" taint error, even called synchronously right after the button is created -- unlike the surrounding setup calls (`Show`/`EnableMouse`/`SetUnit`/`SetEnabled`), which succeed fine.
+- This produced a burst of red taint errors in chat on every MUF creation (up to a few per priority per raid member), even though the calls were already pcall-guarded and never crashed the addon.
+- Removed the doomed-to-fail anchor attempt entirely -- Blizzard already anchors each slot to fill its parent container by default, so there was nothing for Decursive to actually do there.
+
 ## v11.0.39
 
 ## Hotfix: broken addon init in v11.0.38
