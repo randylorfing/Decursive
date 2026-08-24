@@ -188,20 +188,32 @@ local function ensureIdentityTooltipSlot(MF)
     if MF.DcrIdentitySlot then return MF.DcrIdentitySlot end
     if not MF or not MF.Frame then return nil end
 
+    local _, instanceType = IsInInstance()
+    local unitName = MF.CurrUnit and (UnitName(MF.CurrUnit) or MF.CurrUnit) or "?"
+
     local containerOk, container = pcall(CreateFrame, "AuraContainer", nil, MF.Frame, "CustomAuraContainerTemplate")
-    if not containerOk or not container then return nil end
+    if not containerOk or not container then
+        if D.AlertDiag then D:AlertDiag("IdentitySlot FAIL %s [%s]: CreateFrame AuraContainer failed: %s", unitName, tostring(instanceType), tostring(container)) end
+        return nil
+    end
     local posOk = pcall(function() container:SetAllPoints(MF.Frame) end)
-    if not posOk then return nil end
+    if not posOk then
+        if D.AlertDiag then D:AlertDiag("IdentitySlot FAIL %s [%s]: container:SetAllPoints failed", unitName, tostring(instanceType)) end
+        return nil
+    end
 
     local options = {
-        -- Confirmed live via BugGrabber: this callback is invoked by
-        -- Blizzard's own AddAuraSlot machinery, apparently lazily/later --
-        -- NOT synchronously inside the pcall(container.AddAuraSlot, ...)
-        -- call below, since the exact same "forbidden object" taint crash
-        -- (this time on btn:SetTooltipAnchorPoint/SetHideTooltipInCombat)
-        -- still happened even after that call was wrapped. Wrapping the
-        -- callback's own body directly so it can't escape protection
-        -- regardless of when Blizzard actually calls it.
+        -- REVERTED (2026-08-24): a version of this callback added
+        -- ClearAllPoints/SetAllPoints/SetAlpha/SetFrameLevel here (to make
+        -- the slot actually cover the MUF so it could receive hover and
+        -- trigger Blizzard's native tooltip). Two attempts at that (frame
+        -- level +200, then +1) both correlated with the priority-color
+        -- squares no longer painting -- confirmed via live testing, with no
+        -- corresponding crash or AlertDiag failure in the logs, so the exact
+        -- mechanism is still unconfirmed. Reverted to this known-good state
+        -- (no position/alpha/frame-level touched at all) to restore core
+        -- detection; the native-tooltip-in-PvP enhancement is shelved for
+        -- separate investigation rather than staying in the critical path.
         initializeFrame = function(btn)
             pcall(function()
                 if btn.EnableMouse then btn:EnableMouse(true) end
@@ -223,22 +235,14 @@ local function ensureIdentityTooltipSlot(MF)
         and "HARMFUL" or "HARMFUL|RAID_PLAYER_DISPELLABLE"
     local addOk, slot = pcall(container.AddAuraSlot, container,
         "zhaohu-identity-tooltip", filter, options)
-    if not addOk or not slot then return nil end
-
-    local setupOk = pcall(function()
-        -- Positioned relative to OUR OWN isolated container, not directly to
-        -- MF.Frame -- slot:SetAllPoints(MF.Frame) was the exact line that
-        -- threw the original taint crash.
-        if slot.SetAllPoints then slot:SetAllPoints(container) end
-        if slot.SetAlpha then slot:SetAlpha(0) end -- invisible; only its built-in tooltip matters
-        if slot.SetFrameLevel and MF.Frame.GetFrameLevel then
-            slot:SetFrameLevel(MF.Frame:GetFrameLevel() + 200)
-        end
-    end)
-    if not setupOk then return nil end
+    if not addOk or not slot then
+        if D.AlertDiag then D:AlertDiag("IdentitySlot FAIL %s [%s]: AddAuraSlot failed: %s", unitName, tostring(instanceType), tostring(slot)) end
+        return nil
+    end
 
     MF.DcrIdentityContainer = container
     MF.DcrIdentitySlot = slot
+    if D.AlertDiag then D:AlertDiag("IdentitySlot OK %s [%s]", unitName, tostring(instanceType)) end
     return slot
 end
 
@@ -261,15 +265,20 @@ if D.MicroUnitF and D.MicroUnitF.prototype and D.MicroUnitF.prototype.init then
     end
 end
 
--- Retry for MUFs whose native container attach was deferred by combat
--- lockdown at init time (mirrors Dcr_12_1.lua's own providerRetryFrame
--- pattern, decoupled from its private pending-attach table).
+-- Retry for MUFs whose slot creation failed/was skipped at init time (e.g.
+-- combat lockdown at that exact moment). ensureIdentityTooltipSlot builds its
+-- own fully isolated container -- it never actually reads MF.ManagedAuraContainer
+-- -- so this no longer gates on that field existing (that gate was a leftover
+-- from before the isolated-container rewrite and could permanently skip the
+-- retry for any MUF that never gets native-provider detection, e.g. content
+-- where combat lockdown never lets Dcr_12_1.lua's own container attach clear
+-- its own deferred-attach queue in time).
 local retryFrame = CreateFrame("Frame")
 retryFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 retryFrame:SetScript("OnEvent", function()
     if not D.MicroUnitF or not D.MicroUnitF.UnitToMUF then return end
     for _, MF in pairs(D.MicroUnitF.UnitToMUF) do
-        if MF and not MF.DcrIdentitySlot and MF.ManagedAuraContainer then
+        if MF and not MF.DcrIdentitySlot then
             ensureIdentityTooltipSlot(MF)
         end
     end

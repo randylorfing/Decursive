@@ -682,7 +682,24 @@ function D:Refresh121MUFStateSoundUnit(_unit, _suppressAlert)
 end
 
 function D:Refresh121MUFStateSoundBaseline()
-    if type(self.RefreshProtectedAuraSounds) == "function" then
+    if type(self.RefreshProtectedAuraSounds) ~= "function" then return end
+    -- Deferred one frame: resetTrackedDispelSpell() (this function's only
+    -- caller) runs synchronously inside the UNIT_SPELLCAST_SUCCEEDED handler,
+    -- immediately after the player's own dispel cast lands via the secure
+    -- click-cast macro -- a context that can still carry taint into the same
+    -- execution frame. C_UnitAuras.AddAuraSound requires a genuinely
+    -- untainted caller; two independent user reports of ADDON_ACTION_BLOCKED
+    -- here (one in PvP arena, one in Mythic+ -- both high-frequency
+    -- dispel-click content, never reported from lower-intensity raid
+    -- testing) match that taint-adjacency pattern rather than a
+    -- content-type-specific restriction. Letting the click's frame fully
+    -- unwind before this runs is the fix; pcall cannot suppress
+    -- ADDON_ACTION_BLOCKED since it isn't a catchable Lua error.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, function()
+            if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("MUF baseline refresh") end
+        end)
+    else
         self:RefreshProtectedAuraSounds("MUF baseline refresh")
     end
 end
@@ -1623,26 +1640,37 @@ local function tableHasAnyKey(t)
     return next(t) ~= nil
 end
 
--- Blizzard's AddAuraSlot() buttons are protected objects: ClearAllPoints and
--- SetAllPoints both throw a "forbidden object" taint error unconditionally,
--- even called synchronously right after creation, unlike other setup calls
--- (Show/EnableMouse/SetUnit/SetEnabled) which succeed fine. Since the calls
--- can never succeed, attempting them only produced guaranteed-fail taint
--- spam in chat on every MUF -- Blizzard already anchors each slot to fill
--- its parent container by default, so there is nothing left to do here.
-local function anchorNativeAuraSlot(auraButton, anchor, label)
-    return auraButton ~= nil and anchor ~= nil
-end
-
 -- DandersFrames' factory never exposes the protected aura type back to Lua.
 -- Instead, each priority gets a Blizzard-filtered AuraSlot whose membership is
 -- the decision. A slot exists/shows only when DandersFrames' AuraContainer
 -- carrier matches one of the configured dispel types for that priority.
-local function initializeProviderPriorityButton(auraButton, priority, MF)
+local function initializeProviderPriorityButton(auraButton, priority, MF, anchor)
     if not auraButton or providerPriorityInitializedButtons[auraButton] then return end
     providerPriorityInitializedButtons[auraButton] = true
 
     if auraButton.SetSize then auraButton:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20) end
+    -- Positioning happens HERE, inside Blizzard's own initializeFrame callback
+    -- (invoked via securecallfunction), not afterward in plain addon code --
+    -- matches DandersFrames' own proven pattern for this exact button type
+    -- (their Dispel.lua: "SECURE CARRIER INIT (runs INSIDE the container's
+    -- initializeFrame)"). Calling ClearAllPoints/SetAllPoints on this SAME
+    -- button from OUTSIDE this callback (the previous anchorNativeAuraSlot
+    -- approach) failed 100% of the time in PvP specifically -- confirmed via
+    -- AlertDiag telemetry across two separate attempts today -- even though
+    -- this is exactly the sanctioned use of AddAuraSlot ("Unlike AuraGroups,
+    -- addons can manually anchor AuraSlots" -- Patch 12.1.0 API changes).
+    -- Only present for the native (non-DandersFrames) provider path -- the
+    -- DandersFrames factory owns and positions its own buttons already.
+    if anchor then
+        if auraButton.ClearAllPoints then
+            local ok = pcall(auraButton.ClearAllPoints, auraButton)
+            if not ok and D.AlertDiag then D:AlertDiag("Priority button ClearAllPoints FAILED (init)") end
+        end
+        if auraButton.SetAllPoints then
+            local ok = pcall(auraButton.SetAllPoints, auraButton, anchor)
+            if not ok and D.AlertDiag then D:AlertDiag("Priority button SetAllPoints FAILED (init)") end
+        end
+    end
     if auraButton.EnableMouse then auraButton:EnableMouse(false) end
     if auraButton.SetMouseClickEnabled then auraButton:SetMouseClickEnabled(false) end
     if auraButton.SetMouseMotionEnabled then auraButton:SetMouseMotionEnabled(false) end
@@ -1656,6 +1684,17 @@ local function initializeProviderPriorityButton(auraButton, priority, MF)
     fill:SetAllPoints(auraButton)
     fill:SetColorTexture(r, g, b, a or 1)
 
+    -- No Show/Hide/SetShown diagnostic here: checked directly against
+    -- DandersFrames' public source (Features/Dispel.lua) for how they solve
+    -- this, per explicit instruction not to guess. Their own comment: "presence
+    -- is Blizzard's (SetShown on the slot button), so we could never tell
+    -- which slots were filled" -- confirmed by grep, they never call
+    -- :IsShown() on a Blizzard-owned slot button anywhere in their code,
+    -- only on their own addon-owned frames. This is unobservable to addon
+    -- code by design, not a diagnostic gap to instrument around. Their
+    -- proven pattern instead trusts the parent button's native Show/Hide to
+    -- cascade to child content automatically -- exactly what fill (below)
+    -- already does by being a plain child anchored to auraButton.
     -- Lower-priority simultaneous needs remain visible as a border even when a
     -- higher-priority slot is covering the center. The border holder is given a
     -- separate high frame level while inheriting the secret-safe visibility of
@@ -1796,11 +1835,23 @@ local function attachDandersVerificationCarriers(MF, Unit)
     end
 end
 
-local function initializeNativeVerificationButton(auraButton, MF)
+local function initializeNativeVerificationButton(auraButton, MF, anchor)
     if not auraButton or not MF then return end
     initializeMUFStatusLight(MF)
     local size = statusLightSizeForMF(MF)
     if auraButton.SetSize then auraButton:SetSize(size, size) end
+    -- See initializeProviderPriorityButton's matching comment: positioning
+    -- must happen inside this initializeFrame callback, not afterward.
+    if anchor then
+        if auraButton.ClearAllPoints then
+            local ok = pcall(auraButton.ClearAllPoints, auraButton)
+            if not ok and D.AlertDiag then D:AlertDiag("Verification button ClearAllPoints FAILED (init)") end
+        end
+        if auraButton.SetAllPoints then
+            local ok = pcall(auraButton.SetAllPoints, auraButton, anchor)
+            if not ok and D.AlertDiag then D:AlertDiag("Verification button SetAllPoints FAILED (init)") end
+        end
+    end
     if auraButton.EnableMouse then auraButton:EnableMouse(false) end
     if auraButton.SetMouseClickEnabled then auraButton:SetMouseClickEnabled(false) end
     if auraButton.SetMouseMotionEnabled then auraButton:SetMouseMotionEnabled(false) end
@@ -1839,14 +1890,11 @@ local function attachNativeVerificationCarriers(MF, Unit)
                 if container.SetUnit then safe("Native verification AuraContainer SetUnit", container.SetUnit, container, Unit) end
                 local key = "zhaohu-native-verify-priority-" .. tostring(p)
                 local options = {
-                    initializeFrame = function(btn) initializeNativeVerificationButton(btn, MF) end,
+                    initializeFrame = function(btn) initializeNativeVerificationButton(btn, MF, holder) end,
                     candidateFilters = { includeDispelTypes = getPriorityDispelTypeFilter(p) },
                 }
                 if container.AddAuraSlot then
-                    local slotOK, slotButton = safe("Native verification AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
-                    if slotOK and slotButton then
-                        anchorNativeAuraSlot(slotButton, holder, "Native verification AuraSlot")
-                    end
+                    safe("Native verification AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
                 end
                 -- SetEnabled LAST: this arms Blizzard's aura parsing/event registration
                 -- only after SetUnit, AddAuraSlot and the slot geometry are complete.
@@ -2336,14 +2384,13 @@ local function resetTrackedDispelSpell()
                         local p = priority
                         key = "zhaohu-native-priority-" .. tostring(p)
                         local options = {
-                            initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF) end,
+                            initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, MF.Frame) end,
                             candidateFilters = { includeDispelTypes = include },
                         }
                         local ok, slotButton = safe("Native add detection priority after reconfigure", detector.AddAuraSlot, detector, key,
                             "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
                         if ok then
                             keys[p] = key
-                            if slotButton then anchorNativeAuraSlot(slotButton, MF.Frame, "Native reconfigured detection AuraSlot") end
                         end
                     end
                 end
@@ -3169,10 +3216,26 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
     MF.Decursive121PriorityCooldownBindings = MF.Decursive121PriorityCooldownBindings or {}
     MF.Decursive121PriorityGateAppliedActive = MF.Decursive121PriorityGateAppliedActive or {}
 
-    local function initializeGateAuraButton(auraButton)
+    local function initializeGateAuraButton(auraButton, anchor)
         -- Creation window only. Nothing on this protected aura button or its
         -- child regions is mutated directly after initialization.
         if auraButton.SetSize then auraButton:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20) end
+        -- anchor is only passed by the native-provider call site below; the
+        -- DandersFrames path (MF.Decursive121PriorityGateDandersOnInit /
+        -- makeDandersPriorityGateRecord, further down) reuses this same
+        -- function with no anchor, since DandersFrames positions its own
+        -- buttons. See initializeProviderPriorityButton's comment for why
+        -- this must happen inside initializeFrame rather than afterward.
+        if anchor then
+            if auraButton.ClearAllPoints then
+                local ok = pcall(auraButton.ClearAllPoints, auraButton)
+                if not ok and D.AlertDiag then D:AlertDiag("Gate button ClearAllPoints FAILED (init)") end
+            end
+            if auraButton.SetAllPoints then
+                local ok = pcall(auraButton.SetAllPoints, auraButton, anchor)
+                if not ok and D.AlertDiag then D:AlertDiag("Gate button SetAllPoints FAILED (init)") end
+            end
+        end
         if auraButton.EnableMouse then auraButton:EnableMouse(false) end
         if auraButton.SetMouseClickEnabled then auraButton:SetMouseClickEnabled(false) end
         if auraButton.SetMouseMotionEnabled then auraButton:SetMouseMotionEnabled(false) end
@@ -3285,7 +3348,7 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
 
     local key = "decursive-priority-" .. tostring(priority)
     local options = {
-        initializeFrame = initializeGateAuraButton,
+        initializeFrame = function(btn) initializeGateAuraButton(btn, holder) end,
         candidateFilters = { includeDispelTypes = getPriorityDispelTypeFilter(priority) },
     }
     local gateFrame
@@ -3293,7 +3356,6 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
         local success, returned = safe("Priority AuraContainer AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
         if success then
             gateFrame = returned
-            if returned then anchorNativeAuraSlot(returned, holder, "Native cooldown AuraSlot") end
         end
     else
         D:errln("12.1 managed priority gate: AuraContainer has no AddAuraSlot method")
@@ -3510,15 +3572,12 @@ local function attachNativeManagedAura(MF, Unit)
                 local p = priority
                 local key = "zhaohu-native-priority-" .. tostring(p)
                 local options = {
-                    initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF) end,
+                    initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, MF.Frame) end,
                     candidateFilters = { includeDispelTypes = include },
                 }
-                local slotOK, slotButton = safe("Native detector AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+                local slotOK = safe("Native detector AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
                 if slotOK then
                     MF.Decursive121NativeDetectionKeys[p] = key
-                    if slotButton then
-                        anchorNativeAuraSlot(slotButton, MF.Frame, "Native detection AuraSlot")
-                    end
                 end
             end
         end
