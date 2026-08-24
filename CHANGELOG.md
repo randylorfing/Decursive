@@ -1,5 +1,11 @@
 # Zhaohu-Decursive Changelog
 
+## v11.0.43
+
+## Fix: MUF size setting was unreachable from the UI
+- A user reported no way to resize the MUF squares in the Modern settings window. Root cause: the underlying resize function (`ZD:SetPartyMUFSizePixels`/`SetRaidMUFSizePixels`) already existed and worked, but was never wired to any control -- the classic options panel had it marked `hidden`/`disabled`, and the Modern UI's "Layout & Display" tab auto-generates its controls from that same option tree, so it silently inherited the same invisibility, even though the page's own description text already promised "Party and Raid can use different MUF sizes."
+- Added a dedicated "MUF Size" section (Settings -> Micro Unit Frames -> Layout & Display) with Party and Raid size sliders, 10-80px.
+
 ## v11.0.42
 
 ## Licensing/attribution cleanup pass

@@ -1811,11 +1811,31 @@ function ZD:BuildFrames(parent)
     p.basicLock = switch(basics, "Lock position", -68,
         function() return D.profile and D.profile.HideMUFsHandle end,
         function(v) ZD:SetProfileOption("HideMUFsHandle", v) end)
-    p.optionScroll:ClearAllPoints(); p.optionScroll:SetPoint("TOPLEFT",0,-260); p.optionScroll:SetPoint("BOTTOMRIGHT",-22,0)
+
+    -- MUF size was previously unreachable from the UI: the underlying
+    -- DebuffsFrameElemScale option is marked hidden/guiHidden in the classic
+    -- Dcr_opt.lua tree (for the old options panel), and this page's "Layout &
+    -- Display" tab auto-generates its controls from that same tree, so it
+    -- inherited the hidden flag too -- even though this page's own intro
+    -- text already promised "Party and Raid can use different MUF sizes."
+    -- Built as a dedicated section using ZD:Get/SetPartyMUFSizePixels and
+    -- ZD:Get/SetRaidMUFSizePixels (Modern/ZD_Core.lua), which already existed
+    -- and worked, just had no control wired to them anywhere.
+    local sizeSection = section(p, "MUF Size", -260, 176)
+    p.partySize = slider(sizeSection, "Party MUF size (px)", -34, 10, 80, 1,
+        function() return ZD:GetPartyMUFSizePixels() end,
+        function(v) ZD:SetPartyMUFSizePixels(v) end, "px")
+    p.raidSize = slider(sizeSection, "Raid MUF size (px)", -92, 10, 80, 1,
+        function() return ZD:GetRaidMUFSizePixels() end,
+        function(v) ZD:SetRaidMUFSizePixels(v) end, "px")
+
+    p.optionScroll:ClearAllPoints(); p.optionScroll:SetPoint("TOPLEFT",0,-446); p.optionScroll:SetPoint("BOTTOMRIGHT",-22,0)
     local oldRefresh=p.Refresh
     function p:Refresh()
         if p.basicShow and p.basicShow.control then p.basicShow.control:Refresh() end
         if p.basicLock and p.basicLock.control then p.basicLock.control:Refresh() end
+        if p.partySize and p.partySize.control then p.partySize.control:Refresh() end
+        if p.raidSize and p.raidSize.control then p.raidSize.control:Refresh() end
         if oldRefresh then oldRefresh(self) end
     end
     return p
