@@ -1,4 +1,4 @@
-# Zhaohu Development - square-sound25-root-decursive
+# Zhaohu-Decursive Changelog
 
 ## v11.0.40
 
@@ -6,6 +6,7 @@
 - Fixed a recurring `[ADDON_ACTION_BLOCKED]` error on `RefreshProtectedAuraSounds`, reported independently from PvP arena, Mythic+, and a third session -- all high-frequency dispel-click content. Root cause: it ran synchronously inside the `UNIT_SPELLCAST_SUCCEEDED` handler, immediately after the player's own dispel cast landed via the secure click-cast macro, a context that can still carry taint into the same execution frame. `C_UnitAuras.AddAuraSound` needs a genuinely untainted caller; `pcall` can't suppress `ADDON_ACTION_BLOCKED` since it isn't a catchable Lua error. Fixed by deferring the call one frame (`C_Timer.After(0, ...)`) so it always runs after the click's execution has fully unwound.
 - Fixed the native (non-DandersFrames) detection/cooldown-gate/cure-verification code producing a burst of "forbidden object" taint errors on every MUF creation. The actual bug: positioning (`ClearAllPoints`/`SetAllPoints`) on each Blizzard-returned `AddAuraSlot()` button was done in plain addon code *after* `AddAuraSlot()` returned. Blizzard's own API docs confirm addons manually anchoring AuraSlots is the sanctioned, intended use -- the problem was *where* the anchor call ran, not *that* it ran. Cross-checked against DandersFrames' own public source: they do this same positioning *inside* Blizzard's `initializeFrame` callback (invoked via `securecallfunction`, a materially different execution context than plain addon code). Moved positioning into `initializeFrame` for all three affected carriers; confirmed via live PvP/raid testing that the priority-color squares, cooldown-gate overlay, and cure-verification indicator all still render correctly.
 - The debuff-identity hover tooltip's real native-tooltip-in-PvP enhancement (from a similar positioning attempt) is shelved for now: it correlated with the priority-color squares failing to render, and reverting it restored them. The tooltip still works as it did before this release (name label, cast-inference fallback in PvP; real native tooltip in raid/dungeon) -- getting the actual debuff read to work in PvP too is a separate follow-up.
+- Renamed the internal build codename from `square-sound25-root-decursive` to `Zhaohu-Decursive` everywhere it appeared (changelog header, `Decursive.toc`'s `X-Zhaohu-Build` field, and the sound-diagnostics print in `Decursive.lua`).
 
 ## v11.0.39
 
@@ -129,7 +130,7 @@
 - Bug-report contact (`X-eMail` metadata and the debug-report fallback address) now points to randylorfing@gmail.com.
 - Original GPL copyright headers crediting John Wellesz (2006-2025) are unchanged.
 
-## square-sound25-root-decursive
+## Zhaohu-Decursive
 - Fixed a settings-page rebuild error caused by calling `SetScript("OnClick")` on a pooled plain `Frame`.
 - Pooled toggle rows now retain the child switch button handler while their option state is safely rebound on reuse.
 - Prevents intermittent blank pages / first-click navigation failures caused by the rebuild abort.

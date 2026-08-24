@@ -636,8 +636,8 @@ end
 function D:PrintAuraSoundDiagnostics()
     local ids, key = getProtectedAuraSoundIDs();
     local diag = T._AuraSoundDiag or {};
-    self:Println("--- Zhaohu Sound Diagnostics [square-sound25-root-decursive] ---");
-    self:Println("Build marker: square-sound25-root-decursive");
+    self:Println("--- Zhaohu Sound Diagnostics [Zhaohu-Decursive] ---");
+    self:Println("Build marker: Zhaohu-Decursive");
     local builtIns = getBuiltInProtectedAuraSoundIDs();
     self:Println(("Context: %s | learned IDs: %d | built-in active: %d"):format(tostring(key or "unknown"), type(ids) == "table" and #ids or 0, #builtIns));
     if self.GetDispelDBStats then

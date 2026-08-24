@@ -21,7 +21,7 @@
 ## SavedVariables: DecursiveDB
 
 ## Version: @project-version@
-## X-Zhaohu-Build: square-sound25-root-decursive
+## X-Zhaohu-Build: Zhaohu-Decursive
 ## X-Zhaohu-12.1-Patch: v11.0.10-square-sound6-safe-visual-restore
 ## X-Zhaohu-Backend: v10.43-feature-engine
 ## X-Zhaohu-UI: modern-v11-single-ui-motto
