@@ -1,5 +1,11 @@
 # Zhaohu Development - square-sound25-root-decursive
 
+## v11.0.39
+
+## Hotfix: broken addon init in v11.0.38
+- The v11.0.38 AceComm prefix rename (`"ZhaohuDecursiveVersion"`) was 22 characters, over AceComm's hard 16-character limit. `RegisterComm` threw during `OnInitialize`, which halted that function before `D.eventFrame` could be created, which in turn crashed `OnEnable` and left the addon only partially initialized.
+- Shortened the prefix to `"ZhaohuDcrVersion"` (16 characters) in `DCR_init.lua` and `Dcr_Events.lua`. Confirmed fixed via live in-game testing.
+
 ## v11.0.38
 
 ## PvP parity, licensing/attribution fixes, and version-announce channel fix

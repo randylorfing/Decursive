@@ -1114,14 +1114,14 @@ do -- Communication event handling and broadcasting {{{1
         T.LastVCheck = GetTime();
 
         if UnitExists("target") and (UnitFactionGroup("target")) == (UnitFactionGroup("player")) and UnitIsPlayer("target") then -- the unit exists and is a player of our faction
-            LibStub("AceComm-3.0"):SendCommMessage( "ZhaohuDecursiveVersion", "giveversion", "WHISPER", self:UnitName("target"));
+            LibStub("AceComm-3.0"):SendCommMessage( "ZhaohuDcrVersion", "giveversion", "WHISPER", self:UnitName("target"));
             D:Debug("Asking version to ", self:UnitName("target"));
         end
 
         local Distribution = GetDistributionChanel();
 
         if Distribution then
-            LibStub("AceComm-3.0"):SendCommMessage( "ZhaohuDecursiveVersion", "giveversion", Distribution);
+            LibStub("AceComm-3.0"):SendCommMessage( "ZhaohuDcrVersion", "giveversion", Distribution);
         end
         D:Debug("Asking version on ", Distribution);
 
@@ -1209,9 +1209,9 @@ do -- Communication event handling and broadcasting {{{1
         if  (not LastVersionAnnouceByDist[distribution] or gettime - LastVersionAnnouceByDist[distribution] > 10 )
             and (not LastVersionAnnouceByFrom[from]     or gettime - LastVersionAnnouceByFrom[from] > 60         ) then
 
-            LibStub("AceComm-3.0"):SendCommMessage("ZhaohuDecursiveVersion", ("Version: %s,%u,%d,%d"):format(D.version, D.VersionTimeStamp, D.RunningADevVersion and 1 or 0, D:IsEnabled() and 1 or 0 ), distribution, from )
+            LibStub("AceComm-3.0"):SendCommMessage("ZhaohuDcrVersion", ("Version: %s,%u,%d,%d"):format(D.version, D.VersionTimeStamp, D.RunningADevVersion and 1 or 0, D:IsEnabled() and 1 or 0 ), distribution, from )
 
-            -- /run LibStub("AceComm-3.0"):SendCommMessage("ZhaohuDecursiveVersion", ("Version: %s,%u,%d,%d"):format("Super-test2", time(), 1, 1), "WHISPER", 'torni' )
+            -- /run LibStub("AceComm-3.0"):SendCommMessage("ZhaohuDcrVersion", ("Version: %s,%u,%d,%d"):format("Super-test2", time(), 1, 1), "WHISPER", 'torni' )
 
             if from then
                 LastVersionAnnouceByFrom[from]      = gettime;

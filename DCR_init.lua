@@ -1160,7 +1160,7 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
 
     SetRuntimeConstants_Once();
 
-    LibStub("AceComm-3.0"):RegisterComm("ZhaohuDecursiveVersion", D.OnCommReceived);
+    LibStub("AceComm-3.0"):RegisterComm("ZhaohuDcrVersion", D.OnCommReceived);
 
     -- Handle events directly without relying on AceEvent to prevent undue
     -- "script ran too long" errors caused by the queuing of event handler
