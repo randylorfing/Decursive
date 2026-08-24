@@ -1,5 +1,12 @@
 # Zhaohu-Decursive Changelog
 
+## v11.0.42
+
+## Licensing/attribution cleanup pass
+- Per a follow-up from John Wellesz, re-verified the whole tree for GPL attribution correctness: no leftover `"DecursiveVersion"` AceComm prefix, no stale 2006-2025 copyright years, correct dual-attribution on every original file Randy Lorfing modified.
+- Found and fixed a gap the earlier attribution pass missed: 12 dispel-database expansion files (`Database/Dispels/*.lua`), `Database/DispelDB_Core.lua`, and `Dcr_ProfileIO.lua` (all solely written by Randy Lorfing) had no license header at all. Added the same GPL header used by the other solely-Randy files.
+- Also found `embeds.xml` and `Localization/load.xml` -- original files Randy Lorfing has modified -- had never carried a copyright header to begin with. Added the standard dual-attribution header (John Wellesz's original copyright plus Randy Lorfing's maintenance line), matching every other original file in the project.
+
 ## v11.0.40
 
 ## Fix: sound-refresh taint error, and native detection/cooldown taint spam (root-caused)
