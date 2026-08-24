@@ -50,6 +50,7 @@ externals:
 
 ignore:
     - Libs/LibStub/tests
+    - branding
 
 optional-dependencies:
     - bug-grabber
