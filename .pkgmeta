@@ -1,4 +1,14 @@
 # vim:syntax=YAML:expandtab
+# Multi-folder repo (Decursive core + Decursive_Options LoadOnDemand
+# companion), packaged from one repo the same way DeadlyBossMods/
+# DeadlyBossMods does it (DBM-Core + DBM-GUI/DBM-StatusBarTimers/etc. as
+# sibling top-level folders, package-as the primary addon, move-folders to
+# relocate the companion(s) into the final zip's top level).
+package-as: Decursive
+
+move-folders:
+    Decursive/Decursive_Options: Decursive_Options
+
 externals:
 
     Libs/LibStub:
