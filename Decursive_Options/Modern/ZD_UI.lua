@@ -350,8 +350,12 @@ local function slider(parent, text, y, minValue, maxValue, step, getter, setter,
         local rounded = snapRangeValue(value, minValue, maxValue, step)
         display(rounded)
         if not self._refreshing and ZD:CanConfigure(true) and setter then
-            setter(rounded)
-            ZD:SetStatus(text .. " updated.")
+            local applied = setter(rounded)
+            if applied == false then
+                ZD:SetStatus(text .. " could not be applied.", true)
+            else
+                ZD:SetStatus(text .. " updated.")
+            end
         end
     end)
     track:SetScript("OnSizeChanged", function(self) display(self:GetValue()) end)
@@ -940,9 +944,11 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                         display(rounded)
                         if not self._refreshing and not isDisabled and ZD:CanConfigure(true) then
                             local setSpec = inheritedSpec(option.set, state.set)
-                            local okSet, err = invokeOption(setSpec, handler, info, rounded)
+                            local okSet, result = invokeOption(setSpec, handler, info, rounded)
                             if not okSet then
-                                ZD:SetStatus("Could not change setting: "..tostring(err), true)
+                                ZD:SetStatus("Could not change setting: "..tostring(result), true)
+                            elseif result == false then
+                                ZD:SetStatus(name .. " could not be applied.", true)
                             else
                                 ZD:SetStatus(name .. " updated.")
                             end
@@ -2008,6 +2014,9 @@ function ZD:BuildFrames(parent)
         CooldownOverlay121Numbers=true, CooldownPriority2Border121Enabled=true,
         CooldownBorder121Alpha=true, CooldownBorder121Thickness=true,
         CooldownPriority2Pulse121Enabled=true, StatusLight121Enabled=true, Test121MUFSelect=true,
+        DebuffsFramePartyPixelSize121=true, DebuffsFrameRaidPixelSize121=true,
+        ResetDebuffsFrameContextPixelSizes121=true, DebuffsFramePixelSize=true,
+        ResetDebuffsFramePixelSize=true, DebuffsFrameElemScale=true,
         Test121MUFVisualsOne=true, Test121MUFVisualsAll=true,
     }
     local p = self:BuildTabbedOptionPathPage(parent, "Micro Unit Frames",
@@ -2018,7 +2027,7 @@ function ZD:BuildFrames(parent)
             {key="performance", name="Performance", path={"MicroFrameOpt","PerfOptions"}, width=120},
         }, "layout")
 
-    local basics = section(p, "Frame Basics", -146, 138)
+    local basics = section(p, "Frame Basics", -146, 176)
     p.basicShow = switch(basics, "Show MUFs", -34,
         function() return D.profile and D.profile.ShowDebuffsFrame end,
         function(v) ZD:SetProfileOption("ShowDebuffsFrame", v) end)
@@ -2045,15 +2054,18 @@ function ZD:BuildFrames(parent)
     -- Built as a dedicated section using ZD:Get/SetPartyMUFSizePixels and
     -- ZD:Get/SetRaidMUFSizePixels (Modern/ZD_Core.lua), which already existed
     -- and worked, just had no control wired to them anywhere.
-    local sizeSection = section(p, "MUF Size", -260, 176)
+    local sizeSection = section(p, "MUF Size", -334, 188)
     p.partySize = slider(sizeSection, "Party MUF size (px)", -34, 10, 80, 1,
         function() return ZD:GetPartyMUFSizePixels() end,
-        function(v) ZD:SetPartyMUFSizePixels(v) end, "px")
+        function(v) return ZD:SetPartyMUFSizePixels(v) end, "px")
     p.raidSize = slider(sizeSection, "Raid MUF size (px)", -92, 10, 80, 1,
         function() return ZD:GetRaidMUFSizePixels() end,
-        function(v) ZD:SetRaidMUFSizePixels(v) end, "px")
+        function(v) return ZD:SetRaidMUFSizePixels(v) end, "px")
+    p.activeSizeContext = label(sizeSection, "", 10, C.muted, "BOTTOMLEFT", 16, 12)
+    p.activeSizeContext:SetPoint("RIGHT", -16, 0)
+    p.activeSizeContext:SetJustifyH("LEFT")
 
-    p.optionScroll:ClearAllPoints(); p.optionScroll:SetPoint("TOPLEFT",0,-480); p.optionScroll:SetPoint("BOTTOMRIGHT",-22,0)
+    p.optionScroll:ClearAllPoints(); p.optionScroll:SetPoint("TOPLEFT",0,-540); p.optionScroll:SetPoint("BOTTOMRIGHT",-22,0)
     local oldRefresh=p.Refresh
     function p:Refresh()
         if p.basicShow and p.basicShow.control then p.basicShow.control:Refresh() end
@@ -2061,6 +2073,12 @@ function ZD:BuildFrames(parent)
         if p.basicStatusLight and p.basicStatusLight.control then p.basicStatusLight.control:Refresh() end
         if p.partySize and p.partySize.control then p.partySize.control:Refresh() end
         if p.raidSize and p.raidSize.control then p.raidSize.control:Refresh() end
+        if p.activeSizeContext then
+            local context = D.MicroUnitF and D.MicroUnitF.GetActiveMUFSizeContext and D.MicroUnitF:GetActiveMUFSizeContext() or "PARTY"
+            p.activeSizeContext:SetText(context == "RAID"
+                and "Currently active: Raid size"
+                or "Currently active: Party size (solo, open world, dungeon, or party)")
+        end
         if oldRefresh then oldRefresh(self) end
     end
     return p

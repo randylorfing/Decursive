@@ -243,15 +243,21 @@ function MicroUnitF:ApplyContextMUFScale()
     self.PendingContextMUFScale121 = nil
     D.profile.DebuffsFrameElemScale = scale
 
-    if self.Frame and self.SetScale then
-        self:SetScale(scale)
-    elseif D.MFContainer and D.MFContainer.SetScale then
-        D.MFContainer:SetScale(scale)
+    -- Apply to the canonical container directly. self.Frame is normally the
+    -- same object, but it is assigned later during initialization and could be
+    -- stale during profile/UI transitions. All secure MUFs and addon-owned
+    -- visual overlays inherit this container scale.
+    local container = D.MFContainer or self.Frame
+    if not container or not container.SetScale then
+        self.PendingContextMUFScale121 = true
+        return false
     end
-
-    if self.ResetAllPositions and D.DcrFullyInitialized then
-        self:ResetAllPositions()
-    end
+    self.Frame = container
+    -- Preserve upstream Decursive's sizing behavior: SetScale() scales the
+    -- MUF container and immediately calls Place() to keep the group on-screen.
+    -- The MUF anchors themselves do not need to be rebuilt just to resize the
+    -- container, and doing so here made slider changes appear delayed.
+    self:SetScale(scale)
     return true
 end
 
@@ -269,7 +275,7 @@ function MicroUnitF:SetContextMUFSizePixels(context, pixels)
     end
 
     if self:GetActiveMUFSizeContext() == context then
-        self:ApplyContextMUFScale()
+        return self:ApplyContextMUFScale()
     end
     return true
 end
@@ -279,21 +285,25 @@ function MicroUnitF:SetActiveContextMUFSizePixels(pixels)
 end
 
 
--- v11 alpha.17: treat each MUF as a complete visual cell.  The status light
--- is one quarter of the square size and sits above the MUF, so every vertical
--- row reserves enough room for it.  This keeps 30-40 player raid layouts from
--- stacking a status light into the square on the row above.
+-- v12.0.2: Dcr_DebuffsFrame.lua loads before Dcr_12_1.lua, so layout must not
+-- depend on D:Is121MUFStatusLightEnabled() already existing. Reading the
+-- profile value directly also guarantees that a disabled light uses upstream
+-- Decursive's exact MUF-size-plus-configured-spacing formula at first login,
+-- after /reload, and after party/raid context changes.
+function MicroUnitF:IsStatusLightLayoutEnabled()
+    return D.profile and D.profile.StatusLight121Enabled == true
+end
+
+-- When enabled, treat each MUF as a complete visual cell. The status light is
+-- one quarter of the square size and sits above the MUF, so each vertical row
+-- reserves enough room to prevent overlap with the square in the row above.
 function MicroUnitF:GetStatusLightSize()
-    if D.Is121MUFStatusLightEnabled and not D:Is121MUFStatusLightEnabled() then
-        return 0
-    end
+    if not self:IsStatusLightLayoutEnabled() then return 0 end
     return (DC.MFSIZE or 20) * 0.25
 end
 
 function MicroUnitF:GetStatusLightGap()
-    if D.Is121MUFStatusLightEnabled and not D:Is121MUFStatusLightEnabled() then
-        return 0
-    end
+    if not self:IsStatusLightLayoutEnabled() then return 0 end
     return math.max(1, (DC.MFSIZE or 20) * 0.075)
 end
 
@@ -302,7 +312,9 @@ function MicroUnitF:GetStatusLightReserve()
 end
 
 function MicroUnitF:GetVerticalCellStride()
-    return (DC.MFSIZE or 20) + (D.profile.DebuffsFrameYSpacing or 0) + self:GetStatusLightReserve()
+    local originalStride = (DC.MFSIZE or 20) + (D.profile.DebuffsFrameYSpacing or 0)
+    if not self:IsStatusLightLayoutEnabled() then return originalStride end
+    return originalStride + self:GetStatusLightReserve()
 end
 
 -- Raid auto-layout targets a compact grid of at most five rows.  In the

@@ -1,5 +1,23 @@
 # Zhaohu-Decursive Changelog
 
+## v12.0.3
+
+### Fixed MUF sizing controls
+- Restored upstream Decursive's live resize path: the active Party or Raid size now scales the canonical MUF container and immediately runs the original placement routine.
+- Removed an unnecessary full MUF position reset from simple size changes, preventing delayed or inconsistent-looking slider results.
+- Made the Party and Raid setters return their actual apply result so the modern settings window can report a failed live update instead of always claiming success.
+- Added a clear active-context label: Party size controls solo, open-world, dungeon, and party MUFs; Raid size becomes live while in a raid.
+- Removed duplicate auto-generated size controls from the lower Layout & Display list.
+- Fixed the Frame Basics and MUF Size cards overlapping, including the orphaned controls visible below the size card.
+
+## v12.0.2
+
+### Restored original MUF spacing when status lights are disabled
+- Matched upstream Decursive's original party/raid vertical stride whenever the status indicator is off: MUF size plus the configured Y spacing, with no status-light reserve.
+- Removed a load-order dependency that could reserve status-light space during initial MUF placement before the 12.1 status-light API was available.
+- Kept the added vertical reserve only while status lights are enabled, preventing the light from overlapping the MUF row above.
+- The toggle continues to reflow existing MUFs immediately and applies equally to party and raid layouts.
+
 ## v12.0.1
 
 ### DISPEL warning enabled by default

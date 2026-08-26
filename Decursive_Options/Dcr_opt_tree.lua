@@ -1471,7 +1471,7 @@ local function GetStaticOptions ()
                             DebuffsFramePartyPixelSize121 = {
                                 type = 'range',
                                 name = "Party MUF size (pixels)",
-                                desc = "Size of each Micro Unit Frame when you are not in a raid. This includes normal parties, dungeons, Mythic+, follower dungeons, open world, and solo play. Existing profiles initially inherit their current MUF size.",
+                                desc = "Size of each Micro Unit Frame when you are not in a raid. This includes normal parties, dungeons, Mythic+, follower dungeons, open world, and solo play. It applies immediately in those contexts; while in a raid it is saved for the next non-raid context.",
                                 min = 10,
                                 max = 80,
                                 step = 1,
@@ -1482,10 +1482,11 @@ local function GetStaticOptions ()
                                     return math.floor((D.profile.DebuffsFrameElemScale or 1) * (DC.MFSIZE or 20) + 0.5);
                                 end,
                                 set = function(info, value)
-                                    if D.Status.Combat then return end
+                                    if D.Status.Combat then return false end
                                     if D.MicroUnitF and D.MicroUnitF.SetContextMUFSizePixels then
-                                        D.MicroUnitF:SetContextMUFSizePixels("PARTY", value);
+                                        return D.MicroUnitF:SetContextMUFSizePixels("PARTY", value);
                                     end
+                                    return false;
                                 end,
                                 disabled = "disabled",
                                 order = 1780,
@@ -1493,7 +1494,7 @@ local function GetStaticOptions ()
                             DebuffsFrameRaidPixelSize121 = {
                                 type = 'range',
                                 name = "Raid MUF size (pixels)",
-                                desc = "Size of each Micro Unit Frame whenever WoW reports that you are in a raid. The addon switches between Party and Raid sizes automatically.",
+                                desc = "Size of each Micro Unit Frame whenever WoW reports that you are in a raid. It applies immediately in a raid; outside a raid it is saved and applies automatically the next time you join one.",
                                 min = 10,
                                 max = 80,
                                 step = 1,
@@ -1504,10 +1505,11 @@ local function GetStaticOptions ()
                                     return math.floor((D.profile.DebuffsFrameElemScale or 1) * (DC.MFSIZE or 20) + 0.5);
                                 end,
                                 set = function(info, value)
-                                    if D.Status.Combat then return end
+                                    if D.Status.Combat then return false end
                                     if D.MicroUnitF and D.MicroUnitF.SetContextMUFSizePixels then
-                                        D.MicroUnitF:SetContextMUFSizePixels("RAID", value);
+                                        return D.MicroUnitF:SetContextMUFSizePixels("RAID", value);
                                     end
+                                    return false;
                                 end,
                                 disabled = "disabled",
                                 order = 1785,
