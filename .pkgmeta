@@ -39,7 +39,13 @@ enable-nolib-creation: yes
 
 license-output: LICENSE.txt
 
-manual-changelog:
-    filename: Decursive/CHANGELOG.md
-    markup-type: markdown
+# manual-changelog removed: the packager resolves its file path once, before
+# move-folders runs, and never refreshes it -- after the self-referencing
+# Decursive/Decursive: Decursive move relocates everything, the cached path
+# points at a location that no longer exists, which broke the CurseForge
+# upload's JSON payload (empty changelog -> "Missing field `metadata`") and
+# the GitHub release creation entirely. DBM's .pkgmeta -- which has the same
+# self-referencing move-folders entry -- doesn't use manual-changelog either,
+# for the same reason. Falls back to the packager's own auto-generated
+# commit-based changelog instead.
 

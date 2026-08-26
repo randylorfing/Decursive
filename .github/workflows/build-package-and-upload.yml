@@ -26,12 +26,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Rename CHANGELOG.md
-        if: github.ref_type == 'branch'
-        run: |
-           mv -vf Decursive/CHANGELOG.md Decursive/CHANGELOG_.md
-           echo "file moved"
-
       - name: Run luacheck
         uses: BigWigsMods/actions/luacheck@master
         with:
