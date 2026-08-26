@@ -163,9 +163,9 @@ end
 -- Dedicated center-screen Alert warning instead of UIErrorsFrame -- that frame
 -- is shared with every other error message in the game. Uses the shared
 -- D:Show121AlertWarning banner (same frame as DISPEL opportunity alerts).
-local function showCenterAlert(message)
+local function showCenterAlert(message, bypassEnvironmentProfile)
     if D.Show121AlertWarning then
-        D:Show121AlertWarning(message)
+        D:Show121AlertWarning(message, nil, bypassEnvironmentProfile)
     end
 end
 
@@ -232,7 +232,7 @@ end)
 -- fixed placeholder name, so the rendering/styling can be verified on demand
 -- without needing to actually reproduce a dead-ally-out-of-range situation.
 function D:Test121SoulLinkAlert()
-    showCenterAlert("Battle rez: move within range of Test Target!")
+    showCenterAlert("Battle rez: move within range of Test Target!", true)
 end
 
 -----------------------------------------------------------------

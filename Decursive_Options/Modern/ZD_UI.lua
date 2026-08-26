@@ -31,25 +31,28 @@ local floor = math.floor
 local format = string.format
 local unpack = unpack
 
--- v12 Options skin — charcoal chrome with Decursive teal.
--- Intentionally different from the old teal-on-slate v11 card panel.
+-- v11.1 Options design system -- a calm midnight shell with bright, accessible
+-- Decursive cyan.  The combat backend is intentionally untouched; this file
+-- owns presentation and settings interaction only.
 local C = {
-    bg = { .08, .08, .08, .96 },
-    panel = { .12, .12, .12, 1 },
-    card = { .16, .16, .16, 1 },
-    element = { .18, .18, .18, 1 },
-    hover = { .22, .22, .22, 1 },
-    border = { .25, .25, .25, 1 },
-    text = { .90, .90, .90, 1 },
-    muted = { .58, .58, .58, 1 },
-    accent = { .18, .82, .72, 1 },       -- Decursive teal
-    accentDim = { .10, .42, .38, 1 },
-    accent2 = { .95, .55, .22, 1 },      -- warm secondary (raid-adjacent cue)
-    danger = { .95, .35, .35, 1 },
-    off = { .28, .28, .28, 1 },
-    navActive = { .14, .14, .14, 1 },
-    titleBar = { .10, .10, .10, 1 },
-    selected = { .12, .28, .26, 1 },
+    bg = { .035, .047, .070, .985 },
+    panel = { .052, .067, .098, 1 },
+    card = { .070, .090, .128, 1 },
+    element = { .090, .113, .155, 1 },
+    hover = { .115, .145, .195, 1 },
+    border = { .155, .195, .265, 1 },
+    text = { .935, .960, .985, 1 },
+    muted = { .535, .615, .715, 1 },
+    accent = { .170, .785, .885, 1 },
+    accentDim = { .060, .300, .370, 1 },
+    accent2 = { .565, .430, .965, 1 },
+    danger = { .955, .355, .405, 1 },
+    warning = { .965, .680, .260, 1 },
+    success = { .315, .865, .605, 1 },
+    off = { .180, .215, .275, 1 },
+    navActive = { .075, .160, .205, 1 },
+    titleBar = { .040, .055, .082, 1 },
+    selected = { .070, .205, .250, 1 },
 }
 
 local function setColor(texture, color)
@@ -87,14 +90,15 @@ local function button(parent, text, width, height, onClick, kind)
         fill = C.danger
         textColor = { 1, 1, 1, 1 }
     elseif kind == "primary" then
-        fill = C.accent
-        textColor = { .06, .10, .10, 1 }
+        fill = C.accentDim
+        textColor = C.text
     end
-    makeBackdrop(b, fill, C.border)
+    makeBackdrop(b, fill, kind == "primary" and C.accent or C.border)
     b.text = label(b, text, 11, textColor, "CENTER", 0, 0)
     b:SetScript("OnEnter", function(self)
         if kind == "primary" then
-            self:SetBackdropColor(C.accent[1] * 1.08, C.accent[2] * 1.08, C.accent[3] * 1.08, 1)
+            self:SetBackdropColor(C.accent[1] * .28, C.accent[2] * .28, C.accent[3] * .28, 1)
+            self:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 1)
         elseif kind == "danger" then
             self:SetBackdropBorderColor(1, 1, 1, .35)
         else
@@ -104,7 +108,8 @@ local function button(parent, text, width, height, onClick, kind)
     end)
     b:SetScript("OnLeave", function(self)
         self:SetBackdropColor(fill[1], fill[2], fill[3], fill[4] or 1)
-        self:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
+        local edge = kind == "primary" and C.accent or C.border
+        self:SetBackdropBorderColor(edge[1], edge[2], edge[3], 1)
     end)
     b:SetScript("OnClick", function()
         if onClick then onClick() end
@@ -119,6 +124,11 @@ local function section(parent, title, y, height)
     f:SetPoint("TOPRIGHT", 0, y)
     f:SetHeight(height)
     makeBackdrop(f, C.card, C.border)
+    local headerWash = f:CreateTexture(nil, "BACKGROUND")
+    headerWash:SetColorTexture(C.element[1], C.element[2], C.element[3], .45)
+    headerWash:SetPoint("TOPLEFT", 1, -1)
+    headerWash:SetPoint("TOPRIGHT", -1, -1)
+    headerWash:SetHeight(34)
     local accent = f:CreateTexture(nil, "ARTWORK")
     accent:SetColorTexture(C.accent[1], C.accent[2], C.accent[3], 1)
     accent:SetPoint("TOPLEFT", 0, 0)
@@ -609,7 +619,7 @@ end
 local function makeOptionScrollPage(parent)
     local p = pageFrame(parent)
     local scroll = CreateFrame("ScrollFrame", nil, p, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", 0, -62)
+    scroll:SetPoint("TOPLEFT", 0, -78)
     scroll:SetPoint("BOTTOMRIGHT", -22, 0)
     local canvas = CreateFrame("Frame", nil, scroll)
     canvas:SetWidth(650)
@@ -1089,7 +1099,7 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                     local function refresh() local ok2,key=invokeOption(getSpec,handler,info); b:SetLabel(ok2 and (key or "Not bound") or "Not bound") end
                     b:SetScript("OnClick",function(self)
                         if isDisabled or not ZD:CanConfigure() then return end
-                        self:SetLabel("Press a keyâ€¦"); self:EnableKeyboard(true); if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(false) end
+                        self:SetLabel("Press a key..."); self:EnableKeyboard(true); if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(false) end
                         self:SetScript("OnKeyDown",function(btn,key)
                             if key=="ESCAPE" then btn:EnableKeyboard(false); btn:SetScript("OnKeyDown",nil); refresh(); return end
                             if key=="LSHIFT" or key=="RSHIFT" or key=="LCTRL" or key=="RCTRL" or key=="LALT" or key=="RALT" then return end
@@ -1152,8 +1162,8 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
     p.activeTab = initialTab or (tabs and tabs[1] and tabs[1].key)
 
     local tabBar = CreateFrame("Frame", nil, p)
-    tabBar:SetPoint("TOPLEFT", 0, -62)
-    tabBar:SetPoint("TOPRIGHT", 0, -62)
+    tabBar:SetPoint("TOPLEFT", 0, -82)
+    tabBar:SetPoint("TOPRIGHT", 0, -82)
     tabBar:SetHeight(36)
     p.tabButtons = {}
 
@@ -1171,7 +1181,7 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
     end
 
     p.optionScroll:ClearAllPoints()
-    p.optionScroll:SetPoint("TOPLEFT", 0, -106)
+    p.optionScroll:SetPoint("TOPLEFT", 0, -124)
     p.optionScroll:SetPoint("BOTTOMRIGHT", -22, 0)
 
     local function activeSpec()
@@ -1243,7 +1253,7 @@ local SEARCH_PAGE_NAMES = {
     bindings = "Spells & Bindings",
     filtering = "Affliction Filters",
     livelist = "Live List",
-    messages = "Messages",
+    messages = "Messages & Alerts",
     macro = "Macro",
     profiles = "Profiles & Modes",
     sharing = "Import / Export",
@@ -1326,6 +1336,7 @@ local SEARCH_NATIVE_ENTRIES = {
         { "Reset Current", "profile defaults reset" },
         { "Environment Mode", "Automatic Open World Dungeon Follower Mythic+ Raid PvP provider profile" },
         { "Mode selection", "environment behavior override automatic" },
+        { "PvP on-screen text alerts", "disable DISPEL Soul Link center-screen profile text" },
     },
     sharing = {
         { "Generate Export", "profile share serialize copy" },
@@ -1499,7 +1510,7 @@ function ZD:UpdateSearchResults(query)
             row.title:SetText(result.label)
             local path = result.pageName
             if result.context and result.context ~= "" and result.context ~= "Page" and result.context ~= result.pageName then
-                path = path .. "  â€º  " .. result.context
+                path = path .. "  >  " .. result.context
             end
             row.path:SetText(path)
             row:Show()
@@ -1527,10 +1538,10 @@ function ZD:CreateUI()
     if self.frame then return self.frame end
 
     local f = CreateFrame("Frame", "ZhaohusDecursiveModernFrame", UIParent, "BackdropTemplate")
-    local savedW = D.profile and tonumber(D.profile.V11WindowWidth) or 900
-    local savedH = D.profile and tonumber(D.profile.V11WindowHeight) or 620
-    savedW = math.max(760, math.min(savedW or 900, 1400))
-    savedH = math.max(520, math.min(savedH or 620, 1000))
+    local savedW = D.profile and tonumber(D.profile.V11WindowWidth) or 1040
+    local savedH = D.profile and tonumber(D.profile.V11WindowHeight) or 760
+    savedW = math.max(900, math.min(savedW or 1040, 1600))
+    savedH = math.max(680, math.min(savedH or 760, 1100))
     f:SetSize(savedW, savedH)
     f:SetPoint("CENTER")
     f:SetFrameStrata("DIALOG")
@@ -1538,9 +1549,9 @@ function ZD:CreateUI()
     f:SetClampedToScreen(true)
     f:SetMovable(true)
     f:SetResizable(true)
-    if f.SetResizeBounds then f:SetResizeBounds(760, 520, 1400, 1000) else
-        if f.SetMinResize then f:SetMinResize(760,520) end
-        if f.SetMaxResize then f:SetMaxResize(1400,1000) end
+    if f.SetResizeBounds then f:SetResizeBounds(900, 680, 1600, 1100) else
+        if f.SetMinResize then f:SetMinResize(900,680) end
+        if f.SetMaxResize then f:SetMaxResize(1600,1100) end
     end
     f:EnableMouse(true)
     makeBackdrop(f, C.bg, C.border)
@@ -1555,11 +1566,12 @@ function ZD:CreateUI()
         if not registered then table.insert(UISpecialFrames, f:GetName()) end
     end
 
-    -- Slim DF-style title bar (not the old tall branded header).
+    -- Brand header.  This is ordinary, non-secure options chrome and never
+    -- parents or mutates the secure MUF/cure frames.
     local titleBar = CreateFrame("Frame", nil, f, "BackdropTemplate")
     titleBar:SetPoint("TOPLEFT", 0, 0)
     titleBar:SetPoint("TOPRIGHT", 0, 0)
-    titleBar:SetHeight(32)
+    titleBar:SetHeight(68)
     makeBackdrop(titleBar, C.titleBar, C.border)
     titleBar:EnableMouse(true)
     titleBar:RegisterForDrag("LeftButton")
@@ -1573,33 +1585,60 @@ function ZD:CreateUI()
     accentStrip:SetPoint("BOTTOMRIGHT", 0, 0)
     accentStrip:SetHeight(2)
 
-    titleBar.title = label(titleBar, "Zhaohu's Decursive", 14, C.accent, "LEFT", 14, 1)
-    titleBar.version = label(titleBar, tostring(self.version or ""), 11, C.muted, "LEFT", 0, 1)
-    titleBar.version:ClearAllPoints()
-    titleBar.version:SetPoint("LEFT", titleBar.title, "RIGHT", 10, 0)
+    local brand = CreateFrame("Frame", nil, titleBar, "BackdropTemplate")
+    brand:SetSize(42, 42)
+    brand:SetPoint("LEFT", 16, 0)
+    makeBackdrop(brand, C.selected, C.accent)
+    brand.icon = brand:CreateTexture(nil, "ARTWORK")
+    brand.icon:SetTexture("Interface\\AddOns\\Decursive\\iconON.tga")
+    brand.icon:SetPoint("TOPLEFT", 5, -5)
+    brand.icon:SetPoint("BOTTOMRIGHT", -5, 5)
+    titleBar.brand = brand
 
-    local close = button(titleBar, "X", 24, 22, function() f:Hide() end)
-    close:SetPoint("RIGHT", -8, 0)
+    titleBar.eyebrow = label(titleBar, "ZHAOHU   /   COMBAT UTILITY", 9, C.muted, "TOPLEFT", 72, -12)
+    titleBar.title = label(titleBar, "Decursive", 20, C.text, "TOPLEFT", 72, -26)
+    titleBar.subtitle = label(titleBar, "Detect. Cleanse. Protect.", 10, C.accent, "TOPLEFT", 176, -33)
+
+    local close = button(titleBar, "X", 28, 28, function() f:Hide() end)
+    close:SetPoint("RIGHT", -14, 0)
+
+    local versionPill = CreateFrame("Frame", nil, titleBar, "BackdropTemplate")
+    versionPill:SetSize(96, 24)
+    versionPill:SetPoint("RIGHT", close, "LEFT", -10, 0)
+    makeBackdrop(versionPill, C.element, C.border)
+    versionPill.text = label(versionPill, tostring(self.version or "v11.1"), 10, C.muted, "CENTER", 0, 0)
+    titleBar.versionPill = versionPill
+
+    local livePill = CreateFrame("Frame", nil, titleBar, "BackdropTemplate")
+    livePill:SetSize(112, 24)
+    livePill:SetPoint("RIGHT", versionPill, "LEFT", -8, 0)
+    makeBackdrop(livePill, C.element, C.border)
+    livePill.dot = livePill:CreateTexture(nil, "ARTWORK")
+    livePill.dot:SetSize(7, 7)
+    livePill.dot:SetPoint("LEFT", 10, 0)
+    livePill.text = label(livePill, "CORE READY", 9, C.text, "LEFT", 24, 0)
+    titleBar.livePill = livePill
 
     local toolbar = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    toolbar:SetPoint("TOPLEFT", 0, -32)
-    toolbar:SetPoint("TOPRIGHT", 0, -32)
-    toolbar:SetHeight(40)
+    toolbar:SetPoint("TOPLEFT", 0, -68)
+    toolbar:SetPoint("TOPRIGHT", 0, -68)
+    toolbar:SetHeight(50)
     makeBackdrop(toolbar, C.panel, C.border)
     f.toolbar = toolbar
-    toolbar.motto = label(toolbar, "Detect  ·  Cleanse  ·  Protect", 11, C.muted, "LEFT", 14, 0)
+    toolbar.context = label(toolbar, "", 10, C.muted, "RIGHT", -18, 0)
 
-    local searchBox = editBox(toolbar, 280, 26, false)
-    searchBox:SetPoint("RIGHT", -14, 0)
+    local searchBox = editBox(toolbar, 360, 30, false)
+    searchBox:SetPoint("LEFT", 16, 0)
     searchBox.edit:SetMaxLetters(80)
-    searchBox.placeholder = label(searchBox, "Search settings...", 11, C.muted, "LEFT", 10, 0)
+    searchBox.placeholder = label(searchBox, "Search every setting...", 11, C.muted, "LEFT", 12, 0)
     f.searchBox = searchBox
 
     local searchResults = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    searchResults:SetPoint("TOPRIGHT", searchBox, "BOTTOMRIGHT", 0, -4)
-    searchResults:SetWidth(420)
+    searchResults:SetPoint("TOPLEFT", searchBox, "BOTTOMLEFT", 0, -6)
+    searchResults:SetWidth(520)
     searchResults:SetHeight(10)
-    searchResults:SetFrameLevel(toolbar:GetFrameLevel() + 20)
+    searchResults:SetFrameStrata("TOOLTIP")
+    searchResults:SetFrameLevel(50)
     makeBackdrop(searchResults, C.panel, C.border)
     searchResults:Hide()
     searchResults.rows = {}
@@ -1657,24 +1696,28 @@ function ZD:CreateUI()
     end)
 
     local sidebar = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    sidebar:SetPoint("TOPLEFT", 0, -72)
+    sidebar:SetPoint("TOPLEFT", 0, -118)
     sidebar:SetPoint("BOTTOMLEFT", 0, 0)
-    sidebar:SetWidth(200)
+    sidebar:SetWidth(224)
     makeBackdrop(sidebar, C.panel, C.border)
     f.sidebar = sidebar
 
     local content = CreateFrame("Frame", nil, f)
-    content:SetPoint("TOPLEFT", sidebar, "TOPRIGHT", 20, -16)
-    content:SetPoint("BOTTOMRIGHT", -20, 40)
+    content:SetPoint("TOPLEFT", sidebar, "TOPRIGHT", 28, -22)
+    content:SetPoint("BOTTOMRIGHT", -28, 50)
     f.content = content
 
     local status = CreateFrame("Frame", nil, f, "BackdropTemplate")
     status:SetPoint("BOTTOMLEFT", sidebar, "BOTTOMRIGHT", 0, 0)
     status:SetPoint("BOTTOMRIGHT", 0, 0)
-    status:SetHeight(28)
+    status:SetHeight(34)
     makeBackdrop(status, C.titleBar, C.border)
-    status.text = label(status, "Ready", 11, C.muted, "LEFT", 14, 0)
-    status.combat = label(status, "", 11, C.danger, "RIGHT", -14, 0)
+    status.dot = status:CreateTexture(nil, "ARTWORK")
+    status.dot:SetSize(7, 7)
+    status.dot:SetPoint("LEFT", 16, 0)
+    status.dot:SetColorTexture(C.success[1], C.success[2], C.success[3], 1)
+    status.text = label(status, "Ready", 10, C.muted, "LEFT", 30, 0)
+    status.combat = label(status, "", 9, C.danger, "RIGHT", -18, 0)
     f.status = status
 
     self.pages = {}
@@ -1682,25 +1725,29 @@ function ZD:CreateUI()
 
     local navGroups = {
         { title = "OVERVIEW", items = {
-            { "dashboard", "Dashboard" }, { "general", "General" }, { "testmode", "Test Mode" },
+            { "dashboard", "Dashboard", "DB" }, { "general", "General", "GN" },
+            { "testmode", "Test Lab", "TL" },
         }},
-        { title = "CURING", items = {
-            { "curing", "Curing" }, { "bleeds", "Bleed Management" },
-            { "bindings", "Spells & Bindings" }, { "filtering", "Affliction Filters" },
-            { "lists", "Priority & Skip" },
+        { title = "CORE SETUP", items = {
+            { "curing", "Curing", "CU" }, { "bindings", "Spells & Bindings", "SB" },
+            { "lists", "Priority & Skip", "PS" },
         }},
-        { title = "DISPLAY", items = {
-            { "frames", "Micro Unit Frames" }, { "cooldowns", "Cooldowns" },
-            { "range", "Range & Visibility" }, { "livelist", "Live List" },
+        { title = "VISUALS & ALERTS", items = {
+            { "frames", "Micro Unit Frames", "MF" }, { "cooldowns", "Cooldowns", "CD" },
+            { "range", "Range & Visibility", "RV" }, { "livelist", "Live List", "LL" },
+            { "messages", "Messages & Alerts", "MA" }, { "sounds", "Sound Notifications", "SN" },
         }},
-        { title = "PROFILES", items = {
-            { "profiles", "Profiles & Modes" }, { "sharing", "Import / Export" },
-            { "integrations", "Detection" },
+        { title = "AFFLICTIONS", items = {
+            { "filtering", "Affliction Filters", "AF" }, { "bleeds", "Bleed Management", "BL" },
+            { "integrations", "Detection", "DE" }, { "dispeldb", "Dispel Database", "DD" },
         }},
-        { title = "SYSTEM", items = {
-            { "sounds", "Sound Notifications" }, { "messages", "Messages" }, { "macro", "Macro" },
-            { "compat121", "12.1 Status" }, { "diagnostics", "Diagnostics" },
-            { "dispeldb", "Dispel Database" }, { "about", "About" },
+        { title = "PROFILES & TOOLS", items = {
+            { "profiles", "Profiles & Modes", "PM" }, { "sharing", "Import / Export", "IE" },
+            { "macro", "Macro", "MC" },
+        }},
+        { title = "SUPPORT", items = {
+            { "compat121", "12.1 Status", "12" }, { "diagnostics", "Diagnostics", "DX" },
+            { "about", "About", "AB" },
         }},
     }
     self.navNames = {}
@@ -1708,23 +1755,23 @@ function ZD:CreateUI()
     self:BuildSearchIndex(true)
 
     local navScroll = CreateFrame("ScrollFrame", nil, sidebar, "UIPanelScrollFrameTemplate")
-    navScroll:SetPoint("TOPLEFT", 4, -6)
-    navScroll:SetPoint("BOTTOMRIGHT", -26, 6)
+    navScroll:SetPoint("TOPLEFT", 4, -10)
+    navScroll:SetPoint("BOTTOMRIGHT", -26, 48)
     local navChild = CreateFrame("Frame", nil, navScroll)
-    navChild:SetWidth(160)
-    navChild:SetHeight(760)
+    navChild:SetWidth(190)
+    navChild:SetHeight(900)
     navScroll:SetScrollChild(navChild)
     f.navScroll = navScroll
 
     local y = -4
     for _, group in ipairs(navGroups) do
-        local head = label(navChild, group.title, 9, C.muted, "TOPLEFT", 10, y)
-        head:SetWidth(148); head:SetJustifyH("LEFT")
-        y = y - 18
+        local head = label(navChild, group.title, 9, C.muted, "TOPLEFT", 12, y)
+        head:SetWidth(176); head:SetJustifyH("LEFT")
+        y = y - 22
         for _, item in ipairs(group.items) do
-            local key, name = item[1], item[2]
+            local key, name, short = item[1], item[2], item[3]
             local b = CreateFrame("Button", nil, navChild, "BackdropTemplate")
-            b:SetSize(156, 24)
+            b:SetSize(188, 30)
             b:SetPoint("TOPLEFT", 4, y)
             makeBackdrop(b, C.panel, C.panel)
             b._pageKey = key
@@ -1734,7 +1781,12 @@ function ZD:CreateUI()
             b.accent:SetPoint("BOTTOMLEFT", 0, 0)
             b.accent:SetWidth(3)
             b.accent:Hide()
-            b.text = label(b, name, 11, C.text, "LEFT", 12, 0)
+            b.badge = CreateFrame("Frame", nil, b, "BackdropTemplate")
+            b.badge:SetSize(22, 22)
+            b.badge:SetPoint("LEFT", 8, 0)
+            makeBackdrop(b.badge, C.element, C.border)
+            b.badge.text = label(b.badge, short or "", 8, C.muted, "CENTER", 0, 0)
+            b.text = label(b, name, 11, C.text, "LEFT", 40, 0)
             b.text:SetJustifyH("LEFT")
             b:SetScript("OnEnter", function(btn)
                 if ZD.currentPage ~= btn._pageKey then
@@ -1753,11 +1805,20 @@ function ZD:CreateUI()
             end)
             b:SetScript("OnClick", function(btn) self:ShowPage(btn._pageKey) end)
             self.navButtons[key] = b
-            y = y - 26
+            y = y - 32
         end
-        y = y - 8
+        y = y - 10
     end
-    navChild:SetHeight(math.max(720, -y + 10))
+    navChild:SetHeight(math.max(820, -y + 12))
+
+    local sidebarFooter = CreateFrame("Frame", nil, sidebar, "BackdropTemplate")
+    sidebarFooter:SetPoint("BOTTOMLEFT", 0, 0)
+    sidebarFooter:SetPoint("BOTTOMRIGHT", 0, 0)
+    sidebarFooter:SetHeight(44)
+    makeBackdrop(sidebarFooter, C.titleBar, C.border)
+    sidebarFooter.title = label(sidebarFooter, "12.1 SAFE MODE", 9, C.accent, "TOPLEFT", 14, -9)
+    sidebarFooter.detail = label(sidebarFooter, "Blizzard-managed auras", 9, C.muted, "TOPLEFT", 14, -23)
+    f.sidebarFooter = sidebarFooter
 
     local grip = CreateFrame("Button", nil, f)
     grip:SetSize(18,18); grip:SetPoint("BOTTOMRIGHT", -2, 2)
@@ -1795,83 +1856,142 @@ function ZD:SetNavActive(key)
                 b.accent:Show()
             end
             if b.text then b.text:SetTextColor(C.accent[1], C.accent[2], C.accent[3], 1) end
+            if b.badge then
+                b.badge:SetBackdropColor(C.accentDim[1], C.accentDim[2], C.accentDim[3], 1)
+                b.badge:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], .8)
+                if b.badge.text then b.badge.text:SetTextColor(C.text[1], C.text[2], C.text[3], 1) end
+            end
         else
             b:SetBackdropColor(C.panel[1], C.panel[2], C.panel[3], 1)
             b:SetBackdropBorderColor(C.panel[1], C.panel[2], C.panel[3], 1)
             if b.accent then b.accent:Hide() end
             if b.text then b.text:SetTextColor(C.text[1], C.text[2], C.text[3], 1) end
+            if b.badge then
+                b.badge:SetBackdropColor(C.element[1], C.element[2], C.element[3], 1)
+                b.badge:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
+                if b.badge.text then b.badge.text:SetTextColor(C.muted[1], C.muted[2], C.muted[3], 1) end
+            end
         end
     end
 end
 
 function ZD:PageTitle(page, title, subtitle)
-    page.pageTitle = label(page, title, 18, C.text, "TOPLEFT", 0, 0)
+    page.pageEyebrow = label(page, "DECURSIVE SETTINGS", 9, C.accent, "TOPLEFT", 0, 0)
+    page.pageTitle = label(page, title, 22, C.text, "TOPLEFT", 0, -13)
     local rule = page:CreateTexture(nil, "ARTWORK")
     rule:SetColorTexture(C.accent[1], C.accent[2], C.accent[3], 1)
-    rule:SetPoint("TOPLEFT", 0, -24)
-    rule:SetSize(48, 2)
-    page.pageSubtitle = label(page, subtitle or "", 11, C.muted, "TOPLEFT", 0, -34)
+    rule:SetPoint("TOPLEFT", 0, -45)
+    rule:SetSize(56, 2)
+    page.pageSubtitle = label(page, subtitle or "", 11, C.muted, "TOPLEFT", 0, -55)
     page.pageSubtitle:SetPoint("RIGHT", 0, 0)
     page.pageSubtitle:SetJustifyH("LEFT")
 end
 
 function ZD:BuildDashboard(parent)
     local p = pageFrame(parent)
-    self:PageTitle(p, "Dashboard", "Lean combat core + on-demand settings. One panel for the full cure assistant.")
+    self:PageTitle(p, "Dashboard", "Live context, high-value actions, and the health of your dispel setup at a glance.")
+
+    local hero = section(p, "CURRENT SESSION", -82, 100)
+    hero.dot = hero:CreateTexture(nil, "ARTWORK")
+    hero.dot:SetSize(10, 10)
+    hero.dot:SetPoint("TOPLEFT", 18, -49)
+    hero.titleText = label(hero, "Protection core ready", 17, C.text, "TOPLEFT", 38, -40)
+    hero.detail = label(hero, "Managed aura detection is active.", 10, C.muted, "TOPLEFT", 39, -65)
+    hero.detail:SetPoint("RIGHT", -300, 0)
+    hero.detail:SetJustifyH("LEFT")
+
+    local testAlert = button(hero, "Test DISPEL Alert", 142, 30, function()
+        local shown = D.Test121DispelAlertWarning and D:Test121DispelAlertWarning()
+        if shown then
+            local duration = D.Get121DispelAlertDuration and D:Get121DispelAlertDuration() or 2
+            ZD:SetStatus(("DISPEL preview shown for %.1f seconds."):format(duration))
+        else
+            ZD:SetStatus("DISPEL preview is unavailable.", true)
+        end
+    end, "primary")
+    testAlert:SetPoint("TOPRIGHT", -16, -48)
+    local openAlerts = button(hero, "Alert Settings", 116, 30, function() ZD:ShowPage("messages") end)
+    openAlerts:SetPoint("RIGHT", testAlert, "LEFT", -8, 0)
 
     local cards = {}
-    local cardW = 205
     for i = 1, 3 do
         local c = CreateFrame("Frame", nil, p, "BackdropTemplate")
-        c:SetSize(cardW, 96)
-        c:SetPoint("TOPLEFT", (i - 1) * (cardW + 12), -72)
+        c:SetSize(190, 88)
         makeBackdrop(c, C.card, C.border)
         local strip = c:CreateTexture(nil, "ARTWORK")
         strip:SetColorTexture(C.accent[1], C.accent[2], C.accent[3], 1)
         strip:SetPoint("TOPLEFT", 0, 0)
         strip:SetPoint("TOPRIGHT", 0, 0)
         strip:SetHeight(2)
-        c.caption = label(c, "", 10, C.muted, "TOPLEFT", 14, -14)
-        c.value = label(c, "", 15, C.text, "TOPLEFT", 14, -36)
-        c.detail = label(c, "", 10, C.muted, "TOPLEFT", 14, -62)
+        c.caption = label(c, "", 9, C.muted, "TOPLEFT", 14, -13)
+        c.value = label(c, "", 15, C.text, "TOPLEFT", 14, -32)
+        c.value:SetPoint("RIGHT", -12, 0)
+        c.value:SetJustifyH("LEFT")
+        c.detail = label(c, "", 10, C.muted, "TOPLEFT", 14, -59)
+        c.detail:SetPoint("RIGHT", -12, 0)
+        c.detail:SetJustifyH("LEFT")
         cards[i] = c
     end
     p.cards = cards
 
-    local architecture = section(p, "How this build works", -186, 150)
+    local function layoutCards()
+        local available = p:GetWidth()
+        if not available or available < 300 then return end
+        local gap = 10
+        local cardW = math.floor((available - (gap * 2)) / 3)
+        for i, c in ipairs(cards) do
+            c:ClearAllPoints()
+            c:SetSize(cardW, 88)
+            c:SetPoint("TOPLEFT", (i - 1) * (cardW + gap), -196)
+        end
+    end
+    p:SetScript("OnSizeChanged", layoutCards)
+    if C_Timer and C_Timer.After then C_Timer.After(0, layoutCards) end
+
+    local architecture = section(p, "BUILT FOR WOW 12.1", -298, 100)
     local lines = {
-        "• Combat path stays resident: Blizzard-managed AuraContainers, secure MUFs, profiles.",
-        "• Decursive uses native Blizzard-managed AuraContainers only for dispel detection.",
-        "• Decursive_Options loads only when you open settings.",
-        "• User profiles (AceDB) and environment modes (Open World / M+ / Raid…) stay separate.",
+        "Blizzard-managed AuraContainers are the source of truth for dispel presence.",
+        "Secure MUF clicks remain resident; this settings addon loads only when requested.",
+        "No protected aura details are enumerated and no secure frames are changed in combat.",
     }
     for i, text in ipairs(lines) do
-        label(architecture, text, 11, i == 1 and C.accent or C.text, "TOPLEFT", 18, -38 - ((i - 1) * 24))
+        local dot = architecture:CreateTexture(nil, "ARTWORK")
+        dot:SetSize(5, 5)
+        dot:SetPoint("TOPLEFT", 19, -42 - ((i - 1) * 19))
+        dot:SetColorTexture(C.accent[1], C.accent[2], C.accent[3], i == 1 and 1 or .55)
+        local line = label(architecture, text, 10, i == 1 and C.text or C.muted, "TOPLEFT", 34, -36 - ((i - 1) * 19))
+        line:SetPoint("RIGHT", -18, 0)
+        line:SetJustifyH("LEFT")
     end
 
-    local actions = section(p, "Quick Actions", -374, 118)
-    local b1 = button(actions, "Open Test Mode", 150, 30, function()
-        ZD:ShowPage("testmode")
-    end, "primary")
-    b1:SetPoint("TOPLEFT", 18, -48)
-    local b2 = button(actions, "Profiles & Modes", 160, 30, function() ZD:ShowPage("profiles") end)
-    b2:SetPoint("LEFT", b1, "RIGHT", 12, 0)
-    local b3 = button(actions, "All MUF Settings", 170, 30, function() ZD:ShowPage("frames") end)
-    b3:SetPoint("LEFT", b2, "RIGHT", 12, 0)
+    local actions = section(p, "QUICK ACTIONS", -412, 90)
+    local b1 = button(actions, "Open Test Lab", 140, 30, function() ZD:ShowPage("testmode") end, "primary")
+    b1:SetPoint("TOPLEFT", 18, -47)
+    local b2 = button(actions, "Profiles & Modes", 150, 30, function() ZD:ShowPage("profiles") end)
+    b2:SetPoint("LEFT", b1, "RIGHT", 10, 0)
+    local b3 = button(actions, "MUF Settings", 130, 30, function() ZD:ShowPage("frames") end)
+    b3:SetPoint("LEFT", b2, "RIGHT", 10, 0)
+    local b4 = button(actions, "Run Diagnostics", 140, 30, function() ZD:ShowPage("diagnostics") end)
+    b4:SetPoint("LEFT", b3, "RIGHT", 10, 0)
 
     function p:Refresh()
         local profile = ZD:GetUserProfileName()
         local envKey, envName = ZD:GetActiveEnvironment()
         local className, specName = ZD:GetPlayerClassSpec()
+        local enabled = not D.IsEnabled or D:IsEnabled()
+        hero.dot:SetColorTexture(unpack(enabled and C.success or C.danger))
+        hero.titleText:SetText(enabled and "Protection core ready" or "Decursive is paused")
+        hero.detail:SetText(enabled and "Blizzard-managed detection and secure cure clicks are available." or "Enable Decursive from General to resume cure assistance.")
         cards[1].caption:SetText("USER PROFILE")
         cards[1].value:SetText(profile)
-        cards[1].detail:SetText("AceDB character setup")
+        cards[1].detail:SetText("Character settings")
         cards[2].caption:SetText("ENVIRONMENT")
         cards[2].value:SetText(envName or envKey)
         cards[2].detail:SetText(ZD:GetEnvironmentSetting() == "AUTO" and "Automatic detection" or "Manual override")
         cards[3].caption:SetText("CHARACTER")
         cards[3].value:SetText(specName)
-        cards[3].detail:SetText(className .. " • managed aura mode")
+        cards[3].detail:SetText(className .. " / managed auras")
+        layoutCards()
     end
     p:Refresh()
     return p
@@ -1882,7 +2002,7 @@ function ZD:BuildFrames(parent)
         Environment121Mode=true, Environment121ActiveProfile=true, Detection121Mode=true,
         SecondaryAffliction121Enabled=true, SecondaryAffliction121Pulse=true,
         SharedPriorityCooldown121Enabled=true, ClearCleansedTarget121Enabled=true,
-        EnvironmentChat121Enabled=true, ProfileBehaviorHint121=true, ResetEnvironment121Profile=true,
+        TextAlerts121Enabled=true, EnvironmentChat121Enabled=true, ProfileBehaviorHint121=true, ResetEnvironment121Profile=true,
         OutOfRange121Enabled=true, OutOfRange121DimAmount=true, OutOfRange121Color=true,
         ResetOutOfRange121Color=true, CooldownOverlay121Enabled=true, CooldownOverlay121Opacity=true,
         CooldownOverlay121Numbers=true, CooldownPriority2Border121Enabled=true,
@@ -1998,7 +2118,7 @@ end
 
 function ZD:BuildRangeVisibility(parent)
     local p=pageFrame(parent)
-    self:PageTitle(p,"Range & Visibility","Range is continuously evaluated when public. Line of sight is marked only after your cleanse fails for LoS.")
+    self:PageTitle(p,"Range & Visibility","Range is evaluated only inside dungeons, raids, battlegrounds, and arenas. Line of sight is marked only after your cleanse fails for LoS.")
     local envCycleValues=function()
         local out={}
         for _,key in ipairs(ZD.environmentOrder) do out[#out+1]={key=key,name=ZD.environmentNames[key]} end
@@ -2010,7 +2130,7 @@ function ZD:BuildRangeVisibility(parent)
     p.rangeEnabled=switch(range,"Dim out-of-range units",-42,
         function() local e=ZD:GetEnvironmentProfile(); return e and e.OutOfRange121Enabled~=false end,
         function(v) ZD:SetEnvironmentValue(ZD:GetEditEnvironment(),"OutOfRange121Enabled",v) end,
-        "Uses your configured friendly cure spells when their range result is publicly accessible.")
+        "Instance-only. Uses your configured friendly cure spells when their range result is publicly accessible.")
     p.rangeDim=slider(range,"Range overlay opacity",-104,.10,1,.05,
         function() local e=ZD:GetEnvironmentProfile(); return e and e.OutOfRange121DimAmount or .60 end,
         function(v) ZD:SetEnvironmentValue(ZD:GetEditEnvironment(),"OutOfRange121DimAmount",v) end,nil,true)
@@ -2085,7 +2205,7 @@ function ZD:BuildProfiles(parent)
             { key = "PVP", name = "PvP" },
         }
     end
-    local behavior = section(p, "Environment Mode", -388, 176)
+    local behavior = section(p, "Environment Mode", -388, 226)
     p.modeCycle = cycleButton(behavior, "Mode selection", -46, modeValues,
         function() return ZD:GetEnvironmentSetting() end,
         function(key) ZD:SetEnvironmentSetting(key) end)
@@ -2095,10 +2215,18 @@ function ZD:BuildProfiles(parent)
     p.activeText = label(behavior, "", 12, C.accent, "TOPLEFT", 18, -96)
     p.modeHelp = label(behavior, "", 10, C.muted, "TOPLEFT", 18, -122)
     p.modeHelp:SetWidth(600)
+    p.pvpTextAlerts = switch(behavior, "PvP on-screen text alerts", -154,
+        function()
+            local env = ZD:GetEnvironmentProfile("PVP")
+            return env and env.TextAlerts121Enabled ~= false
+        end,
+        function(value) ZD:SetEnvironmentValue("PVP", "TextAlerts121Enabled", value) end,
+        "Off by default. Controls DISPEL and Soul Link text in PvP; sound and MUF indicators remain active.")
 
     function p:Refresh()
         p.profileCycle.control:Refresh()
         p.modeCycle.control:Refresh()
+        p.pvpTextAlerts.control:Refresh()
         local _, envName = ZD:GetActiveEnvironment()
         p.activeText:SetText("Currently active: " .. tostring(envName))
         p.modeHelp:SetText("Automatic mode distinguishes Open World, normal/follower dungeons, Mythic+, Raid and PvP without changing your user profile.")
@@ -2283,7 +2411,7 @@ function ZD:BuildBindings(parent)
     local p = makeOptionScrollPage(parent)
     self:PageTitle(p, "Spells & Mouse Bindings", "Configure cure spells and secure MUF mouse assignments without leaving the v11 interface.")
     p.optionScroll:ClearAllPoints()
-    p.optionScroll:SetPoint("TOPLEFT", 0, -62)
+    p.optionScroll:SetPoint("TOPLEFT", 0, -78)
     p.optionScroll:SetPoint("BOTTOMRIGHT", -22, 0)
     p.expandedSpellID = nil
 
@@ -2406,7 +2534,7 @@ function ZD:BuildBindings(parent)
         function b:Refresh()
             local on = getter and getter() and true or false
             self.on = on
-            self:SetLabel((on and "âœ“  " or "â—‹  ") .. text)
+            self:SetLabel((on and "[x]  " or "[ ]  ") .. text)
             if on then
                 self:SetBackdropColor(C.accent[1] * .45, C.accent[2] * .45, C.accent[3] * .45, 1)
                 self:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 1)
@@ -2444,7 +2572,7 @@ function ZD:BuildBindings(parent)
                     end
                 end
                 local click = D.db and D.db.global and D.db.global.MouseButtons and mouseReadable(D.db.global.MouseButtons[prio]) or "Unassigned"
-                lines[#lines + 1] = format("Priority %d  â€¢  %s  â€¢  %s  â†’  %s", prio, table.concat(types, " / "), click, spellName)
+                lines[#lines + 1] = format("Priority %d  -  %s  -  %s  ->  %s", prio, table.concat(types, " / "), click, spellName)
             end
         end
         if #lines == 0 then lines[1] = "No active cure assignments are currently available for this class/spec." end
@@ -2643,7 +2771,7 @@ function ZD:BuildBindings(parent)
             if spellData.IsItem then tagParts[#tagParts + 1] = "Item" end
             if spellData.IsDefault then tagParts[#tagParts + 1] = "Built-in" else tagParts[#tagParts + 1] = "Custom" end
             if spellData.Pet then tagParts[#tagParts + 1] = "Pet" end
-            label(card, table.concat(tagParts, "  â€¢  "), 9, C.muted, "TOPLEFT", 16, -36)
+            label(card, table.concat(tagParts, "  -  "), 9, C.muted, "TOPLEFT", 16, -36)
 
             local configure = button(card, expanded and "Collapse" or "Configure", 92, 28, function()
                 p.expandedSpellID = expanded and nil or spellID
@@ -2731,7 +2859,7 @@ function ZD:BuildBindings(parent)
 
                 local deleteOpt = spellGroup.args.delete
                 local remove = button(card, spellData.IsDefault and "Disable / Hide Built-in" or "Remove Spell", spellData.IsDefault and 168 or 120, 28, function()
-                    local text = spellData.IsDefault and ("Hide the built-in spell â€œ" .. name .. "â€ from Decursive?") or ("Remove â€œ" .. name .. "â€ from Decursive?")
+                    local text = spellData.IsDefault and ("Hide the built-in spell '" .. name .. "' from Decursive?") or ("Remove '" .. name .. "' from Decursive?")
                     showConfirm(text, function()
                         if deleteOpt and runExecute(model, group, deleteOpt, { "CustomSpells", "CustomSpellsHolder", tostring(spellID), "delete" }) then
                             p.expandedSpellID = nil
@@ -2935,7 +3063,7 @@ function ZD:BuildDispelDB(parent)
                 if n and n > 0 then typeParts[#typeParts+1] = k .. ":" .. n end
             end
             local typeText = #typeParts > 0 and table.concat(typeParts, "  ") or "no entries yet"
-            line:SetText(("%s  â€”  %d total / %d friendly / %d enemy  [%s]   %s"):format(row.key, st.total or 0, st.friendly or 0, st.hostile or 0, st.coverage or "unknown", typeText))
+            line:SetText(("%s  -  %d total / %d friendly / %d enemy  [%s]   %s"):format(row.key, st.total or 0, st.friendly or 0, st.hostile or 0, st.coverage or "unknown", typeText))
             if (st.total or 0) > 0 then line:SetTextColor(unpack(C.text)) else line:SetTextColor(unpack(C.muted)) end
             y = y - 34
         end
@@ -2977,20 +3105,20 @@ function ZD:BuildSounds(parent)
 
     local function soundValues()
         return {
-            { key="FEMALE_DISPEL", name="Female Voice â€” Dispel" },
-            { key="FEMALE_DISPEL_ME", name="Female Voice â€” Dispel me" },
-            { key="FEMALE_CLEANSE", name="Female Voice â€” Cleanse" },
-            { key="FEMALE_CLEANSE_ME", name="Female Voice â€” Cleanse me" },
-            { key="AFFLICTION", name="Tone â€” Affliction Alert" },
-            { key="QUICK", name="Tone â€” Quick Pulse" },
-            { key="BRIGHT_PING", name="Tone â€” Bright Ping" },
-            { key="DOUBLE_PING", name="Tone â€” Double Ping" },
-            { key="TRIPLE_PING", name="Tone â€” Triple Ping" },
-            { key="HIGH_CHIME", name="Tone â€” High Chime" },
-            { key="LOW_CHIME", name="Tone â€” Low Chime" },
-            { key="PULSE_UP", name="Tone â€” Rising Pulse" },
-            { key="PULSE_DOWN", name="Tone â€” Falling Pulse" },
-            { key="FAILURE", name="Tone â€” Short Alert" },
+            { key="FEMALE_DISPEL", name="Female Voice - Dispel" },
+            { key="FEMALE_DISPEL_ME", name="Female Voice - Dispel me" },
+            { key="FEMALE_CLEANSE", name="Female Voice - Cleanse" },
+            { key="FEMALE_CLEANSE_ME", name="Female Voice - Cleanse me" },
+            { key="AFFLICTION", name="Tone - Affliction Alert" },
+            { key="QUICK", name="Tone - Quick Pulse" },
+            { key="BRIGHT_PING", name="Tone - Bright Ping" },
+            { key="DOUBLE_PING", name="Tone - Double Ping" },
+            { key="TRIPLE_PING", name="Tone - Triple Ping" },
+            { key="HIGH_CHIME", name="Tone - High Chime" },
+            { key="LOW_CHIME", name="Tone - Low Chime" },
+            { key="PULSE_UP", name="Tone - Rising Pulse" },
+            { key="PULSE_DOWN", name="Tone - Falling Pulse" },
+            { key="FAILURE", name="Tone - Short Alert" },
         }
     end
 
@@ -3011,7 +3139,7 @@ function ZD:BuildSounds(parent)
             if D.profile then D.profile.PlaySound = v and true or false end
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("sound enable changed") end
         end,
-        "For known dispellable Spell IDs, Blizzard plays the selected sound when the aura is applied to an assigned group unit.")
+        "Registers the selected sound with Blizzard for protected DispelDB and learned aura IDs assigned to Decursive MUFs.")
 
     p.soundChoice = cycleButton(alerts, "Dispel alert sound", -112, soundValues,
         function() return (D.profile and D.profile.SoundNotificationPreset) or "FEMALE_DISPEL" end,
@@ -3046,9 +3174,9 @@ function ZD:BuildSounds(parent)
     end, "primary")
     test:SetPoint("BOTTOMLEFT", 18, 14)
 
-    local behavior = section(p, "Square Trigger", -316, 178)
+    local behavior = section(p, "Native Aura Trigger", -316, 178)
     local rule = label(behavior,
-        "12.1 engine: known dispellable Spell ID applied â†’ Blizzard plays the selected alert.\nThe protected red/blue square remains independently managed by Blizzard.",
+        "12.1 engine: public DispelDB/learned IDs -> Blizzard AddAuraSound.\nBlizzard owns protected detection and playback; Decursive reads no aura details.",
         12, C.text, "TOPLEFT", 18, -42)
     rule:SetPoint("RIGHT", -18, 0)
     rule:SetJustifyH("LEFT")
@@ -3070,7 +3198,7 @@ function ZD:BuildSounds(parent)
         if p.failureSound and p.failureSound.control and p.failureSound.control.Refresh then p.failureSound.control:Refresh() end
         local active = D.Is121MUFStateSoundEngineAvailable and D:Is121MUFStateSoundEngineAvailable()
         if active then
-            p.triggerState:SetText("Trigger engine: Active â€” MUF-linked affliction monitoring")
+            p.triggerState:SetText("Trigger engine: Active - Blizzard native aura sound")
             p.triggerState:SetTextColor(unpack(C.accent))
         else
             p.triggerState:SetText("Trigger engine: Waiting for MUFs / initialization")
@@ -3094,7 +3222,7 @@ function ZD:BuildLiveList(parent)
 end
 
 function ZD:BuildMessages(parent)
-    return self:BuildOptionGroupPage(parent, "MessageOptions", "Messages", "Notifications (chat / custom text) vs Alert warnings (Soul Link battle-rez banner).")
+    return self:BuildOptionGroupPage(parent, "MessageOptions", "Messages & Alerts", "Chat notifications, custom text, DISPEL warnings, and the Soul Link battle-rez banner.")
 end
 
 function ZD:BuildMacro(parent)
@@ -3184,6 +3312,23 @@ function ZD:RefreshUI()
         self.frame.status.text:SetTextColor(unpack(color))
         self.frame.status.text:SetText(self.lastStatus or "Ready")
         self.frame.status.combat:SetText(InCombatLockdown() and "COMBAT LOCKED" or "")
+        if self.frame.status.dot then
+            local dotColor = self.lastStatusError and C.danger or C.success
+            self.frame.status.dot:SetColorTexture(dotColor[1], dotColor[2], dotColor[3], 1)
+        end
+    end
+    if self.frame.titleBar and self.frame.titleBar.livePill then
+        local active = not D.IsEnabled or D:IsEnabled()
+        local inCombat = InCombatLockdown and InCombatLockdown()
+        local pill = self.frame.titleBar.livePill
+        local stateColor = (not active and C.danger) or (inCombat and C.warning) or C.success
+        pill.dot:SetColorTexture(stateColor[1], stateColor[2], stateColor[3], 1)
+        pill.text:SetText((not active and "CORE PAUSED") or (inCombat and "COMBAT SAFE") or "CORE READY")
+        pill:SetBackdropBorderColor(stateColor[1], stateColor[2], stateColor[3], .55)
+    end
+    if self.frame.toolbar and self.frame.toolbar.context then
+        local _, envName = self:GetActiveEnvironment()
+        self.frame.toolbar.context:SetText((self:GetUserProfileName() or "Default") .. "   /   " .. (envName or "Open World"))
     end
     if self.currentPageFrame and self.currentPageFrame.Refresh then
         self.currentPageFrame:Refresh()

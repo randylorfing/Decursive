@@ -40,7 +40,4 @@ D:RegisterDispelDBExpansion("Legion", {
 
     -- Black Rook Hold
     { id=200084, name="Soul Blade", cureType="MAGIC", target="friendly", content="Black Rook Hold", alert=true, source="LittleWigs" },
-
-    -- Timewalking/legacy variant retained from prior database
-    { id=270499, name="Frost Shock (timewalking variant)", cureType="MAGIC", target="friendly", content="Legacy/Timewalking", alert=true },
 })

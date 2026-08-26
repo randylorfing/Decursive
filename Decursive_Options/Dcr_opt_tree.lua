@@ -482,13 +482,18 @@ local function GetStaticOptions ()
                 args = {
                     intro = {
                         type = "description",
-                        name = "Sound alerts are linked to the same player-dispellable condition that lights a Decursive MUF. Only units currently assigned to a Decursive square are tracked. When that MUF unit changes from clean to player-dispellable, Decursive requests the selected sound through the shared burst-ignore window. Protected aura names, spell IDs and managed-button visibility are never read.",
+                        name = "For WoW 12.1 protected auras, Decursive registers public DispelDB and learned spell IDs for the units assigned to its MUFs. Blizzard detects the protected application and plays the selected sound natively. Decursive never reads managed-button visibility or protected aura details.",
                         order = 1,
                     },
                     PlaySound = {
                         type = "toggle",
                         name = "Enable sound notifications",
                         desc = "Master switch for Decursive dispel and cure-failure sound notifications.",
+                        get = function() return D.profile.PlaySound ~= false end,
+                        set = function(info, value)
+                            D.profile.PlaySound = value and true or false;
+                            if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("sound enable changed"); end
+                        end,
                         order = 10,
                     },
                     SoundNotificationPreset = {
@@ -548,6 +553,7 @@ local function GetStaticOptions ()
                                 FEMALE_CLEANSE_ME = T._AddonPath .. "Sounds\\FemaleCleanseMe.ogg",
                             };
                             D.profile.SoundFile = files[value] or DC.AfflictionSound;
+                            if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("sound preset changed"); end
                         end,
                         disabled = function() return not D.profile.PlaySound end,
                         order = 20,
@@ -558,13 +564,18 @@ local function GetStaticOptions ()
                         name = "Output channel",
                         desc = "Choose which WoW audio channel carries Decursive notifications. Master stays audible even when Sound Effects are disabled.",
                         values = { Master = "Master", SFX = "Sound Effects", Dialog = "Dialog", Ambience = "Ambience", Music = "Music" },
+                        get = function() return D.profile.SoundNotificationChannel or "Master" end,
+                        set = function(info, value)
+                            D.profile.SoundNotificationChannel = value;
+                            if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("sound channel changed"); end
+                        end,
                         disabled = function() return not D.profile.PlaySound end,
                         order = 30,
                     },
                     SoundNotificationIgnoreSeconds = {
                         type = "range",
                         name = "Burst ignore window",
-                        desc = "After the first dispel alert plays, discard every additional alert request for this many seconds. The default is 2.0 seconds, so a group-wide affliction produces one sound instead of one sound per player.",
+                        desc = "Debounce Decursive-owned public-event fallback alerts for this many seconds. Blizzard-native protected aura sounds are registered and played per matching aura.",
                         min = 0,
                         max = 5,
                         step = 0.25,
@@ -588,7 +599,7 @@ local function GetStaticOptions ()
                     },
                     mufTriggerHeader = {
                         type = "header",
-                        name = "WoW 12.1 MUF Affliction Trigger",
+                        name = "WoW 12.1 Native Aura Trigger",
                         order = 100,
                     },
                     mufTriggerStatus = {
@@ -596,24 +607,29 @@ local function GetStaticOptions ()
                         name = function()
                             local available = D.Is121MUFStateSoundEngineAvailable and D:Is121MUFStateSoundEngineAvailable();
                             if available then
-                                return "Trigger engine: |cff55ff55Active — Blizzard aura sounds|r\nTracks: assigned group unit tokens\nInput: known/learned public dispellable Spell IDs\nBehavior: Blizzard detects the protected aura application and plays the selected sound directly.\nThe red/blue MUF square remains independently managed by Blizzard.";
+                                return "Trigger engine: |cff55ff55Active — Blizzard AddAuraSound|r\nTracks: assigned Decursive MUFs\nInput: public DispelDB and learned spell IDs\nBehavior: Blizzard detects and plays registered protected aura sounds without exposing aura state to addon Lua.";
                             end
-                            return "Trigger engine: |cffffaa00Unavailable on this client|r\nDecursive will use the legacy learned-spell-ID fallback below when possible.";
+                            return "Trigger engine: |cffffaa00Unavailable on this client|r\nThe selected sound can still be tested, but protected live-aura sound requires Blizzard's AddAuraSound API.";
                         end,
                         order = 105,
                     },
                     protectedHeader = {
                         type = "header",
                         name = "Aura Sound Spell-ID Pool",
-                        hidden = false,
+                        hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
                         order = 200,
                     },
                     SoundProtectedAuraAlerts = {
                         type = "toggle",
-                        name = "Enable registered aura alerts",
-                        desc = "Register known/learned dispellable Spell IDs with Blizzard's 12.1 aura-sound engine for the currently assigned group units.",
+                        name = "Enable Blizzard native aura sounds",
+                        desc = "Register DispelDB and learned spell IDs with Blizzard so matching protected auras play the selected live-combat sound.",
+                        get = function() return D.profile.SoundProtectedAuraAlerts ~= false end,
+                        set = function(info, value)
+                            D.profile.SoundProtectedAuraAlerts = value and true or false;
+                            if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("native aura sound toggle changed"); end
+                        end,
                         disabled = function() return not D.profile.PlaySound end,
-                        hidden = false,
+                        hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
                         order = 210,
                     },
                     SoundProtectedAuraAutoLearn = {
@@ -621,7 +637,7 @@ local function GetStaticOptions ()
                         name = "Learn Spell IDs from successful dispels",
                         desc = "When you successfully dispel an aura and the combat log exposes its public Spell ID, remember it for the current class/spec and immediately register it with Blizzard. The first-ever occurrence can be silent; later occurrences use Blizzard-native sound detection.",
                         disabled = function() return not D.profile.PlaySound or not D.profile.SoundProtectedAuraAlerts end,
-                        hidden = false,
+                        hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
                         order = 220,
                     },
                     protectedStatus = {
@@ -647,9 +663,9 @@ local function GetStaticOptions ()
                                 end
                             end
                             local recentText = #recent > 0 and ("\nRecent learned IDs:\n" .. table.concat(recent, "\n")) or "";
-                            return ("Debounce engine: Decursive exact lockout\nCurrent learning context: %s\nLearned protected aura spell IDs: %d%s\n\nThe first accepted alert opens the configured ignore window. Additional group-member applications during that window are discarded. If WoW hides a protected aura's combat-log spell ID, Decursive leaves that occurrence visual-only rather than playing an unthrottled fallback."):format(contextKey, count, recentText);
+                            return ("Native engine: Blizzard AddAuraSound\nCurrent learning context: %s\nLearned protected aura spell IDs: %d%s\n\nBuilt-in DispelDB IDs and learned public IDs are registered for assigned MUF units. If an aura is not in either pool and WoW hides its Spell ID, that occurrence remains visual-only until its public ID can be learned or added."):format(contextKey, count, recentText);
                         end,
-                        hidden = false,
+                        hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
                         order = 230,
                     },
                     addProtectedSpellID = {
@@ -666,7 +682,7 @@ local function GetStaticOptions ()
                             end
                         end,
                         disabled = function() return not D.profile.PlaySound or not D.profile.SoundProtectedAuraAlerts end,
-                        hidden = false,
+                        hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
                         order = 240,
                     },
                     clearProtectedSpellIDs = {
@@ -682,7 +698,7 @@ local function GetStaticOptions ()
                             D:Println("Sound Notifications: learned protected aura spell IDs cleared for the current class/spec.");
                         end,
                         disabled = function() local ids = D.GetProtectedAuraSoundIDs and D:GetProtectedAuraSoundIDs(); return type(ids) ~= "table" or #ids == 0 end,
-                        hidden = false,
+                        hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
                         order = 250,
                     },
                 },
@@ -856,7 +872,7 @@ local function GetStaticOptions ()
                         type = "toggle",
                         width = 'full',
                         name = "DISPEL alert warning",
-                        desc = "Show DISPEL on the Alert warning when a Micro Unit Frame lights up with a dispellable affliction (same presence as the red square). Audio remains AddAuraSound.",
+                        desc = "Show DISPEL when Blizzard's managed Micro Unit Frame aura slot finds a dispellable affliction. Enabled by default. WoW owns the protected detection; Decursive never reads secret aura data.",
                         get = function() return not D.profile or D.profile.Alert121DispelEnabled ~= false end,
                         set = function(info, value)
                             D.profile.Alert121DispelEnabled = value and true or false
@@ -888,13 +904,14 @@ local function GetStaticOptions ()
                     Alert121DispelDuration = {
                         type = "range",
                         name = "DISPEL alert duration",
-                        desc = "How long DISPEL stays on screen in Timed mode (default 3 seconds). Also used by the Test DISPEL button.",
+                        desc = "How long DISPEL stays on screen in Timed mode (default 2 seconds). Also used by the Test DISPEL button.",
                         min = 0.5,
                         max = 15,
                         step = 0.5,
-                        get = function() return tonumber(D.profile and D.profile.Alert121DispelDuration) or 3 end,
+                        get = function() return tonumber(D.profile and D.profile.Alert121DispelDuration) or 2 end,
                         set = function(info, value)
                             D.profile.Alert121DispelDuration = value
+                            if D.Refresh121DispelAlertWarning then D:Refresh121DispelAlertWarning() end
                         end,
                         disabled = function()
                             if D.profile and D.profile.Alert121DispelEnabled == false then return true end
@@ -928,9 +945,13 @@ local function GetStaticOptions ()
                     TestDispelAlert = {
                         type = 'execute',
                         name = "Test DISPEL alert warning",
-                        desc = "Shows DISPEL on the Alert warning banner using your current duration setting (default 3 seconds).",
+                        desc = "Shows DISPEL on the Alert warning banner using your current duration setting (default 2 seconds). Preview works even when the live warning is disabled.",
                         func = function()
-                            if D.Show121DispelAlertWarning then D:Show121DispelAlertWarning("options test", true) end
+                            if D.Test121DispelAlertWarning then
+                                D:Test121DispelAlertWarning()
+                            elseif D.Show121DispelAlertWarning then
+                                D:Show121DispelAlertWarning("options test", true)
+                            end
                         end,
                         order = 235,
                     },
@@ -1138,6 +1159,20 @@ local function GetStaticOptions ()
                                 disabled = function() return D.Status.Combat end,
                                 order = 1350.50,
                             },
+                            TextAlerts121Enabled = {
+                                type = 'toggle',
+                                name = "Show on-screen text alerts",
+                                desc = "Master switch for Decursive's DISPEL and Soul Link center-screen text in this environment profile. PvP defaults off. Sound notifications and MUF indicators are unaffected, and options previews still display.",
+                                get = function() return D.profile.TextAlerts121Enabled ~= false end,
+                                set = function(info, value)
+                                    local v = value and true or false
+                                    if D.Set121EnvironmentVisualSetting then D:Set121EnvironmentVisualSetting("TextAlerts121Enabled", v) else D.profile.TextAlerts121Enabled = v end
+                                    if D.Apply121AlertWarningStyle then D:Apply121AlertWarningStyle() end
+                                    if not v and D.Hide121AlertWarning then D:Hide121AlertWarning() end
+                                end,
+                                disabled = function() return D.Status.Combat end,
+                                order = 1350.55,
+                            },
                             EnvironmentChat121Enabled = {
                                 type = 'toggle',
                                 name = "Announce environment/profile changes",
@@ -1168,7 +1203,7 @@ local function GetStaticOptions ()
                             OutOfRange121Enabled = {
                                 type = 'toggle',
                                 name = "Dim MUFs when out of range",
-                                desc = "Dim the MUF while that unit is outside normal friendly-spell range. The dim layer preserves the underlying Decursive priority color instead of replacing it.",
+                                desc = "Inside dungeons, raids, battlegrounds, and arenas, dim the MUF while that unit is outside normal friendly-spell range. Range feedback is always suppressed in the open world.",
                                 get = function() return D.profile.OutOfRange121Enabled ~= false end,
                                 set = function(info, value)
                                     local v = value and true or false

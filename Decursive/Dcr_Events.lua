@@ -155,23 +155,14 @@ do
 
     D.PARTY_LEADER_CHANGED = D.GroupChanged;
 
-    -- A follower-dungeon death/disband/revive/reform cycle never fires
-    -- PLAYER_ENTERING_WORLD (you never actually leave the instance), only a
-    -- burst of GROUP_ROSTER_UPDATE -- so it only ever got GroupChanged's
-    -- lightweight scheduled display update, never the thorough
-    -- resetMUFsForZoneReinit()+staged-rebuild that ReinitializeDecursiveAfterZone
-    -- does. Confirmed via diagnostic log: MUFs randomly missing after that
-    -- cycle, always fixed by a full /reload (which forces the equivalent of
-    -- a clean rebuild). Same "prefer the thorough path if available" pattern
-    -- already used for PLAYER_ENTERING_WORLD -- safe to call repeatedly in
-    -- quick succession (confirmed back-to-back in the log) since it's
-    -- generation-counter guarded internally; only the latest call's staged
-    -- rebuild actually completes.
+    -- Ordinary roster churn must not blank every MUF and start the full six-pass
+    -- post-zone recovery. Apply the normal roster update immediately, then let
+    -- the 12.1 module run a short, generation-guarded stabilization pass. The
+    -- heavier reset remains reserved for actual world/instance transitions.
     D.GROUP_ROSTER_UPDATE = function(self, reason)
-        if self.ReinitializeDecursiveAfterZone then
-            self:ReinitializeDecursiveAfterZone(reason or "GROUP_ROSTER_UPDATE");
-        else
-            self:GroupChanged(reason);
+        self:GroupChanged(reason or "GROUP_ROSTER_UPDATE");
+        if self.RefreshDecursiveAfterRoster then
+            self:RefreshDecursiveAfterRoster(reason or "GROUP_ROSTER_UPDATE");
         end
     end
 end
@@ -905,14 +896,14 @@ do -- Combat log event handling {{{1
 
             UnitID = self.Status.Unit_Array_GUIDToUnit[destGUID]; -- get the grouped unit associated to the destGUID if there is none then the unit is not in our group or is filtered out
 
-            -- Public SPELL_AURA_APPLIED for DispelDB / learned IDs: Blizzard's
-            -- AddAuraSound plays the auto notification; we show the matching
-            -- DISPEL Alert warning when the combat-log spell ID is public.
-            -- Secret spell IDs stay visual+sound-only (AuraContainer + AddAuraSound).
+            -- Public SPELL_AURA_APPLIED for DispelDB / learned IDs: a successful
+            -- AddAuraSound registration owns audio; otherwise this public event
+            -- safely falls back to Decursive playback. Secret spell IDs remain
+            -- entirely Blizzard-owned (AuraContainer + AddAuraSound).
             if UnitID and event == "SPELL_AURA_APPLIED"
                 and self.NotifyDispelAlertFromPublicAura
             then
-                self:NotifyDispelAlertFromPublicAura(spellID, "SPELL_AURA_APPLIED");
+                self:NotifyDispelAlertFromPublicAura(spellID, "SPELL_AURA_APPLIED", UnitID);
             end
 
             --D:Print("? (source=%s) (dest=|cFF00AA00%s|r -- %X): |cffff0000%s|r", sourceName, destName, destFlags, event);

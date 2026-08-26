@@ -29,12 +29,12 @@ local ZD = T and T.ZhaohuModern
 if not D or not DC or not ZD then return end
 
 local C = {
-    text = { .90, .90, .90, 1 },
-    muted = { .58, .58, .58, 1 },
-    accent = { .18, .82, .72, 1 },
-    card = { .16, .16, .16, 1 },
-    border = { .25, .25, .25, 1 },
-    danger = { .95, .35, .35, 1 },
+    text = { .935, .960, .985, 1 },
+    muted = { .535, .615, .715, 1 },
+    accent = { .170, .785, .885, 1 },
+    card = { .070, .090, .128, 1 },
+    border = { .155, .195, .265, 1 },
+    danger = { .955, .355, .405, 1 },
 }
 
 local function makeBackdrop(frame, color, border)
@@ -83,6 +83,16 @@ local function section(parent, title, y, height)
     f:SetPoint("TOPRIGHT", 0, y)
     f:SetHeight(height)
     makeBackdrop(f, C.card, C.border)
+    local wash = f:CreateTexture(nil, "BACKGROUND")
+    wash:SetColorTexture(.09, .113, .155, .45)
+    wash:SetPoint("TOPLEFT", 1, -1)
+    wash:SetPoint("TOPRIGHT", -1, -1)
+    wash:SetHeight(34)
+    local accent = f:CreateTexture(nil, "ARTWORK")
+    accent:SetColorTexture(C.accent[1], C.accent[2], C.accent[3], 1)
+    accent:SetPoint("TOPLEFT", 0, 0)
+    accent:SetPoint("BOTTOMLEFT", 0, 0)
+    accent:SetWidth(3)
     f.title = label(f, title, 14, C.text, "TOPLEFT", 16, -14)
     return f
 end
@@ -93,11 +103,13 @@ function ZD:BuildTestMode(parent)
     p:SetAllPoints()
     p:Hide()
 
-    label(p, "Test Mode", 20, C.text, "TOPLEFT", 0, 0)
-    local subtitle = label(p, "Preview Micro Unit Frame states without needing a live raid. Secure clicks stay owned by Decursive.", 11, C.muted, "TOPLEFT", 0, -30)
-    subtitle:SetPoint("RIGHT", 0, 0)
+    if ZD.PageTitle then
+        ZD:PageTitle(p, "Test Lab", "Preview visual states and alert warnings without changing secure cure ownership.")
+    else
+        label(p, "Test Lab", 20, C.text, "TOPLEFT", 0, 0)
+    end
 
-    local visuals = section(p, "Status Light & Cooldown Preview", -66, 168)
+    local visuals = section(p, "Status Light & Cooldown Preview", -82, 146)
     local vhelp = label(visuals, "Cycles cooldown overlays and status-light borders on visible MUFs for ~8 seconds.", 10, C.muted, "TOPLEFT", 18, -40)
     vhelp:SetWidth(600)
 
@@ -111,7 +123,7 @@ function ZD:BuildTestMode(parent)
             ZD:SetStatus("Previewing cooldown overlays on all visible MUFs.")
         end
     end, "primary")
-    previewAll:SetPoint("TOPLEFT", 18, -72)
+    previewAll:SetPoint("TOPLEFT", 18, -68)
 
     local previewOne = button(visuals, "Preview Selected Square", 190, 30, function()
         if InCombatLockdown and InCombatLockdown() then
@@ -125,7 +137,7 @@ function ZD:BuildTestMode(parent)
     end)
     previewOne:SetPoint("LEFT", previewAll, "RIGHT", 12, 0)
 
-    local layout = section(p, "Layout Stress Test", -250, 200)
+    local layout = section(p, "Layout Stress Test", -240, 176)
     local lhelp = label(layout, "Fills the MUF grid with placeholder slots so you can tune spacing and raid auto-layout without a full group.", 10, C.muted, "TOPLEFT", 18, -40)
     lhelp:SetWidth(600)
 
@@ -143,7 +155,7 @@ function ZD:BuildTestMode(parent)
         ZD:SetStatus(D.Status.TestLayout and ("Test layout ON (" .. tostring(D.Status.TestLayoutUNum) .. " slots).") or "Test layout OFF.")
         if p.Refresh then p:Refresh() end
     end, "primary")
-    toggleLayout:SetPoint("TOPLEFT", 18, -78)
+    toggleLayout:SetPoint("TOPLEFT", 18, -68)
 
     local minus = button(layout, "−5 slots", 90, 30, function()
         if InCombatLockdown and InCombatLockdown() then return end
@@ -164,11 +176,11 @@ function ZD:BuildTestMode(parent)
     end)
     plus:SetPoint("LEFT", minus, "RIGHT", 8, 0)
 
-    p.layoutStatus = label(layout, "", 12, C.accent, "TOPLEFT", 18, -128)
-    p.hint = label(layout, "Tip: open Micro Unit Frames while Test Layout is on to adjust size, spacing and opacity live.", 10, C.muted, "TOPLEFT", 18, -156)
+    p.layoutStatus = label(layout, "", 12, C.accent, "TOPLEFT", 18, -112)
+    p.hint = label(layout, "Tip: open Micro Unit Frames while Test Layout is on to adjust size, spacing and opacity live.", 10, C.muted, "TOPLEFT", 18, -140)
     p.hint:SetWidth(600)
 
-    local soul = section(p, "Soul Link Alert Preview", -468, 100)
+    local soul = section(p, "Alert Warning Previews", -428, 96)
     local soulBtn = button(soul, "Preview Soul Link Alert", 200, 30, function()
         if D.Test121SoulLinkAlert then
             D:Test121SoulLinkAlert()
@@ -177,7 +189,21 @@ function ZD:BuildTestMode(parent)
             ZD:SetStatus("Soul Link preview is unavailable on this client.", true)
         end
     end)
-    soulBtn:SetPoint("TOPLEFT", 18, -48)
+    soulBtn:SetPoint("TOPLEFT", 18, -43)
+
+    local dispelBtn = button(soul, "Preview DISPEL Alert", 200, 30, function()
+        local shown = D.Test121DispelAlertWarning and D:Test121DispelAlertWarning()
+        if shown then
+            local duration = D.Get121DispelAlertDuration and D:Get121DispelAlertDuration() or 2
+            ZD:SetStatus(("DISPEL alert preview shown for %.1f seconds."):format(duration))
+        else
+            ZD:SetStatus("DISPEL alert preview is unavailable on this client.", true)
+        end
+    end, "primary")
+    dispelBtn:SetPoint("LEFT", soulBtn, "RIGHT", 12, 0)
+
+    local previewHint = label(soul, "Previews ignore the live toggle and debounce, but use your current text style and duration.", 9, C.muted, "BOTTOMLEFT", 18, 8)
+    previewHint:SetPoint("RIGHT", -18, 0)
 
     function p:Refresh()
         D.Status = D.Status or {}

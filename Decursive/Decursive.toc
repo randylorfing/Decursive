@@ -22,9 +22,9 @@
 
 ## Version: @project-version@
 ## X-Zhaohu-Build: Zhaohu-Decursive
-## X-Zhaohu-12.1-Patch: v11.0.10-square-sound6-safe-visual-restore
+## X-Zhaohu-12.1-Patch: v12.0.1-dispel-default-pvp-text-off
 ## X-Zhaohu-Backend: v10.43-feature-engine
-## X-Zhaohu-UI: modern-v11-lod-options
+## X-Zhaohu-UI: modern-v11.1-lod-options
 ## Author: Randy Lorfing
 
 ## X-License: GNU GPL V3

@@ -323,9 +323,9 @@ function D:PlayDispelNotificationSound(reason, bypassIgnoreWindow)
     end
 
     self:SafePlaySoundFile(self:GetDispelNotificationSoundFile(), self:GetSoundNotificationChannel());
-    -- Live DISPEL banner is parented to AuraSlots (Show/Hide cascade). This
-    -- only bumps the timed Alert warning when Decursive itself plays the sound
-    -- (legacy / test / fallback paths).
+    -- The managed AuraSlot transition owns live presence. This call only asks
+    -- the ordinary shared banner for the same fixed-duration pulse; its visual
+    -- lock prevents the sound callback from extending that timer.
     if self.Show121DispelAlertWarning and (not self.profile or self.profile.Alert121DispelEnabled ~= false) then
         self:Show121DispelAlertWarning(reason or "dispel sound", true);
     end
@@ -361,13 +361,15 @@ end
 -- callback. For public combat-log spell IDs that match our registered set,
 -- show the DISPEL Alert warning on the same burst window — still no secret
 -- aura reads.
-function D:NotifyDispelAlertFromPublicAura(spellID, reason)
+function D:NotifyDispelAlertFromPublicAura(spellID, reason, unitToken)
     if not self.profile or not self.profile.PlaySound or self.profile.SoundProtectedAuraAlerts == false then
         return false
     end
     if not isPublicDispelAlertSpellID(spellID) then return false end
 
-    if self.IsProtectedAuraSoundEngineAvailable and self:IsProtectedAuraSoundEngineAvailable() then
+    if self.IsProtectedAuraSoundRegistered
+        and self:IsProtectedAuraSoundRegistered(spellID, unitToken)
+    then
         -- Audio is owned by AddAuraSound; text only here.
         if self.Show121DispelAlertWarning then
             return self:Show121DispelAlertWarning(reason or ("public aura " .. tostring(spellID)), false)
@@ -574,6 +576,7 @@ end
 -- mods: register public spell identities up front and let Blizzard own the
 -- protected detection/playback path.
 local NativeAuraSoundHandles = {};
+local NativeAuraSoundRegistrations = {};
 T._AuraSoundDiag = T._AuraSoundDiag or { registered = 0, attempted = 0, lastReason = "never", lastError = nil, lastLearned = nil };
 
 function D:IsProtectedAuraSoundEngineAvailable()
@@ -592,6 +595,17 @@ function D:ClearProtectedAuraSounds()
         end
     end
     for i = #NativeAuraSoundHandles, 1, -1 do NativeAuraSoundHandles[i] = nil; end
+    for key in pairs(NativeAuraSoundRegistrations) do NativeAuraSoundRegistrations[key] = nil; end
+end
+
+local function protectedAuraSoundRegistrationKey(unitToken, spellID)
+    if type(unitToken) ~= "string" or type(spellID) ~= "number" then return nil; end
+    return unitToken .. ":" .. tostring(spellID);
+end
+
+function D:IsProtectedAuraSoundRegistered(spellID, unitToken)
+    local key = protectedAuraSoundRegistrationKey(unitToken, spellID);
+    return key and NativeAuraSoundRegistrations[key] == true or false;
 end
 
 local function addUniqueUnitToken(out, seen, unit)
@@ -623,6 +637,10 @@ function D:RefreshProtectedAuraSounds(reason)
 
     if not self:IsProtectedAuraSoundEngineAvailable() then return 0; end
     if not self.profile or not self.profile.PlaySound or self.profile.SoundProtectedAuraAlerts == false then return 0; end
+    -- The old managed-child OnShow driver was removed because protected
+    -- AuraSlots do not reliably deliver untrusted script callbacks in combat.
+    -- Never suppress this registry merely because the Lua sound player exists:
+    -- AddAuraSound is now the authoritative 12.1 live-combat sound path.
 
     local learnedIDs = getProtectedAuraSoundIDs();
     local spellIDs, seen = {}, {};
@@ -662,6 +680,8 @@ function D:RefreshProtectedAuraSounds(reason)
                 local ok, handle = pcall(_G.C_UnitAuras.AddAuraSound, trigger, info);
                 if ok and type(handle) == "number" and canaccessvalue(handle) then
                     NativeAuraSoundHandles[#NativeAuraSoundHandles + 1] = handle;
+                    local key = protectedAuraSoundRegistrationKey(unit, spellID);
+                    if key then NativeAuraSoundRegistrations[key] = true; end
                     registered = registered + 1;
                 elseif not ok then
                     lastError = tostring(handle);
@@ -707,7 +727,11 @@ function D:PrintAuraSoundDiagnostics()
         for i = 1, #ids do parts[#parts + 1] = tostring(ids[i]); end
         self:Println("Spell IDs: " .. table.concat(parts, ", "));
     end
-    self:Println(("Native AddAuraSound: %d/%d registered | units=%s | spells=%s"):format(tonumber(diag.registered) or 0, tonumber(diag.attempted) or 0, tostring(diag.unitCount or 0), tostring(diag.spellCount or 0)));
+    if self.Is121MUFVisibilitySoundDriverEnabled and self:Is121MUFVisibilitySoundDriverEnabled() then
+        self:Println("MUF visibility sound driver: active | global debounce: active | duplicate native registrations: disabled");
+    else
+        self:Println(("Native AddAuraSound fallback: %d/%d registered | units=%s | spells=%s"):format(tonumber(diag.registered) or 0, tonumber(diag.attempted) or 0, tostring(diag.unitCount or 0), tostring(diag.spellCount or 0)));
+    end
     self:Println(("Player SPELL_DISPEL events: %d"):format(tonumber(diag.playerDispelEvents) or 0));
     if (tonumber(diag.playerDispelEvents) or 0) > 0 then
         self:Println(("Last dispelled-aura field: type=%s | accessible=%s | secret=%s"):format(

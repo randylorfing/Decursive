@@ -258,21 +258,20 @@ function D:GetDefaultsSettings()
             CooldownBorder121Thickness = 2,
             CooldownPriority2Pulse121Enabled = true,
             StatusLight121Enabled = false,
-            OutOfRange121Enabled = true,
+            OutOfRange121Enabled = false,
             OutOfRange121DimAmount = .60,
             OutOfRange121Color = {1, 1, 0},
+            TextAlerts121Enabled = true,
             Environment121Mode = "AUTO",
             Environment121ProfilesInitialized = false,
             Environment121Profiles = {
-                RAID = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .45, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .50, CooldownOverlay121Numbers = false, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = false, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
-                MYTHIC_PLUS = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .70, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .70, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
-                DUNGEON = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
-                -- Matches DUNGEON exactly, per user request: arena teams are
-                -- party-sized (2-5 players), the same scale as dungeon
-                -- content, not raid-sized -- no reason for PVP to have its
-                -- own separately-tuned visual profile.
-                PVP = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
-                OPEN_WORLD = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .62, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, EnvironmentChat121Enabled = true },
+                RAID = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .45, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .50, CooldownOverlay121Numbers = false, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = false, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = true, EnvironmentChat121Enabled = true },
+                MYTHIC_PLUS = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .70, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .70, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = true, EnvironmentChat121Enabled = true },
+                DUNGEON = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = true, EnvironmentChat121Enabled = true },
+                -- PvP keeps the dungeon-sized visual tuning, but disables all
+                -- addon-owned center-screen text and profile chat by default.
+                PVP = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = false, EnvironmentChat121Enabled = false },
+                OPEN_WORLD = { OutOfRange121Enabled = false, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .62, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = true, EnvironmentChat121Enabled = true },
             },
 
             DebuffsFrameElemBorderAlpha = .2,
@@ -362,12 +361,14 @@ function D:GetDefaultsSettings()
             PlayFailureSound = true,
             SoundProtectedAuraAlerts = true,
             SoundProtectedAuraAutoLearn = true,
-            Alert121DispelEnabled = false,
+            -- Live DISPEL warning is enabled for new/untouched profiles. AceDB
+            -- still preserves an explicit false chosen by an existing user.
+            Alert121DispelEnabled = true,
             Alert121FontSize = 48,
             -- TIMED (default): hide DISPEL after Alert121DispelDuration seconds.
             -- UNTIL_CLEARED: keep DISPEL visible while a MUF still needs a dispel.
             Alert121DispelMode = "TIMED",
-            Alert121DispelDuration = 3,
+            Alert121DispelDuration = 2,
 
             -- Hide the buttons
             HideButtons = false,

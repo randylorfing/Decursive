@@ -50,7 +50,7 @@ local ENV_NAMES = {
     PVP = "PvP",
 }
 
-local ENV_DEFAULTS = {
+local ENV_DEFAULTS = D.Environment121Defaults or {
     RAID = {
         OutOfRange121Enabled = true,
         OutOfRange121DimAmount = .45,
@@ -64,8 +64,9 @@ local ENV_DEFAULTS = {
         CooldownOverlay121Numbers = false,
         SecondaryAffliction121Enabled = true,
         SecondaryAffliction121Pulse = false,
-        SharedPriorityCooldown121Enabled = false,
+        SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
+        TextAlerts121Enabled = true,
         EnvironmentChat121Enabled = true,
     },
     MYTHIC_PLUS = {
@@ -83,6 +84,7 @@ local ENV_DEFAULTS = {
         SecondaryAffliction121Pulse = true,
         SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
+        TextAlerts121Enabled = true,
         EnvironmentChat121Enabled = true,
     },
     DUNGEON = {
@@ -100,11 +102,12 @@ local ENV_DEFAULTS = {
         SecondaryAffliction121Pulse = true,
         SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
+        TextAlerts121Enabled = true,
         EnvironmentChat121Enabled = true,
     },
     PVP = {
         OutOfRange121Enabled = true,
-        OutOfRange121DimAmount = .75,
+        OutOfRange121DimAmount = .60,
         OutOfRange121Color = { 1, 1, 0 },
         LineOfSight121Enabled = true,
         LineOfSight121Color = { 1, .28, .12 },
@@ -115,12 +118,13 @@ local ENV_DEFAULTS = {
         CooldownOverlay121Numbers = true,
         SecondaryAffliction121Enabled = true,
         SecondaryAffliction121Pulse = true,
-        SharedPriorityCooldown121Enabled = false,
+        SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
-        EnvironmentChat121Enabled = true,
+        TextAlerts121Enabled = false,
+        EnvironmentChat121Enabled = false,
     },
     OPEN_WORLD = {
-        OutOfRange121Enabled = true,
+        OutOfRange121Enabled = false,
         OutOfRange121DimAmount = .60,
         OutOfRange121Color = { 1, 1, 0 },
         LineOfSight121Enabled = true,
@@ -132,8 +136,9 @@ local ENV_DEFAULTS = {
         CooldownOverlay121Numbers = true,
         SecondaryAffliction121Enabled = true,
         SecondaryAffliction121Pulse = true,
-        SharedPriorityCooldown121Enabled = false,
+        SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
+        TextAlerts121Enabled = true,
         EnvironmentChat121Enabled = true,
     },
 }
@@ -311,6 +316,9 @@ function ZD:GetEnvironmentProfile(key)
     D.profile.Environment121Profiles = D.profile.Environment121Profiles or {}
     D.profile.Environment121Profiles[key] = D.profile.Environment121Profiles[key] or shallowCopy(ENV_DEFAULTS[key] or ENV_DEFAULTS.OPEN_WORLD)
     local env = D.profile.Environment121Profiles[key]
+    for setting, value in pairs(ENV_DEFAULTS[key] or ENV_DEFAULTS.OPEN_WORLD) do
+        if env[setting] == nil then env[setting] = shallowCopy(value) end
+    end
     env.Detection121Mode = "STRICT_MANAGED"
     return env
 end
@@ -337,6 +345,7 @@ function ZD:ApplyEnvironmentProfileToRuntime(key)
     D.profile.CooldownPriority2Pulse121Enabled = env.SecondaryAffliction121Pulse ~= false
     D.profile.SharedPriorityCooldown121Enabled = env.SharedPriorityCooldown121Enabled == true
     D.profile.ClearCleansedTarget121Enabled = env.ClearCleansedTarget121Enabled ~= false
+    D.profile.TextAlerts121Enabled = env.TextAlerts121Enabled ~= false
     D.profile.EnvironmentChat121Enabled = env.EnvironmentChat121Enabled ~= false
 
     if D.Apply121RangeAppearance then D:Apply121RangeAppearance() end
@@ -346,6 +355,8 @@ function ZD:ApplyEnvironmentProfileToRuntime(key)
     if D.Apply121CooldownAppearance then D:Apply121CooldownAppearance() end
     if D.Set121CooldownOverlayEnabled then D:Set121CooldownOverlayEnabled(D.profile.CooldownOverlay121Enabled ~= false) end
     if D.Refresh121SharedPriorityCooldowns then D:Refresh121SharedPriorityCooldowns() end
+    if D.Apply121AlertWarningStyle then D:Apply121AlertWarningStyle() end
+    if D.profile.TextAlerts121Enabled == false and D.Hide121AlertWarning then D:Hide121AlertWarning() end
 end
 
 function ZD:SetEnvironmentValue(key, setting, value)

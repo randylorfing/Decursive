@@ -47,7 +47,10 @@ local D = T and T.Dcr
 local DC = T and T._C
 if type(D) ~= "table" or not DC or not DC.TWELVEONE then return end
 
-local WATCHED_UNITS = { "boss1", "boss2", "boss3", "boss4", "boss5", "target", "focus" }
+local WATCHED_UNITS = {
+    boss1 = true, boss2 = true, boss3 = true, boss4 = true, boss5 = true,
+    target = true, focus = true,
+}
 local RECENT_WINDOW = 12 -- seconds; how long a cast stays a plausible guess
 local MAX_RECENT = 20
 
@@ -98,29 +101,29 @@ end
 -- TidyPlates use to see every nearby enemy, not just the current target.
 local watcher = CreateFrame("Frame")
 
-local function registerCastEvents(unit)
-    watcher:RegisterUnitEvent("UNIT_SPELLCAST_START", unit)
-    watcher:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", unit)
+local function isWatchedCastUnit(unit)
+    if type(unit) ~= "string" then return false end
+    if WATCHED_UNITS[unit] then
+        return not UnitCanAttack or UnitCanAttack("player", unit)
+    end
+    if unit:match("^nameplate%d+$") then
+        return not UnitCanAttack or UnitCanAttack("player", unit)
+    end
+    return false
 end
 
-for _, unit in ipairs(WATCHED_UNITS) do
-    registerCastEvents(unit)
-end
-watcher:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+-- RegisterUnitEvent replaces the unit filter for an already-registered event.
+-- Use the ordinary events once and filter the public unit token in Lua so boss,
+-- target, focus and every active nameplate can all be observed concurrently.
+watcher:RegisterEvent("UNIT_SPELLCAST_START")
+watcher:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 
 -- UNIT_SPELLCAST_SUCCEEDED's own event payload already carries spellId
 -- (unit, castGUID, spellId), covering instant-cast afflictions that never
 -- show a cast bar. UNIT_SPELLCAST_START reads the spellId off the cast
 -- bar via UnitCastingInfo instead, matching Dcr_12_1_Encounters.lua.
 watcher:SetScript("OnEvent", function(_, event, unit, _, spellId)
-    if event == "NAME_PLATE_UNIT_ADDED" then
-        -- Nameplate unit tokens (nameplate1..40) get reused for different
-        -- mobs as they enter/leave visibility; RegisterUnitEvent on the same
-        -- token again is harmless, so no unregister-on-remove bookkeeping
-        -- is needed.
-        if UnitCanAttack("player", unit) then registerCastEvents(unit) end
-        return
-    end
+    if not isWatchedCastUnit(unit) then return end
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
         if spellId then recordCast(unit, spellId) end
         return
@@ -151,10 +154,8 @@ end
 -- Only available when Decursive owns native detection (MF.ManagedAuraContainer
 -- exists). Cast-inference below is the fallback when this slot is missing.
 --
--- SetMouseClickEnabled(false) + SetMouseMotionEnabled(true) is the specific,
--- separate pair of controls this widget exposes for "hover yes, click no" --
--- needs verifying in-game that click-to-cure on the MUF still works normally
--- with this slot layered on top; that's the one real regression risk here.
+-- The slot enables mouse motion for Blizzard's tooltip but explicitly disables
+-- click handling and passes all cure-button clicks through to the secure MUF.
 ----------------------------------------------------------------
 
 -- Native identity tooltip is dungeon/raid only ("party" covers normal + M+;
@@ -178,6 +179,10 @@ local function setIdentityTooltipInteractive(MF, enabled)
     pcall(function()
         if slot.EnableMouse then slot:EnableMouse(enabled and true or false) end
         if slot.SetMouseClickEnabled then slot:SetMouseClickEnabled(false) end
+        if slot.SetPropagateMouseClicks then slot:SetPropagateMouseClicks(true) end
+        if slot.SetPassThroughButtons then
+            slot:SetPassThroughButtons("LeftButton", "RightButton", "MiddleButton", "Button4", "Button5")
+        end
         if slot.SetMouseMotionEnabled then slot:SetMouseMotionEnabled(enabled and true or false) end
     end)
 end
@@ -240,6 +245,10 @@ local function ensureIdentityTooltipSlot(MF)
                 end
                 if btn.EnableMouse then btn:EnableMouse(true) end
                 if btn.SetMouseClickEnabled then btn:SetMouseClickEnabled(false) end
+                if btn.SetPropagateMouseClicks then btn:SetPropagateMouseClicks(true) end
+                if btn.SetPassThroughButtons then
+                    btn:SetPassThroughButtons("LeftButton", "RightButton", "MiddleButton", "Button4", "Button5")
+                end
                 if btn.SetMouseMotionEnabled then btn:SetMouseMotionEnabled(true) end
                 if btn.SetTooltipAnchorPoint and btn.SetHideTooltipInCombat then
                     btn:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)

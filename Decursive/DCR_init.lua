@@ -1524,6 +1524,22 @@ function D:SetConfiguration() -- {{{
 
     D.DcrFullyInitialized = true; -- everything should be OK
 
+    -- The aura-sound event frame can receive PLAYER_ENTERING_WORLD before the
+    -- main initialization flag becomes true. Always perform one clean deferred
+    -- registration pass here so live sound cannot depend on a later roster or
+    -- zoning event.
+    if D.RefreshProtectedAuraSounds then
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0, function()
+                if D.DcrFullyInitialized and D.RefreshProtectedAuraSounds then
+                    D:RefreshProtectedAuraSounds("initialization complete");
+                end
+            end)
+        else
+            D:RefreshProtectedAuraSounds("initialization complete");
+        end
+    end
+
     -- v11.0.2: initialize/migrate independent Party and Raid MUF sizes and
     -- immediately apply the size matching the player's current group context.
     if D.MicroUnitF and D.MicroUnitF.ApplyContextMUFScale then
@@ -2274,7 +2290,10 @@ end -- }}}
 -- Create the macro for Decursive
 -- This macro will cast the first spell (priority)
 
-local MAX_ACCOUNT_MACROS = _G.MAX_ACCOUNT_MACROS;
+-- MAX_ACCOUNT_MACROS is no longer guaranteed to be exported on every retail
+-- client. Treat a missing cap as "let CreateMacro decide" instead of comparing
+-- a number with nil and aborting addon initialization.
+local MAX_ACCOUNT_MACROS = tonumber(_G.MAX_ACCOUNT_MACROS);
 
 do
 
@@ -2307,15 +2326,23 @@ do
             else
                 D:Debug(("Macro '%s' not updated due to AllowMacroEdit"):format(macroName));
             end
-        elseif (GetNumMacros()) < MAX_ACCOUNT_MACROS then
-            CreateMacro(macroName, icon, updatedMacroText);
-            if notEditable then
-                createdMacros[macroName] = true
-            end
         else
-            D:errln(("Too many macros exist, Decursive cannot create its '%s' macro"):format(macroName));
-            T._CatchAllErrors = catchAllErrorBackup;
-            return false;
+            local numAccountMacros = tonumber((GetNumMacros())) or 0;
+            local hasRoom = MAX_ACCOUNT_MACROS == nil or numAccountMacros < MAX_ACCOUNT_MACROS;
+            if not hasRoom then
+                D:errln(("Too many macros exist, Decursive cannot create its '%s' macro"):format(macroName));
+                T._CatchAllErrors = catchAllErrorBackup;
+                return false;
+            end
+
+            local ok, macroIndex = pcall(CreateMacro, macroName, icon, updatedMacroText);
+            if not ok or not macroIndex then
+                D:errln(("Decursive could not create its '%s' macro%s"):format(
+                    macroName, ok and " (the account macro list may be full)" or (": " .. tostring(macroIndex))));
+                T._CatchAllErrors = catchAllErrorBackup;
+                return false;
+            end
+            if notEditable then createdMacros[macroName] = true; end
         end
 
         T._CatchAllErrors = catchAllErrorBackup;

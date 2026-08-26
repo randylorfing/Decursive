@@ -119,6 +119,7 @@ local ENVIRONMENT_DEFAULTS = {
         SecondaryAffliction121Pulse = false,
         SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
+        TextAlerts121Enabled = true,
         EnvironmentChat121Enabled = true,
     },
     MYTHIC_PLUS = {
@@ -137,6 +138,7 @@ local ENVIRONMENT_DEFAULTS = {
         SecondaryAffliction121Pulse = true,
         SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
+        TextAlerts121Enabled = true,
         EnvironmentChat121Enabled = true,
     },
     DUNGEON = {
@@ -155,11 +157,12 @@ local ENVIRONMENT_DEFAULTS = {
         SecondaryAffliction121Pulse = true,
         SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
+        TextAlerts121Enabled = true,
         EnvironmentChat121Enabled = true,
     },
     PVP = {
         OutOfRange121Enabled = true,
-        OutOfRange121DimAmount = .75,
+        OutOfRange121DimAmount = .60,
         OutOfRange121Color = {1, 1, 0},
         LineOfSight121Enabled = true,
         LineOfSight121Color = {1, .28, .12},
@@ -173,10 +176,11 @@ local ENVIRONMENT_DEFAULTS = {
         SecondaryAffliction121Pulse = true,
         SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
-        EnvironmentChat121Enabled = true,
+        TextAlerts121Enabled = false,
+        EnvironmentChat121Enabled = false,
     },
     OPEN_WORLD = {
-        OutOfRange121Enabled = true,
+        OutOfRange121Enabled = false,
         OutOfRange121DimAmount = .60,
         OutOfRange121Color = {1, 1, 0},
         LineOfSight121Enabled = true,
@@ -191,9 +195,14 @@ local ENVIRONMENT_DEFAULTS = {
         SecondaryAffliction121Pulse = true,
         SharedPriorityCooldown121Enabled = true,
         ClearCleansedTarget121Enabled = true,
+        TextAlerts121Enabled = true,
         EnvironmentChat121Enabled = true,
     },
 }
+
+-- One canonical table is shared with the modern options layer so resetting an
+-- environment from either UI always produces the same behavior.
+D.Environment121Defaults = ENVIRONMENT_DEFAULTS
 
 local function copyColor(c)
     return { (c and c[1]) or 1, (c and c[2]) or 1, (c and c[3]) or 0 }
@@ -233,6 +242,35 @@ local function ensureEnvironmentProfiles()
         if type(D.profile.CooldownOverlay121Opacity) == "number" then ow.CooldownOverlay121Opacity = D.profile.CooldownOverlay121Opacity end
         if D.profile.CooldownOverlay121Numbers ~= nil then ow.CooldownOverlay121Numbers = D.profile.CooldownOverlay121Numbers end
         D.profile.Environment121ProfilesInitialized = true
+    end
+
+    -- Range status is intentionally instance-only. Correct older profiles that
+    -- inherited the former global setting into Open World before this gate was
+    -- introduced; the player can still tune the instanced profiles separately.
+    if not D.profile.OpenWorldRangeDisabled121Migrated then
+        D.profile.Environment121Profiles.OPEN_WORLD.OutOfRange121Enabled = false
+        D.profile.OpenWorldRangeDisabled121Migrated = true
+    end
+
+    -- v11.0.45: shorten the original three-second TIMED warning default to two
+    -- seconds. Preserve profiles already set to a duration other than 3 seconds.
+    if not D.profile.Alert121DispelDuration2sMigrated then
+        local oldDuration = tonumber(D.profile.Alert121DispelDuration)
+        if oldDuration == nil or math.abs(oldDuration - 3) < 0.001 then
+            D.profile.Alert121DispelDuration = 2
+        end
+        D.profile.Alert121DispelDuration2sMigrated = true
+    end
+
+    -- v12.0.1: PvP profiles start quiet. Apply this once to profiles created by
+    -- older builds, then leave the setting user-controlled from that point on.
+    if not D.profile.PvPTextAlertsDefaultOff121Migrated then
+        local pvp = D.profile.Environment121Profiles.PVP
+        if type(pvp) == "table" then
+            pvp.TextAlerts121Enabled = false
+            pvp.EnvironmentChat121Enabled = false
+        end
+        D.profile.PvPTextAlertsDefaultOff121Migrated = true
     end
 
     -- v11 alpha.11 one-time behavior migration: cooldown feedback now belongs
@@ -312,6 +350,11 @@ function D:Get121ActiveBehaviorProfile()
     return env, active, ENVIRONMENT_NAMES[active] or active
 end
 
+function D:Are121TextAlertsEnabled()
+    local env = getActiveEnvironmentProfile()
+    return not env or env.TextAlerts121Enabled ~= false
+end
+
 function D:Should121SuppressLegacyAuraColor()
     -- WoW 12.1 can make aura data fully secret in combat/encounters/M+/PvP.
     -- Keep the 12.1 runtime on Blizzard-managed aura filtering everywhere so
@@ -350,6 +393,7 @@ local function applyActiveEnvironmentProfile()
     D.profile.CooldownPriority2Pulse121Enabled = env.SecondaryAffliction121Pulse ~= false
     D.profile.SharedPriorityCooldown121Enabled = env.SharedPriorityCooldown121Enabled == true
     D.profile.ClearCleansedTarget121Enabled = env.ClearCleansedTarget121Enabled ~= false
+    D.profile.TextAlerts121Enabled = env.TextAlerts121Enabled ~= false
     D.profile.EnvironmentChat121Enabled = env.EnvironmentChat121Enabled ~= false
 end
 
@@ -377,6 +421,8 @@ function D:Reset121EnvironmentProfile()
     if D.Set121LineOfSightEnabled then D:Set121LineOfSightEnabled(D.profile.LineOfSight121Enabled ~= false) end
     if D.Apply121CooldownAppearance then D:Apply121CooldownAppearance() end
     if D.Set121CooldownOverlayEnabled then D:Set121CooldownOverlayEnabled(D.profile.CooldownOverlay121Enabled ~= false) end
+    if D.Apply121AlertWarningStyle then D:Apply121AlertWarningStyle() end
+    if D.profile.TextAlerts121Enabled == false and D.Hide121AlertWarning then D:Hide121AlertWarning() end
 end
 
 local lastEnvironment121 = nil
@@ -430,6 +476,11 @@ local function refreshEnvironmentVisuals(announceTransition)
     if D.Set121CooldownOverlayEnabled and D.profile then
         D:Set121CooldownOverlayEnabled(D.profile.CooldownOverlay121Enabled ~= false)
     end
+    if D.Apply121AlertWarningStyle then D:Apply121AlertWarningStyle() end
+    if D.Are121TextAlertsEnabled and not D:Are121TextAlertsEnabled()
+        and D.Hide121AlertWarning then
+        D:Hide121AlertWarning()
+    end
     if not D.MicroUnitF or not D.MicroUnitF.ExistingPerUNIT then return end
     for unit, MF in pairs(D.MicroUnitF.ExistingPerUNIT) do
         if MF and MF.Update then
@@ -477,35 +528,26 @@ local function getAlertColor()
 end
 
 -- ---------------------------------------------------------------------------
--- WoW 12.1 MUF square-state sound trigger
+-- WoW 12.1 protected-aura sound trigger
 -- ---------------------------------------------------------------------------
--- The managed AuraButton that paints a MUF is in Blizzard's forbidden aura
--- partition. Addon Lua must not install OnShow/OnHide handlers on it or read
--- IsShown(). Instead, mirror the same player-dispellable condition through the
--- public opaque aura-instance-ID API. Aura instance IDs are non-secret; no aura
--- name, spell ID, dispel type, duration, stack count or managed-button state is
--- inspected here.
---
--- In WoW 12.1, HARMFUL|RAID is Blizzard's direct "the active player can
--- dispel this harmful aura" filter. Decursive's managed MUF slots use the
--- broader RAID_PLAYER_DISPELLABLE pool plus the player's configured dispel-type
--- candidate filters; the resulting actionable condition is the same one we need
--- for audio. A unit moves clean -> afflicted when this player-dispellable set
--- goes from empty to non-empty. That transition requests Decursive's existing
--- per-MUF transition alert. Each MUF owns its own clean/afflicted state: a
--- clean -> afflicted transition plays immediately. The normal group burst-ignore
--- window is intentionally bypassed for this square-linked alert path.
--- WoW 12.1 native aura-sound adapter.
---
--- The ManagedAuraContainer that paints the red/blue MUF square owns protected
--- aura visibility. Addon Lua cannot safely inspect that state in combat. Sound
--- notifications therefore use Blizzard's C_UnitAuras.AddAuraSound engine for
--- known/learned dispellable spell IDs. Blizzard detects the protected aura and
--- plays the selected sound; Decursive never reads the protected AuraButton.
+-- Protected AuraSlot presentation does not reliably invoke addon-owned script
+-- callbacks once Blizzard seals the aura subtree. Live sound therefore uses
+-- C_UnitAuras.AddAuraSound: Decursive registers public DispelDB/learned spell
+-- IDs for assigned group unit tokens while out of combat, and Blizzard owns the
+-- protected detection and playback. Addon Lua never reads AuraSlot visibility
+-- or protected aura details.
 function D:Is121MUFStateSoundEngineAvailable()
-    return C_UnitAuras ~= nil
-        and type(C_UnitAuras.AddAuraSound) == "function"
-        and type(C_UnitAuras.RemoveAuraSound) == "function"
+    return type(self.RefreshProtectedAuraSounds) == "function"
+        and type(self.IsProtectedAuraSoundEngineAvailable) == "function"
+        and self:IsProtectedAuraSoundEngineAvailable()
+end
+
+function D:Is121MUFVisibilitySoundDriverEnabled()
+    -- Kept for compatibility with older option panels. The former child-frame
+    -- OnShow driver is intentionally disabled under the 12.1 protected-aura
+    -- rules; reporting it active would suppress every native AddAuraSound
+    -- registration and leave live combat alerts silent.
+    return false
 end
 
 -- Compatibility names retained because other v11 code calls them when MUFs are
@@ -515,6 +557,7 @@ function D:Refresh121MUFStateSoundUnit(_unit, _suppressAlert)
 end
 
 function D:Refresh121MUFStateSoundBaseline()
+    if self.Is121MUFVisibilitySoundDriverEnabled and self:Is121MUFVisibilitySoundDriverEnabled() then return end
     if type(self.RefreshProtectedAuraSounds) ~= "function" then return end
     -- Deferred one frame: resetTrackedDispelSpell() (this function's only
     -- caller) runs synchronously inside the UNIT_SPELLCAST_SUCCEEDED handler,
@@ -851,6 +894,20 @@ local function nativeRangeValueForMUF(MF)
     return nil, false
 end
 
+local function shouldTrackRange121()
+    if not D.profile or D.profile.OutOfRange121Enabled == false then return false end
+    if type(IsInInstance) ~= "function" then return false end
+    local inInstance, instanceType = IsInInstance()
+    return inInstance == true and (
+        instanceType == "party" or instanceType == "raid"
+        or instanceType == "pvp" or instanceType == "arena"
+    )
+end
+
+function D:ShouldTrack121Range()
+    return shouldTrackRange121()
+end
+
 local function applyNativeRangeToStatusLayers(MF, fill, rangeFill, resultColor)
     if not fill or not rangeFill
         or not fill.SetVertexColorFromBoolean
@@ -998,7 +1055,7 @@ local function refreshOneMUFStatusLight(MF, now)
     -- flowing into the native range layers below: those compute
     -- range against the player's configured DISPEL spell, which is meaningless
     -- against a dead target and would otherwise silently override this.
-    if MF.Decursive121SoulLinkRangeActive then
+    if shouldTrackRange121() and MF.Decursive121SoulLinkRangeActive then
         fill:SetVertexColor(unpack(STATUS_RANGE))
         if rangeFill then rangeFill:SetVertexColor(unpack(STATUS_CLEAR)) end
         if rangeLayer then rangeLayer:Show() end
@@ -1010,7 +1067,7 @@ local function refreshOneMUFStatusLight(MF, now)
     -- Native two-layer contract via C_Spell.IsSpellInRange()/UnitInRange.
     -- Secret booleans go straight into the texture API so yellow hard-wins
     -- over red/green.
-    if rangeFill and applyNativeRangeToStatusLayers(MF, fill, rangeFill, resultColor) then
+    if shouldTrackRange121() and rangeFill and applyNativeRangeToStatusLayers(MF, fill, rangeFill, resultColor) then
         if rangeLayer then rangeLayer:Show() end
         light:Show()
         return
@@ -1020,7 +1077,7 @@ local function refreshOneMUFStatusLight(MF, now)
     -- signal.  This path contains no protected aura reads.
     if rangeFill then rangeFill:SetVertexColor(unpack(STATUS_CLEAR)) end
     if rangeLayer then rangeLayer:Show() end
-    if MF.Decursive121OutOfRange == true or (MF.Decursive121StatusRangeUntil or 0) > now then
+    if shouldTrackRange121() and (MF.Decursive121OutOfRange == true or (MF.Decursive121StatusRangeUntil or 0) > now) then
         fill:SetVertexColor(unpack(STATUS_RANGE))
     else
         fill:SetVertexColor(unpack(resultColor))
@@ -1041,6 +1098,12 @@ end
 function D:Mark121MUFStatusRange(unitOrMF)
     local MF = resolveStatusMUF(unitOrMF)
     if not MF then return end
+    if not shouldTrackRange121() then
+        MF.Decursive121OutOfRange = false
+        MF.Decursive121StatusRangeUntil = 0
+        refreshOneMUFStatusLight(MF)
+        return
+    end
     MF.Decursive121OutOfRange = true
     MF.Decursive121StatusRangeUntil = (GetTime and GetTime() or 0) + 2.5
     refreshOneMUFStatusLight(MF)
@@ -1128,7 +1191,7 @@ function D:Get121MUFStatus(unitOrMF)
     -- This diagnostic helper can only report Decursive's non-secret range state.
     -- Live IsSpellInRange/UnitInRange may be secret and is intentionally never
     -- inspected in Lua; the actual status light still gives yellow top priority.
-    if MF.Decursive121OutOfRange == true or (MF.Decursive121StatusRangeUntil or 0) > now then
+    if shouldTrackRange121() and (MF.Decursive121OutOfRange == true or (MF.Decursive121StatusRangeUntil or 0) > now) then
         return "OUT_OF_RANGE", MF.CurrUnit
     end
     if (MF.Decursive121StatusFailureUntil or 0) > now then
@@ -1201,8 +1264,7 @@ function D:Apply121RangeAppearance()
 end
 
 local function refreshRangeOverlays()
-    local profile = D.profile or {}
-    local enabled = profile.OutOfRange121Enabled ~= false
+    local enabled = shouldTrackRange121()
     for MF in pairs(rangeMUFs) do
         local overlay = MF.Decursive121RangeOverlay
         if overlay then
@@ -1446,9 +1508,9 @@ local function initializeProviderPriorityButton(auraButton, priority, MF, anchor
     if not auraButton or providerPriorityInitializedButtons[auraButton] then return end
     providerPriorityInitializedButtons[auraButton] = true
 
-    -- DISPEL Alert label is created as a child of this AuraSlot inside
-    -- initializeFrame (before the button becomes forbidden). Blizzard
-    -- Show/Hide then cascades visibility — no IsShown reads.
+    -- DISPEL Alert labels are registered with Blizzard as native dispel-type
+    -- and duration text inside initializeFrame (before access restrictions).
+    -- Blizzard owns both protected visibility and the elapsed-time gate.
     if D.Register121DispelAlertAuraButton then
         D:Register121DispelAlertAuraButton(auraButton)
     end
@@ -3173,11 +3235,11 @@ local function resetMUFsForZoneReinit()
     end
 end
 
-local function rebuildMUFsAfterZone(reason)
+local function rebuildMUFsAfterZone(reason, updatePasses)
     if not D.DcrFullyInitialized then return false end
     if InCombatLockdown() then
         if D.AddDelayedFunctionCall then
-            D:AddDelayedFunctionCall("Dcr_PostZoneFullReinit", rebuildMUFsAfterZone, reason)
+            D:AddDelayedFunctionCall("Dcr_PostZoneFullReinit", rebuildMUFsAfterZone, reason, updatePasses)
         end
         return false
     end
@@ -3189,7 +3251,9 @@ local function rebuildMUFsAfterZone(reason)
     -- Running several passes here avoids waiting for the periodic updater to
     -- eventually create party3/party4 after a transient player-only snapshot.
     if D.DebuffsFrame_Update then
-        for _ = 1, 12 do D:DebuffsFrame_Update() end
+        local passes = tonumber(updatePasses) or 12
+        if passes < 1 then passes = 1 elseif passes > 12 then passes = 12 end
+        for _ = 1, passes do D:DebuffsFrame_Update() end
     end
 
     if D.MicroUnitF and D.MicroUnitF.MFsDisplay_Update then
@@ -3250,6 +3314,35 @@ function D:ReinitializeDecursiveAfterZone(reason)
     return true
 end
 
+-- Short roster-only recovery. This preserves visible MUFs while the group list
+-- settles and performs six updater passes total instead of the full zone path's
+-- 72. It still repairs follower-dungeon roster changes that do not fire
+-- PLAYER_ENTERING_WORLD.
+local ROSTER_REFRESH_GENERATION = 0
+local ROSTER_REFRESH_DELAYS = { 0.20, 1.00 }
+
+function D:RefreshDecursiveAfterRoster(reason)
+    ROSTER_REFRESH_GENERATION = ROSTER_REFRESH_GENERATION + 1
+    local generation = ROSTER_REFRESH_GENERATION
+    self.Groups_datas_are_invalid = true
+
+    local function pass(delay)
+        if generation ~= ROSTER_REFRESH_GENERATION or not D.DcrFullyInitialized then return end
+        D.Groups_datas_are_invalid = true
+        rebuildMUFsAfterZone((reason or "roster") .. " @" .. tostring(delay), 3)
+    end
+
+    if C_Timer and C_Timer.After then
+        for i = 1, #ROSTER_REFRESH_DELAYS do
+            local delay = ROSTER_REFRESH_DELAYS[i]
+            C_Timer.After(delay, function() pass(delay) end)
+        end
+    else
+        pass(0)
+    end
+    return true
+end
+
 -- Backward-compatible name used by earlier square-sound test builds.
 D.Reinitialize121MUFProvidersAfterZone = D.ReinitializeDecursiveAfterZone
 
@@ -3278,23 +3371,26 @@ end
 --
 -- Two Decursive-owned banners share one draggable anchor:
 --   1) Timed Alert warning — Soul Link battle-rez range text
---   2) DISPEL Alert warning — live text is parented to each priority
---      AuraSlot during initializeFrame. Blizzard Show/Hide of that
---      slot (same signal that paints the red MUF) cascades to the
---      label. We never call IsShown/HookScript on AuraButtons: both
---      are forbidden while auras are secret. AddAuraSound still owns
---      audio with no Lua callback.
+--   2) DISPEL Alert warning — each priority AuraSlot owns Blizzard-managed
+--      FontStrings. UNTIL_CLEARED uses SetDispelTypeText; TIMED uses
+--      SetDurationText with an ElapsedDuration color curve. Blizzard therefore
+--      owns the protected aura transition and the fixed display timeout. Addon
+--      Lua never reads aura data, IsShown(), or protected frame state.
 -----------------------------------------------------------------
 
 local alert121Anchor
 local alert121MoveMode = false
 local alert121Banner -- Soul Link / generic timed messages
-local dispel121Banner -- parent for DISPEL layers
 local dispelAlertWatchButtons = setmetatable({}, { __mode = "k" })
-local dispelAlertLayers = setmetatable({}, { __mode = "k" }) -- auraButton -> layer frame
+local dispelAlertLayers = setmetatable({}, { __mode = "k" }) -- auraButton -> native text entry
 local dispelAlertPreviewUntil = 0
+local dispelAlertNativeCurve
+local dispelAlertNativeCurveReady = false
+local dispelAlertNativeCurveSignature
+local dispelAlertStylePending = false
 local DEFAULT_ALERT_FONT_SIZE = 48
 local DEFAULT_ALERT_COLOR = { 1, 0.15, 0.15 }
+T._Alert121FontObjectUsers = T._Alert121FontObjectUsers or setmetatable({}, { __mode = "k" })
 
 function D:Get121AlertAnchor()
     if alert121Anchor then return alert121Anchor end
@@ -3340,25 +3436,81 @@ function D:Get121AlertAnchor()
     return f
 end
 
-local function styleAlertFontString(text)
-    if not text then return end
+-- One shared Font object keeps preview and protected native labels on the same
+-- configured size. Once a FontString is registered with CustomAuraButton it can
+-- become inaccessible to addon Lua while aura data is secret, but changing the
+-- unprotected Font object still updates every registered user.
+function D:Refresh121AlertFontObject()
     local size = (D.profile and D.profile.Alert121FontSize) or DEFAULT_ALERT_FONT_SIZE
     local fontPath = select(1, GameFontNormalHuge:GetFont())
-    text:SetFont(fontPath, size, "THICKOUTLINE")
-    local color = (D.profile and D.profile.Alert121Color) or DEFAULT_ALERT_COLOR
-    text:SetTextColor(color[1], color[2], color[3])
+    if not T._Alert121FontObject and CreateFont then
+        T._Alert121FontObject = CreateFont("Decursive121AlertWarningFont")
+    end
+    if T._Alert121FontObject then
+        local ok, applied = pcall(T._Alert121FontObject.SetFont, T._Alert121FontObject, fontPath, size, "THICKOUTLINE")
+        if ok and applied ~= false then return T._Alert121FontObject end
+    end
+    return nil, fontPath, size
+end
+
+local function styleAlertFontString(text, applyColor)
+    if not text then return end
+    local fontObject, fontPath, size = D:Refresh121AlertFontObject()
+    if fontObject and text.SetFontObject then
+        if not T._Alert121FontObjectUsers[text] then
+            local ok = pcall(text.SetFontObject, text, fontObject)
+            if ok then T._Alert121FontObjectUsers[text] = true end
+            if not ok then text:SetFont(select(1, GameFontNormalHuge:GetFont()),
+                (D.profile and D.profile.Alert121FontSize) or DEFAULT_ALERT_FONT_SIZE, "THICKOUTLINE") end
+        end
+    else
+        text:SetFont(fontPath, size, "THICKOUTLINE")
+    end
+    if applyColor ~= false then
+        local color = (D.profile and D.profile.Alert121Color) or DEFAULT_ALERT_COLOR
+        text:SetTextColor(color[1], color[2], color[3])
+    end
+end
+
+-- A native label is a descendant of a small/scaled MUF AuraSlot but is anchored
+-- to the screen-wide alert anchor. Ignore the MUF scale, then compensate with
+-- UIParent's effective scale so a configured 58px label has the same apparent
+-- size as the 58px options preview.
+function D:Normalize121NativeAlertFontScale(text)
+    if not text then return end
+    if text.SetIgnoreParentScale then text:SetIgnoreParentScale(true) end
+    if text.SetScale and UIParent and UIParent.GetEffectiveScale then
+        local uiScale = UIParent:GetEffectiveScale()
+        if type(uiScale) == "number" and uiScale > 0 then text:SetScale(uiScale) end
+    end
 end
 
 function D:Apply121AlertWarningStyle()
+    -- FontStrings registered with CustomAuraButton become protected display
+    -- elements. Restyle them only out of combat; their timed color is owned by
+    -- the native DurationTextBinding curve rather than SetTextColor().
+    if InCombatLockdown and InCombatLockdown() then
+        dispelAlertStylePending = true
+        return
+    end
+    self:Refresh121AlertFontObject()
     local size = (D.profile and D.profile.Alert121FontSize) or DEFAULT_ALERT_FONT_SIZE
     local bannerH = math.max(120, math.floor(size * 2.5 + 0.5))
     if alert121Banner then alert121Banner:SetHeight(bannerH) end
-    if dispel121Banner then dispel121Banner:SetHeight(bannerH) end
     if alert121Banner and alert121Banner.Text then styleAlertFontString(alert121Banner.Text) end
-    if dispel121Banner and dispel121Banner.Text then styleAlertFontString(dispel121Banner.Text) end
+    local styleFailed = false
     for _, layer in pairs(dispelAlertLayers) do
-        if layer and layer.Text then styleAlertFontString(layer.Text) end
+        if layer and layer.Text then
+            local ok = pcall(styleAlertFontString, layer.Text)
+            if not ok then styleFailed = true end
+        end
+        if layer and layer.TimedText then
+            local ok = pcall(styleAlertFontString, layer.TimedText, false)
+            if not ok then styleFailed = true end
+        end
     end
+    if D.Refresh121DispelAlertWarning then D:Refresh121DispelAlertWarning() end
+    if styleFailed then dispelAlertStylePending = true end
 end
 
 D.Apply121SoulLinkAlertStyle = D.Apply121AlertWarningStyle
@@ -3385,17 +3537,22 @@ local function getDispelAlertMode()
 end
 
 local function getDispelAlertDuration()
-    local d = tonumber(D.profile and D.profile.Alert121DispelDuration) or 3
+    local d = tonumber(D.profile and D.profile.Alert121DispelDuration) or 2
     if d < 0.5 then d = 0.5 end
     if d > 30 then d = 30 end
     return d
 end
 
 local function isDispelAlertEnabled()
+    if D.Are121TextAlertsEnabled and not D:Are121TextAlertsEnabled() then
+        return false
+    end
     return not (D.profile and D.profile.Alert121DispelEnabled == false)
 end
 
--- Debounce rapid TIMED re-triggers (test / sound-hook assist).
+-- A TIMED warning is one fixed pulse. Managed AuraSlots may briefly recycle
+-- their child visibility while Blizzard refreshes the same affliction; those
+-- internal refreshes must not extend the configured display duration.
 local dispelTimedPulseIgnoreUntil = 0
 
 local function normalizeSoundPath(path)
@@ -3447,21 +3604,6 @@ local function soundMatchesDispelAlert(sound)
     return false
 end
 
-local function armDispelLayerTimedHide(layer)
-    if not layer then return end
-    pcall(layer.SetAlpha, layer, 1)
-    layer._dispelHoldGen = (layer._dispelHoldGen or 0) + 1
-    local gen = layer._dispelHoldGen
-    local dur = getDispelAlertDuration()
-    if C_Timer and C_Timer.After then
-        C_Timer.After(dur, function()
-            if layer._dispelHoldGen ~= gen then return end
-            if getDispelAlertMode() ~= "TIMED" then return end
-            pcall(layer.SetAlpha, layer, 0)
-        end)
-    end
-end
-
 local function pulseTimedDispelAlert(reason)
     if not isDispelAlertEnabled() then return false end
     if getDispelAlertMode() ~= "TIMED" then return false end
@@ -3469,90 +3611,135 @@ local function pulseTimedDispelAlert(reason)
     if now < dispelTimedPulseIgnoreUntil then return false end
 
     local dur = getDispelAlertDuration()
-    dispelTimedPulseIgnoreUntil = now + 0.15
+    -- Lock for the full visual duration. Another managed refresh or sound
+    -- callback cannot increment the banner generation and postpone its hide.
+    dispelTimedPulseIgnoreUntil = now + dur
     dispelAlertPreviewUntil = now + dur
-
-    -- Options test / sound-hook assist: arm every parented layer directly.
-    for _, layer in pairs(dispelAlertLayers) do
-        if layer then armDispelLayerTimedHide(layer) end
-    end
+    if D.Show121AlertWarning then D:Show121AlertWarning("DISPEL", dur) end
     if D.AlertDiag then D:AlertDiag("DISPEL timed pulse (%s)", tostring(reason or "unknown")) end
     return true
 end
 
-local function onDispelAlertLayerShow(layer)
-    if not layer or not isDispelAlertEnabled() then
-        if layer then pcall(layer.SetAlpha, layer, 0) end
-        return
+local DISPEL_ALERT_TEXT_MAP = {
+    Magic = "DISPEL",
+    Curse = "DISPEL",
+    Disease = "DISPEL",
+    Poison = "DISPEL",
+    Bleed = "DISPEL",
+}
+
+local function ensureDispelAlertNativeCurve()
+    if dispelAlertNativeCurveReady then return dispelAlertNativeCurve ~= nil end
+    dispelAlertNativeCurveReady = true
+    if not C_CurveUtil or not C_CurveUtil.CreateColorCurve
+        or not Enum or not Enum.LuaCurveType or not CreateColor
+    then
+        return false
     end
-    if getDispelAlertMode() == "UNTIL_CLEARED" then
-        pcall(layer.SetAlpha, layer, 1)
-        return
-    end
-    -- TIMED: show via cascade (alpha 1), then hide after configured duration.
-    -- Refresh121DispelAlertWarning must never override this alpha.
-    armDispelLayerTimedHide(layer)
+    dispelAlertNativeCurve = C_CurveUtil.CreateColorCurve()
+    dispelAlertNativeCurve:SetType(Enum.LuaCurveType.Step)
+    return true
 end
 
-local function ensureDispel121Banner()
-    if dispel121Banner then return dispel121Banner end
-    local f = CreateFrame("Frame", "Decursive121DispelAlert", UIParent)
-    f:SetSize(800, 120)
-    f:SetPoint("CENTER", D:Get121AlertAnchor(), "CENTER", 0, 0)
-    f:SetFrameStrata("HIGH")
-    f:EnableMouse(false)
-    f:Show()
-    local text = f:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-    text:SetPoint("CENTER")
-    text:SetText("DISPEL")
-    text:SetAlpha(0)
-    f.Text = text
-    dispel121Banner = f
-    D:Apply121AlertWarningStyle()
-    return f
+-- The curve is evaluated inside Blizzard against the protected aura's native
+-- DurationObject. ElapsedDuration is zero at application, stays opaque for the
+-- configured window, then becomes transparent without exposing either the
+-- application time or the current aura state to addon Lua.
+local function rebuildDispelAlertNativeCurve()
+    if not ensureDispelAlertNativeCurve() then return false end
+    local curve = dispelAlertNativeCurve
+    local color = (D.profile and D.profile.Alert121Color) or DEFAULT_ALERT_COLOR
+    local enabledTimed = isDispelAlertEnabled() and getDispelAlertMode() == "TIMED"
+    local visibleAlpha = enabledTimed and 1 or 0
+    local signature = table.concat({
+        enabledTimed and "1" or "0",
+        tostring(getDispelAlertDuration()),
+        tostring(color[1]), tostring(color[2]), tostring(color[3]),
+    }, ":")
+    if dispelAlertNativeCurveSignature == signature then return true end
+
+    curve:ClearPoints()
+    curve:AddPoint(0, CreateColor(color[1], color[2], color[3], visibleAlpha))
+    if enabledTimed then
+        curve:AddPoint(getDispelAlertDuration(), CreateColor(color[1], color[2], color[3], 0))
+    else
+        curve:AddPoint(30, CreateColor(color[1], color[2], color[3], 0))
+    end
+    dispelAlertNativeCurveSignature = signature
+    return true
 end
 
--- Parented to each priority AuraSlot inside initializeFrame. Parent Show/Hide
--- cascades to the label (same signal as the red MUF). Mode only changes how
--- long we keep the label up after the slot appears.
+-- Created inside CustomAuraContainer's initializeFrame callback, before
+-- Blizzard applies access restrictions. Both text paths are registered with
+-- supported CustomAuraButton APIs; there are no scripts or AnimationGroups in
+-- the protected AuraSlot subtree.
 local function ensureDispelAlertLayer(auraButton)
     local layer = dispelAlertLayers[auraButton]
     if layer then return layer end
 
-    layer = CreateFrame("Frame", nil, auraButton)
-    layer:SetSize(1, 1)
-    layer:SetPoint("CENTER", auraButton, "CENTER")
-    layer:EnableMouse(false)
-    if layer.SetFrameStrata then layer:SetFrameStrata("HIGH") end
-    if layer.SetIgnoreParentScale then layer:SetIgnoreParentScale(true) end
     if auraButton.SetClipsChildren then pcall(auraButton.SetClipsChildren, auraButton, false) end
-    if layer.SetClipsChildren then layer:SetClipsChildren(false) end
-    layer:Show()
 
-    local text = layer:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-    text:SetPoint("CENTER", D:Get121AlertAnchor(), "CENTER", 0, 0)
-    text:SetText("DISPEL")
-    if text.SetIgnoreParentScale then text:SetIgnoreParentScale(true) end
-    layer.Text = text
-    styleAlertFontString(text)
+    layer = { TimedConfigured = false }
+    local anchor = D:Get121AlertAnchor()
 
-    layer._dispelHoldGen = 0
-    layer._dispelWasVisible = false
-    -- Alpha 1 lets parent Show/Hide drive visibility. Do not start at 0 in TIMED.
-    layer:SetAlpha(isDispelAlertEnabled() and 1 or 0)
+    -- TIMED: literal text whose color alpha is driven by the aura's protected
+    -- elapsed duration in Blizzard code. This is the path that fixes combat
+    -- display and the exact 2/3-second timeout.
+    if auraButton.SetDurationText and C_DurationUtil and C_DurationUtil.CreateDurationTextBinding
+        and Enum and Enum.DurationTextBindingProperty and rebuildDispelAlertNativeCurve()
+    then
+        local timedText = auraButton:CreateFontString(nil, "OVERLAY")
+        timedText:SetPoint("CENTER", anchor, "CENTER", 0, 0)
+        D:Normalize121NativeAlertFontScale(timedText)
+        styleAlertFontString(timedText, false)
 
-    if layer.SetScript then
-        pcall(layer.SetScript, layer, "OnShow", function(self) onDispelAlertLayerShow(self) end)
-        pcall(layer.SetScript, layer, "OnHide", function(self)
-            self._dispelWasVisible = false
-            -- Cancel any pending TIMED hide; do not SetAlpha here — parent
-            -- Show/Hide cascade owns visibility. Forcing alpha 0 on hide was
-            -- preventing the label from reappearing on the next dispel.
-            self._dispelHoldGen = (self._dispelHoldGen or 0) + 1
-        end)
+        local binding = C_DurationUtil.CreateDurationTextBinding()
+        binding:SetToDefaults()
+        binding:SetTextFormat("DISPEL", {})
+        binding:SetTextColorCurve(dispelAlertNativeCurve, Enum.DurationTextBindingProperty.ElapsedDuration)
+        binding:SetZeroDurationText("")
+        binding:SetExpiredText("")
+        binding:SetUpdateInterval(0.05)
+
+        local ok = pcall(auraButton.SetDurationText, auraButton, timedText, { binding = binding })
+        if ok then
+            layer.TimedText = timedText
+            layer.TimedConfigured = true
+        elseif D.AlertDiag then
+            D:AlertDiag("DISPEL native duration text registration FAILED")
+        end
+    end
+
+    -- UNTIL_CLEARED, plus a compatibility fallback if DurationTextBinding is
+    -- unavailable: Blizzard selects and shows this text from dispelName without
+    -- exposing the protected value to Decursive.
+    if auraButton.SetDispelTypeText then
+        local text = auraButton:CreateFontString(nil, "OVERLAY")
+        text:SetPoint("CENTER", anchor, "CENTER", 0, 0)
+        D:Normalize121NativeAlertFontScale(text)
+        styleAlertFontString(text)
+        local usePersistent = isDispelAlertEnabled()
+            and (getDispelAlertMode() == "UNTIL_CLEARED" or not layer.TimedConfigured)
+        text:SetAlpha(usePersistent and 1 or 0)
+        layer.PersistentAlpha = usePersistent and 1 or 0
+
+        local ok = pcall(auraButton.SetDispelTypeText, auraButton, text, {
+            showWhenHarmful = true,
+            showWhenHelpful = false,
+            showWithoutDispelType = false,
+            customDispelTextMap = DISPEL_ALERT_TEXT_MAP,
+        })
+        if ok then
+            layer.Text = text
+        elseif D.AlertDiag then
+            D:AlertDiag("DISPEL native dispel text registration FAILED")
+        end
     end
 
     dispelAlertLayers[auraButton] = layer
+    if D.AlertDiag then
+        D:AlertDiag("DISPEL native text registered (timed=%s)", tostring(layer.TimedConfigured))
+    end
     return layer
 end
 
@@ -3575,27 +3762,55 @@ function D:Pulse121TimedDispelAlert(reason)
 end
 
 function D:Refresh121DispelAlertWarning()
+    if InCombatLockdown and InCombatLockdown() then
+        dispelAlertStylePending = true
+        return false
+    end
+
     local enabled = isDispelAlertEnabled()
     local mode = getDispelAlertMode()
+    rebuildDispelAlertNativeCurve()
+    local refreshComplete = true
 
-    for btn, _ in pairs(dispelAlertWatchButtons) do
+    for btn in pairs(dispelAlertWatchButtons) do
         local layer = btn and dispelAlertLayers[btn]
-        if not layer then
-        elseif not enabled then
-            layer._dispelWasVisible = false
-            pcall(layer.SetAlpha, layer, 0)
-        elseif mode == "UNTIL_CLEARED" then
-            pcall(layer.SetAlpha, layer, 1)
+        if layer and layer.Text then
+            local usePersistent = enabled and (mode == "UNTIL_CLEARED" or not layer.TimedConfigured)
+            local alpha = usePersistent and 1 or 0
+            if layer.PersistentAlpha ~= alpha then
+                local ok = pcall(layer.Text.SetAlpha, layer.Text, alpha)
+                if ok then layer.PersistentAlpha = alpha end
+                if not ok then refreshComplete = false end
+            end
         end
-        -- TIMED: never touch layer alpha here. Visibility comes from the
-        -- AuraSlot Show/Hide cascade; the 3s hide is armDispelLayerTimedHide
-        -- on layer OnShow only. Forcing alpha 0 in this refresh loop is what
-        -- broke live display when the timed-fade work landed.
     end
+    dispelAlertStylePending = not refreshComplete
+    return refreshComplete
 end
 
-function D:Show121AlertWarning(message, durationSeconds)
+local dispelAlertRefreshFrame = CreateFrame("Frame")
+dispelAlertRefreshFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+dispelAlertRefreshFrame:SetScript("OnEvent", function()
+    if not dispelAlertStylePending then return end
+    if D.Apply121AlertWarningStyle then
+        D:Apply121AlertWarningStyle()
+    elseif D.Refresh121DispelAlertWarning then
+        D:Refresh121DispelAlertWarning()
+    end
+end)
+
+function D:Hide121AlertWarning()
+    if not alert121Banner then return end
+    alert121Banner.generation = (alert121Banner.generation or 0) + 1
+    alert121Banner:Hide()
+end
+
+function D:Show121AlertWarning(message, durationSeconds, bypassEnvironmentProfile)
     if type(message) ~= "string" or message == "" then return false end
+    if not bypassEnvironmentProfile and self.Are121TextAlertsEnabled
+        and not self:Are121TextAlertsEnabled() then
+        return false
+    end
     local f = ensureAlert121Banner()
     f.Text:SetText(message)
     f:Show()
@@ -3611,9 +3826,25 @@ function D:Show121AlertWarning(message, durationSeconds)
     return true
 end
 
+-- Settings-only preview.  This deliberately does not consult the live DISPEL
+-- warning toggle or either alert debounce: a preview button must remain useful
+-- while the feature is disabled, otherwise it looks broken precisely when a
+-- user is deciding whether to enable it.  The preview still uses the selected
+-- font, color and configured duration, and never mutates live AuraSlot state.
+function D:Test121DispelAlertWarning()
+    local duration = getDispelAlertDuration()
+    ensureAlert121Banner()
+    self:Apply121AlertWarningStyle()
+    local shown = self:Show121AlertWarning("DISPEL", duration, true)
+    if self.AlertDiag then
+        self:AlertDiag("DISPEL alert warning preview (%.1fs)", duration)
+    end
+    return shown
+end
+
 -- Options test + public combat-log + Decursive-played sound assist.
 function D:Show121DispelAlertWarning(reason, bypassIgnoreWindow)
-    if self.profile and self.profile.Alert121DispelEnabled == false then return false end
+    if not isDispelAlertEnabled() then return false end
 
     local now = GetTime and GetTime() or 0
     local ignoreSeconds = tonumber(self.profile and self.profile.SoundNotificationIgnoreSeconds) or 2.0
@@ -3628,25 +3859,35 @@ function D:Show121DispelAlertWarning(reason, bypassIgnoreWindow)
         T._DispelNotificationIgnoreUntil = now + ignoreSeconds
     end
 
-    local duration = getDispelAlertDuration()
-    if getDispelAlertMode() == "TIMED" then
-        dispelTimedPulseIgnoreUntil = 0
-        pulseTimedDispelAlert(reason or "Show121DispelAlertWarning")
-        -- Options test has no live AuraSlot; show the shared banner too.
-        if bypassIgnoreWindow and self.Show121AlertWarning then
-            self:Show121AlertWarning("DISPEL", duration)
+    local alertReason = tostring(reason or "Show121DispelAlertWarning")
+    local function presentAlert()
+        if not isDispelAlertEnabled() then return end
+        if getDispelAlertMode() == "TIMED" then
+            pulseTimedDispelAlert(alertReason)
+        else
+            -- Persistent text is already owned by SetDispelTypeText on each
+            -- managed AuraSlot. Profile changes only select its out-of-combat
+            -- alpha; Blizzard continues to own protected visibility.
+            D:Refresh121DispelAlertWarning()
         end
-    else
-        dispelAlertPreviewUntil = now + duration
-        for _, layer in pairs(dispelAlertLayers) do
-            if layer then pcall(layer.SetAlpha, layer, 1) end
-        end
-        ensureDispel121Banner()
-        self:Show121AlertWarning("DISPEL", duration)
-        self:Refresh121DispelAlertWarning()
+        if D.AlertDiag then D:AlertDiag("DISPEL alert warning presented (%s)", alertReason) end
     end
-    if self.AlertDiag then self:AlertDiag("DISPEL alert warning (%s)", tostring(reason or "unknown")) end
+
+    -- This is a public-event/audio fallback. The authoritative combat text is
+    -- the native AuraSlot DurationTextBinding above. Defer the fallback one
+    -- frame so combat-log and sound hooks unwind before touching UIParent.
+    if C_Timer and C_Timer.After then C_Timer.After(0, presentAlert) else presentAlert() end
+    if self.AlertDiag then self:AlertDiag("DISPEL alert warning queued (%s)", alertReason) end
     return true
+end
+
+-- Build the ordinary fallback/preview banner before combat. Native live text
+-- is created only inside AuraSlot initializeFrame and is never mutated in
+-- combat by Decursive.
+if C_Timer and C_Timer.After then
+    C_Timer.After(0, function()
+        if D and D.Get121AlertAnchor then ensureAlert121Banner() end
+    end)
 end
 
 -- AddAuraSound has no Lua callback; hook PlaySoundFile for live TIMED/flash assist.

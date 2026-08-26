@@ -1,5 +1,106 @@
 # Zhaohu-Decursive Changelog
 
+## v12.0.1
+
+### DISPEL warning enabled by default
+- Enabled the live **DISPEL alert warning** by default for new profiles and existing profiles that never explicitly changed the setting.
+- Preserved an existing user's explicit disabled choice; this release does not force the warning back on after someone turns it off.
+- Timed mode remains the default and continues to hide the warning after 2 seconds unless the user selects another duration.
+
+### PvP profile text suppression
+- Added a profile-scoped master switch for Decursive's center-screen alert text.
+- PvP defaults this switch off; Raid, Mythic+, Dungeon, and Open World keep it on.
+- Existing profiles receive the PvP-off default once, then may opt back in from **Profiles & Modes**.
+- DISPEL and Soul Link text are suppressed in PvP while sound notifications and MUF indicators remain available.
+- Options-panel alert previews bypass the live profile switch so they can still be tested.
+
+## v11.1.4
+
+### Restored live dispel sound
+- Fixed a v11.1.3 regression that reported the removed AuraSlot `OnShow` sound driver as active and consequently disabled every Blizzard `C_UnitAuras.AddAuraSound` registration.
+- Added a guaranteed registration pass after Decursive finishes initializing, plus immediate re-registration when the master sound switch, sound preset, output channel, or native-aura-sound switch changes.
+- Added a public combat-log fallback when a known dispellable Spell ID could not be registered for the affected unit. Successful native registrations remain Blizzard-owned, preventing duplicate playback.
+
+### Matched live DISPEL text to the configured size
+- Live protected labels and the options preview now share one Font object, so the font-size slider controls both render paths.
+- Compensated the native labels for `UIParent` effective scale after excluding their small/scaled MUF parent. A configured size now has the same apparent size in combat and in the preview.
+- Kept protected label creation and registration inside Blizzard's `CustomAuraButton` initialization path and deferred later style changes until combat ends.
+
+## v11.1.3
+
+### Fixed live DISPEL text and its exact timeout
+- Replaced the unreliable protected AuraSlot `OnShow` signal with Blizzard's supported `CustomAuraButton:SetDurationText` path.
+- Timed mode now binds the literal **DISPEL** label to Blizzard's protected aura `DurationObject` and evaluates a native `ElapsedDuration` color curve: visible at application, transparent at the configured 2-, 2.5-, or 3-second mark.
+- **Until cleared** now uses Blizzard's `SetDispelTypeText` presentation path instead of relying on an addon child frame's visibility script.
+- The options preview remains a separate addon-owned banner, so it continues to work with the live warning disabled.
+- Added a safe persistent fallback when native duration binding is unavailable and deferred managed-text style changes until combat ends.
+
+### WoW 12.1 API compliance
+- Live text is initialized only inside `CustomAuraContainer`'s `initializeFrame` callback, before Blizzard applies access restrictions.
+- No aura enumeration, protected visibility read, secret-value comparison, managed-frame hook, in-combat child mutation, secure attribute change, or AuraSlot geometry change was added.
+
+## v11.1.2
+
+### Fixed Timed DISPEL text missing in combat
+- Fixed a v11.1.1 regression where the options preview worked but live **DISPEL** text could fail to appear in combat.
+- The ordinary Decursive-owned alert banner is now created before combat and its live presentation is queued for the next frame, after Blizzard's managed AuraSlot callback has fully unwound.
+- Live visual alerts no longer depend on dispel audio being enabled or accepted by the sound debounce.
+- The full-duration visual lock remains in place, so managed AuraSlot refreshes and sound callbacks cannot extend a configured 2- or 3-second warning.
+- Removed remaining live-combat alpha writes to the Blizzard-parented signal layer in Timed mode. No protected aura query, secret-value comparison, secure attribute change, or managed AuraSlot geometry change was added.
+
+## v11.1.1
+
+### Fixed Timed DISPEL warning duration
+- Fixed the live **DISPEL** text sometimes remaining visible beyond the configured duration because repeated Blizzard-managed AuraSlot refreshes and sound callbacks restarted its timer.
+- Timed mode now renders through one Decursive-owned banner with one fixed-duration pulse; additional managed refreshes during that duration are ignored instead of extending it.
+- Added a 0.35-second quiet-period check to distinguish a genuinely cleared AuraSlot from Blizzard briefly recycling the same managed slot.
+- Kept **Until cleared** behavior separate and unchanged: persistent text still follows Blizzard's managed parent visibility.
+- Preserved WoW 12.1 protected-aura safety: the fix does not query `IsShown`, enumerate aura details, compare secret values, or change secure attributes.
+
+## v11.1.0
+
+### Modern settings redesign
+- Rebuilt the standalone settings window around a new midnight/cyan design system with a larger branded header, live core status, profile/environment context, denser search, clearer footer feedback, and a resizable 900x680 minimum layout.
+- Reorganized the sidebar into Overview, Core Setup, Visuals & Alerts, Afflictions, Profiles & Tools, and Support while preserving every existing settings destination and backend binding.
+- Rebuilt the Dashboard with live session health, profile/environment/character cards, direct alert preview, high-value shortcuts, and an explicit WoW 12.1 safety summary.
+- Updated page hierarchy, section chrome, navigation badges, active states, spacing, colors, Test Lab layout, and Messages & Alerts naming for faster scanning.
+
+### DISPEL alert preview
+- Fixed **Test DISPEL alert warning** doing nothing when the live DISPEL warning toggle was disabled.
+- Added a dedicated settings-only preview path that bypasses the live enable gate and alert debounce without mutating managed AuraSlots.
+- Added direct DISPEL preview buttons to both the Dashboard and Test Lab, with success/failure status feedback.
+- Preview uses the selected font, color, and duration; Timed mode still defaults to 2 seconds.
+
+### WoW 12.1 API safety
+- Kept the UI rebuild presentation-only: no protected aura enumeration, secret-value branching, secure-frame attribute changes, or managed AuraSlot repositioning was added.
+- Blizzard-managed AuraContainers remain the source of truth for dispel presence, while secure MUF click casting stays in the resident combat core and remains combat-lockdown guarded.
+
+## v11.0.45
+
+### Alert warnings
+- Changed the default Timed-mode DISPEL warning duration from 3 seconds to 2 seconds.
+- Existing profiles still set to 3 seconds are migrated to 2 seconds; other custom durations are preserved.
+- The duration remains adjustable under Alert Warnings for users who prefer a different value.
+
+## v11.0.44
+
+### Reliability and compatibility
+- Fixed macro creation crashing when `MAX_ACCOUNT_MACROS` is unavailable; creation now handles an unknown/full account macro list safely.
+- Fixed enemy-cast inference so boss, target, focus, and all hostile nameplate units are watched concurrently.
+- Fixed the Blizzard Settings launcher to close through Blizzard's managed panel path before opening the standalone options window.
+- Replaced full MUF teardown on every roster event with a lightweight, debounced stabilization pass; full recovery remains active on world/instance transitions.
+
+### MUFs, range, and sounds
+- Enforced instance-only yellow range feedback in dungeon, raid, battleground, and arena content. Open-world range overlays and yellow status are disabled.
+- Linked dispel audio to the same Blizzard-managed red/blue MUF visibility transition and routed every request through the configurable global debounce gate.
+- Prevented duplicate per-unit/per-spell native aura sounds while the MUF-linked sound driver is active.
+- Added explicit click pass-through safeguards to the optional native debuff identity tooltip layer.
+
+### Profiles, UI, and data
+- Unified environment reset defaults across the runtime and modern UI; PvP now matches dungeon range dimming and Open World defaults range off.
+- Corrected remaining mojibake in the modern settings interface.
+- Removed duplicate spell ID 270499 from the Legion database so the King's Rest entry is authoritative.
+
 ## v11.0.43
 
 ### Alert warnings

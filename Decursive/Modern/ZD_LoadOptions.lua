@@ -59,6 +59,18 @@ local function printMsg(msg)
     end
 end
 
+local function closeBlizzardSettings()
+    if not SettingsPanel or not SettingsPanel:IsShown() then return true end
+    if SettingsPanel.Close then
+        SettingsPanel:Close(true)
+    elseif HideUIPanel then
+        HideUIPanel(SettingsPanel)
+    else
+        SettingsPanel:Hide()
+    end
+    return not SettingsPanel:IsShown()
+end
+
 -- 0 = disabled. Midnight may use one-arg or two-arg GetAddOnEnableState.
 local function GetOptionsEnableState()
     if not GetAddOnEnableState then return 2 end
@@ -183,7 +195,7 @@ function ZD:RegisterBlizzardSettingsLauncher()
     openBtn:SetScript("OnClick", function()
         if ZD:EnsureOptionsLoaded() and ZD.ToggleUI and ZD.ToggleUI ~= toggleStub then
             local f = ZD:CreateUI()
-            if f then
+            if f and closeBlizzardSettings() then
                 f:Show()
                 if ZD.ShowPage then ZD:ShowPage("dashboard") end
             end
