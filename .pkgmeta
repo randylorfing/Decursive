@@ -17,55 +17,17 @@ move-folders:
     Decursive/Decursive: Decursive
     Decursive/Decursive_Options: Decursive_Options
 
-externals:
-
-    Libs/LibStub:
-        url: https://repos.wowace.com/wow/libstub/trunk
-    Libs/CallbackHandler-1.0:
-        url: https://repos.wowace.com/wow/callbackhandler/trunk/CallbackHandler-1.0
-
-    Libs/AceAddon-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceAddon-3.0
-    Libs/AceConsole-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceConsole-3.0
-    Libs/AceEvent-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceEvent-3.0
-
-    Libs/AceTimer-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceTimer-3.0
-
-    Libs/AceHook-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceHook-3.0
-    Libs/AceDB-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceDB-3.0
-    Libs/LibDualSpec-1.0:
-        url: https://repos.wowace.com/wow/libdualspec-1-0
-    Libs/AceDBOptions-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceDBOptions-3.0
-    Libs/AceLocale-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceLocale-3.0
-
-    Libs/AceGUI-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceGUI-3.0
-    Libs/AceConfig-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceConfig-3.0
-
-    Libs/AceComm-3.0:
-        url: https://repos.wowace.com/wow/ace3/trunk/AceComm-3.0
-
-    Libs/BugGrabber:
-        url: https://repos.wowace.com/wow/bug-grabber/trunk
-
-
-
-    Libs/LibQTip-1.0:
-        url: https://repos.wowace.com/wow/libqtip-1-0
-    Libs/LibDBIcon-1.0:
-        url: https://repos.wowace.com/wow/libdbicon-1-0/trunk/LibDBIcon-1.0
-    Libs/LibDataBroker-1.1:
-        url: https://github.com/tekkub/libdatabroker-1-1.git
-
-
+# All Libs are committed directly to the repo (Decursive/Libs/*) rather than
+# fetched as externals -- confirmed via `git ls-files`, every library the old
+# externals list named is already tracked. Re-fetching them as externals at
+# build time (the old convention) duplicated that same content at the same
+# path, which is harmless for a single-folder package but breaks the
+# move-folders self-reference above: mv can't merge a directory onto an
+# existing same-named directory, so "Decursive/Decursive/Libs" colliding with
+# externally-fetched "Decursive/Libs" produced a hard "Directory not empty"
+# error. AceGUI-3.0/AceConfig-3.0 were the only externals NOT already
+# tracked, and they're unused (v11's embeds.xml intentionally doesn't load
+# them) -- dropped rather than kept as dead weight in the package.
 ignore:
     - Libs/LibStub/tests
     - branding
@@ -78,6 +40,6 @@ enable-nolib-creation: yes
 license-output: LICENSE.txt
 
 manual-changelog:
-    filename: CHANGELOG.md
+    filename: Decursive/CHANGELOG.md
     markup-type: markdown
 
