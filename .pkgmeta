@@ -6,7 +6,15 @@
 # relocate the companion(s) into the final zip's top level).
 package-as: Decursive
 
+# The packager internally stages everything one level under package-as (so
+# sibling folders can be relocated from there) -- the package-as folder
+# itself ALSO needs an explicit entry to get un-nested back to the top
+# level of the final zip, or Decursive.toc ends up at Decursive/Decursive/
+# Decursive.toc and the addon won't load. Confirmed via DBM's own .pkgmeta,
+# which has the exact same self-referencing DBM-Core/DBM-Core: DBM-Core
+# entry for this reason.
 move-folders:
+    Decursive/Decursive: Decursive
     Decursive/Decursive_Options: Decursive_Options
 
 externals:
