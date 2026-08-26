@@ -612,8 +612,17 @@ do
 
         t_insert(SortingTable, unit);
 
+        -- UnitClass(unit) can return a secret string for some unit tokens
+        -- (confirmed live for "focus" via BugGrabber), and using a secret
+        -- value as a table key throws "attempted to index a table that
+        -- cannot be indexed with secret keys" -- crashing GetUnitArray for
+        -- the whole group, not just this one unit. pcall + canaccessvalue
+        -- guards it the same way Decursive.lua's UnitCurableDebuffs does for
+        -- the same class of unit token.
+        local classOk, _, classToken = pcall(_UnitClass, unit);
+        local safeClassToken = (classOk and canaccessvalue(classToken)) and classToken or DC.CLASS_WARRIOR;
         UnitInfo[unit] = {
-            ["class"]  = DC.ClassUNameToNum[select(2, _UnitClass(unit)) or DC.CLASS_WARRIOR]; -- issue #46: sometimes nil is returned on pets right after joining a group
+            ["class"]  = DC.ClassUNameToNum[safeClassToken]; -- issue #46: sometimes nil is returned on pets right after joining a group
             ["GUID"]   = GUID;
             ["group"]  = group;
             ["RaidID"] = id;
@@ -737,7 +746,10 @@ do
 
                     pGUID = UnitToGUID[unit] or unit; -- at logon sometimes GUID is nil...
 
-                    if not IsInSkipList(pGUID, nil, DC.ClassUNameToNum[(select(2, _UnitClass(unit)))], _UnitGroupRolesAssigned(unit)) then
+                    -- Same secret-class-token guard as addUnit() above.
+                    local partyClassOk, _, partyClassToken = pcall(_UnitClass, unit);
+                    local safePartyClassToken = (partyClassOk and canaccessvalue(partyClassToken)) and partyClassToken or nil;
+                    if not IsInSkipList(pGUID, nil, DC.ClassUNameToNum[safePartyClassToken], _UnitGroupRolesAssigned(unit)) then
 
                         addUnit(unit, i, pGUID, 1);
 

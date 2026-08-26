@@ -362,7 +362,7 @@ function D:GetDefaultsSettings()
             PlayFailureSound = true,
             SoundProtectedAuraAlerts = true,
             SoundProtectedAuraAutoLearn = true,
-            Alert121DispelEnabled = true,
+            Alert121DispelEnabled = false,
             Alert121FontSize = 48,
             -- TIMED (default): hide DISPEL after Alert121DispelDuration seconds.
             -- UNTIL_CLEARED: keep DISPEL visible while a MUF still needs a dispel.
