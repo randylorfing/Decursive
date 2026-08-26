@@ -93,9 +93,9 @@ local SetFrameScript, ClearFrameScripts
 ------------------------------------------------------------------------------
 -- Cache debugging.
 ------------------------------------------------------------------------------
--- @debug @
+--[==[ Debug-only cache counters are intentionally disabled in release builds.
 local usedTables, usedFrames, usedTooltips = 0, 0, 0
--- @end-debug @]==]
+]==]
 
 ------------------------------------------------------------------------------
 -- Internal constants to tweak the layout
@@ -171,9 +171,9 @@ local frameHeap = lib.frameHeap
 local function AcquireFrame(parent)
     local frame = tremove(frameHeap) or CreateFrame("Frame", nil, nil, BackdropTemplateMixin and "BackdropTemplate")
     frame:SetParent(parent)
-    --[==[ @debug @
+    --[==[ Debug-only counter update intentionally disabled.
     usedFrames = usedFrames + 1
-    -- @end-debug @]==]
+    ]==]
     return frame
 end
 
@@ -186,9 +186,9 @@ local function ReleaseFrame(frame)
     ClearFrameScripts(frame)
 
     tinsert(frameHeap, frame)
-    --[==[ @debug @
+    --[==[ Debug-only counter update intentionally disabled.
     usedFrames = usedFrames - 1
-    -- @end-debug @]==]
+    ]==]
 end
 
 ------------------------------------------------------------------------------
@@ -400,9 +400,9 @@ function AcquireTooltip()
         setmetatable(tooltip, tipMetatable)
     end
 
-    --[==[ @debug @
+    --[==[ Debug-only counter update intentionally disabled.
     usedTooltips = usedTooltips + 1
-    -- @end-debug @]==]
+    ]==]
     return tooltip
 end
 
@@ -473,9 +473,9 @@ function ReleaseTooltip(tooltip)
     highlightTexture:SetTexture(DEFAULT_HIGHLIGHT_TEXTURE_PATH)
     highlightTexture:SetTexCoord(0, 1, 0, 1)
 
-    --[==[ @debug @
+    --[==[ Debug-only counter update intentionally disabled.
     usedTooltips = usedTooltips - 1
-    -- @end-debug @]==]
+    ]==]
 end
 
 ------------------------------------------------------------------------------
@@ -523,9 +523,9 @@ local tableHeap = lib.tableHeap
 -- Returns a table
 function AcquireTable()
     local tbl = tremove(tableHeap) or {}
-    --[==[ @debug @
+    --[==[ Debug-only counter update intentionally disabled.
     usedTables = usedTables + 1
-    -- @end-debug @]==]
+    ]==]
     return tbl
 end
 
@@ -533,9 +533,9 @@ end
 function ReleaseTable(tableInstance)
     wipe(tableInstance)
     tinsert(tableHeap, tableInstance)
-    --[==[ @debug @
+    --[==[ Debug-only counter update intentionally disabled.
     usedTables = usedTables - 1
-    -- @end-debug @]==]
+    ]==]
 end
 
 ------------------------------------------------------------------------------
@@ -1539,7 +1539,7 @@ end
 ------------------------------------------------------------------------------
 -- Debug slashcmds
 ------------------------------------------------------------------------------
--- @debug @
+--[==[ Debug-only slash command intentionally disabled in release builds.
 local print = print
 local function PrintStats()
     local tipCache = tostring(#tooltipHeap)
@@ -1562,4 +1562,4 @@ end
 
 SLASH_LibQTip1 = "/qtip"
 _G.SlashCmdList["LibQTip"] = PrintStats
--- @end-debug @]==]
+]==]

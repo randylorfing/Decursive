@@ -22,7 +22,7 @@
 
 ## Version: @project-version@
 ## X-Zhaohu-Build: Zhaohu-Decursive
-## X-Zhaohu-12.1-Patch: v12.0.4-tied-vertical-spacing-sync
+## X-Zhaohu-12.1-Patch: v12.0.7-packager-delimiter-hardening
 ## X-Zhaohu-Backend: v10.43-feature-engine
 ## X-Zhaohu-UI: modern-v11.1-lod-options
 ## Author: Randy Lorfing

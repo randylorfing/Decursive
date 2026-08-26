@@ -1,5 +1,31 @@
 # Zhaohu-Decursive Changelog
 
+## v12.0.7
+
+### Removed the debug preprocessing markers entirely
+- Removed the remaining WowAce `@debug@` / `@end-debug@` markers from the embedded `LibQTip-1.0.lua`.
+- Converted all eight debug-only counter and slash-command sections into ordinary inert Lua long comments, so the debug counters and the `/qtip` slash command are now genuinely disabled in release builds rather than left registered.
+- Supersedes the narrower v12.0.6 fix, which only spaced the markers out so the packager could not match them.
+
+### Added the release validation that prevents this class of break
+- CI now fails **before** packaging if any packager-rewritable `--@debug@` / `--@end-debug@` marker is present, so a broken build can never be uploaded.
+- CI also verifies the packaged output contains no duplicated `]==]]==]` delimiter, as a backstop against future packager changes.
+- `luacheck` cannot catch this: the source is valid Lua and the corruption is introduced during packaging, which is why it went unnoticed through three releases.
+
+## v12.0.6
+
+### Fixed a Lua syntax error present in every packaged build
+- Every release since the v11.0.44 restructure -- **v11.0.46, v12.0.4 and v12.0.5 included** -- shipped a `LibQTip-1.0.lua` that failed to parse with `unexpected symbol near ']'`, disabling the library in game.
+- The repo source was always clean. The packager matched the `--@end-debug@` closers and appended its own `]==]` to lines that already ended in `]==]`, producing `]==]]==]`; where a long comment was open, the extra bracket was left as bare code.
+- Spaced both markers so the packager could no longer match them.
+
+## v12.0.5
+
+### Reduced the download by 55%
+- Fixed the `.pkgmeta` ignore paths, which resolve from the repo root and so need the `Decursive/` prefix in this multi-folder layout. The unprefixed `branding` rule had never matched, shipping a 612 KB logo referenced by no code in every release through v12.0.4.
+- Downscaled `iconON.tga` and `iconOFF.tga` from 512x512 to 128x128. The largest size either is ever drawn at is 64 px, so the originals were 8x oversized; 128 keeps 2x headroom for UI scaling.
+- Package size dropped from 1.92 MB to roughly 0.87 MB with no behavior change.
+
 ## v12.0.4
 
 ### Fixed tied vertical MUF spacing

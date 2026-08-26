@@ -31,8 +31,54 @@ jobs:
         with:
           args: -qo 011
 
+      # Guards the fault that shipped broken in v11.0.46, v12.0.4 and v12.0.5:
+      # the packager matches a "--@end-debug@" closer and appends its own "]==]"
+      # to a line that already ended in "]==]", yielding "]==]]==]". Where a real
+      # long comment was open the extra bracket became bare code and the whole
+      # file failed to parse. luacheck cannot catch it -- the SOURCE is valid,
+      # the corruption is introduced during packaging.
+      #
+      # This runs BEFORE the packager on purpose: failing here aborts the job so
+      # a broken build is never uploaded, rather than discovering it afterwards.
+      - name: Check for packager-rewritable debug markers
+        run: |
+          set -euo pipefail
+          status=0
+          # Root cause: any marker the packager will rewrite. Spacing them out
+          # ("-- @debug @") or removing them keeps the blocks inert long comments.
+          if grep -rn --include='*.lua' -- '--@debug@\|--@end-debug@' Decursive Decursive_Options; then
+            echo "::error::Found packager-rewritable @debug@/@end-debug@ markers (see above). The packager appends ]==] to these, producing ]==]]==] and a Lua syntax error. Space the markers out or remove them."
+            status=1
+          fi
+          # Symptom, in case a corrupted file is ever committed directly.
+          if grep -rn --include='*.lua' -e ']==]]==]' -e ']===]]===]' Decursive Decursive_Options; then
+            echo "::error::Found a duplicated long-string delimiter (see above). This will not parse in game."
+            status=1
+          fi
+          [ "$status" -eq 0 ] && echo "OK: no rewritable debug markers, no duplicated delimiters."
+          exit "$status"
+
       - name: Package retail
         if: >-
           !contains(github.event.head_commit.message, '#skipretail') &&
           !contains(github.event.head_commit.message, '#skipall')
         uses: BigWigsMods/packager@master
+
+      # Backstop: verify what was actually built. The step above prevents the
+      # known cause; this catches any future packager change that reintroduces
+      # the corruption by some other route.
+      - name: Verify packaged output has no duplicated delimiters
+        if: >-
+          !contains(github.event.head_commit.message, '#skipretail') &&
+          !contains(github.event.head_commit.message, '#skipall')
+        run: |
+          set -euo pipefail
+          if [ ! -d .release ]; then
+            echo "No .release directory to verify; packaging was skipped."
+            exit 0
+          fi
+          if grep -rn --include='*.lua' -e ']==]]==]' -e ']===]]===]' .release; then
+            echo "::error::Packaged output contains a duplicated long-string delimiter. The uploaded build will not load in game."
+            exit 1
+          fi
+          echo "OK: packaged output is free of duplicated delimiters."
