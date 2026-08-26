@@ -2,6 +2,7 @@
 ## Title: Zhaohu's Decursive |cff55ffffOptions|r
 ## Notes: Settings panel, option tree, and Test Mode for Zhaohu's Decursive. Loads on demand.
 ## Author: Randy Lorfing
+## X-License: GNU GPL V3
 ## Version: @project-version@
 ## IconTexture: Interface/AddOns/Decursive/iconON.tga
 ## LoadOnDemand: 1

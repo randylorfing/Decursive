@@ -3,6 +3,7 @@
 
     Decursive (v 11.0.10) add-on for World of Warcraft UI
     Copyright (C) 2006-2026 John Wellesz (Decursive AT 2072productions.com) ( http://www.2072productions.com/to/decursive.php )
+    WoW 12.1 compatibility and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
