@@ -28,13 +28,30 @@ move-folders:
 # error. AceGUI-3.0/AceConfig-3.0 were the only externals NOT already
 # tracked, and they're unused (v11's embeds.xml intentionally doesn't load
 # them) -- dropped rather than kept as dead weight in the package.
+# Ignore paths must be relative to the REPO ROOT, not to the addon folder --
+# so they need the Decursive/ prefix in this multi-folder layout. The packager
+# matches these as plain shell globs against the path it prints as
+# "Copying: Decursive/branding/decursive-logo.jpg", and an unprefixed
+# "branding" matched nothing: because $topdir/branding doesn't exist, the
+# packager expanded it to "branding:branding/*", neither of which matches
+# "Decursive/branding/...". Result: a 612 KB logo referenced by no code shipped
+# in every release through v12.0.4, ~30% of the download. With the prefix the
+# packager sees a real directory and expands it to "Decursive/branding/*".
+# Verify after changing: the build log must say "Ignoring:", not "Copying:".
 ignore:
-    - Libs/LibStub/tests
-    - branding
+    - Decursive/Libs/LibStub/tests
+    - Decursive/branding
 
 optional-dependencies:
     - bug-grabber
 
+# No-op as configured, kept for when externals return. The packager only builds
+# a nolib archive when $nolib_exclude is non-empty, and that is populated ONLY
+# while processing an "externals" block (release.sh ~line 2335, gated ~2765).
+# Every library here is committed to the repo rather than fetched as an
+# external, so there is nothing to strip and a nolib zip would be byte-identical
+# to the main one. Do NOT re-add externals just to make this produce a file --
+# that reintroduces the Libs/ collision documented above.
 enable-nolib-creation: yes
 
 license-output: LICENSE.txt
