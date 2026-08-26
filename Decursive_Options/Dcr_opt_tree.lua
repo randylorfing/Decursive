@@ -1703,26 +1703,33 @@ local function GetStaticOptions ()
                                     DebuffsFrameTieSpacing = {
                                         type = "toggle",
                                         name = L["OPT_TIEXYSPACING"],
-                                        desc = L["OPT_TIEXYSPACING_DESC"],
+                                        desc = L["OPT_TIEXYSPACING_DESC"] .. "\n\nWhen enabled, Vertical spacing is locked and follows Horizontal spacing.",
                                         set = function(info,v)
                                             D.SetHandler(info, v);
                                             if v then
                                                 D.profile.DebuffsFrameYSpacing = D.profile.DebuffsFrameXSpacing;
                                             end
                                             D.MicroUnitF:ResetAllPositions ();
+                                            return true;
                                         end,
                                         order = 104
                                     },
                                     DebuffsFrameXSpacing = {
                                         type = 'range',
                                         name = L["OPT_XSPACING"],
-                                        desc = L["OPT_XSPACING_DESC"],
+                                        desc = function()
+                                            if D.profile.DebuffsFrameTieSpacing then
+                                                return L["OPT_XSPACING_DESC"] .. "\n\nSpacing is tied, so this value also controls vertical spacing.";
+                                            end
+                                            return L["OPT_XSPACING_DESC"];
+                                        end,
                                         set = function(info,v)
                                             D.SetHandler(info, v);
                                             if D.profile.DebuffsFrameTieSpacing then
                                                 D.profile.DebuffsFrameYSpacing = v;
                                             end
                                             D.MicroUnitF:ResetAllPositions ();
+                                            return true;
                                         end,
                                         min = 0,
                                         max = 100,
@@ -1733,10 +1740,17 @@ local function GetStaticOptions ()
                                         type = 'range',
                                         name = L["OPT_YSPACING"],
                                         desc = L["OPT_YSPACING_DESC"],
+                                        get = function(info)
+                                            if D.profile.DebuffsFrameTieSpacing then
+                                                return D.profile.DebuffsFrameXSpacing;
+                                            end
+                                            return D.GetHandler(info);
+                                        end,
                                         set = function(info,v)
                                             D.SetHandler(info, v);
 
                                             D.MicroUnitF:ResetAllPositions ();
+                                            return true;
                                         end,
                                         disabled = function() return D.Status.Combat or D.profile.DebuffsFrameTieSpacing end,
                                         min = 0,

@@ -312,7 +312,14 @@ function MicroUnitF:GetStatusLightReserve()
 end
 
 function MicroUnitF:GetVerticalCellStride()
-    local originalStride = (DC.MFSIZE or 20) + (D.profile.DebuffsFrameYSpacing or 0)
+    local ySpacing = tonumber(D.profile.DebuffsFrameYSpacing) or 0
+    if D.profile.DebuffsFrameTieSpacing then
+        -- Treat the horizontal value as authoritative whenever spacing is
+        -- tied. This preserves original Decursive behavior even if an older
+        -- profile contains mismatched saved X/Y values.
+        ySpacing = tonumber(D.profile.DebuffsFrameXSpacing) or ySpacing
+    end
+    local originalStride = (DC.MFSIZE or 20) + ySpacing
     if not self:IsStatusLightLayoutEnabled() then return originalStride end
     return originalStride + self:GetStatusLightReserve()
 end

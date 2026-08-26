@@ -926,8 +926,6 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                     s:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
                     local thumb = s:GetThumbTexture(); if thumb then thumb:SetSize(18,18) end
                     local getSpec = inheritedSpec(option.get, state.get)
-                    local ok, current = invokeOption(getSpec, handler, info); current = ok and tonumber(current) or minV
-                    current = snapRangeValue(current, minV, maxV, step)
 
                     local stepper = addRangeStepper(row, s, minV, maxV, step, option.isPercent == true, nil, function() return isDisabled end)
                     title:SetPoint("RIGHT", stepper, "LEFT", -10, 0); title:SetJustifyH("LEFT")
@@ -937,8 +935,18 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                         stepper:Refresh(v)
                         local w=s:GetWidth(); if w and w>0 and maxV>minV then fill:SetWidth(math.max(1,w*((v-minV)/(maxV-minV)))) end
                     end
-                    s._refreshing = true; s:SetValue(current); s._refreshing = false
-                    display(current)
+                    function s:RefreshFromOption()
+                        local ok, current = invokeOption(getSpec, handler, info)
+                        current = ok and tonumber(current) or minV
+                        current = snapRangeValue(current, minV, maxV, step)
+                        self._refreshing = true
+                        self:SetValue(current)
+                        self._refreshing = false
+                        display(current)
+                    end
+                    page._rangeControls = page._rangeControls or {}
+                    page._rangeControls[#page._rangeControls + 1] = s
+                    s:RefreshFromOption()
                     s:SetScript("OnValueChanged", function(self,v)
                         local rounded = snapRangeValue(v, minV, maxV, step)
                         display(rounded)
@@ -951,6 +959,16 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                                 ZD:SetStatus(name .. " could not be applied.", true)
                             else
                                 ZD:SetStatus(name .. " updated.")
+                                -- A range setter may update a linked option
+                                -- (for example tied MUF X/Y spacing). Refresh
+                                -- the other visible range controls from their
+                                -- getters without rebuilding the page or
+                                -- interrupting the slider being dragged.
+                                for _, linked in ipairs(page._rangeControls or {}) do
+                                    if linked ~= self and linked.RefreshFromOption then
+                                        linked:RefreshFromOption()
+                                    end
+                                end
                             end
                         end
                     end)
@@ -1132,6 +1150,7 @@ function ZD:BuildOptionGroupPage(parent, groupKey, titleText, subtitleText, skip
     p.skipKeys = skipKeys
     function p:Rebuild()
         hideRendered(self)
+        self._rangeControls = {}
         local ok, model = pcall(D.GetV11OptionsTable, D)
         if not ok or type(model) ~= "table" or not model.args then
             local e=trackRendered(self,label(self.optionCanvas,"The settings model is not available yet.",12,C.danger,"TOPLEFT",8,-8)); e:SetWidth(620)
@@ -1203,6 +1222,7 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
 
     function p:Rebuild()
         hideRendered(self)
+        self._rangeControls = {}
         local tab = activeSpec()
         if not tab then self.optionCanvas:SetHeight(80); return end
         for key,b in pairs(self.tabButtons) do

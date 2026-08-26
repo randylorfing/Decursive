@@ -1,5 +1,14 @@
 # Zhaohu-Decursive Changelog
 
+## v12.0.4
+
+### Fixed tied vertical MUF spacing
+- Preserved original Decursive behavior: while **Tie horizontal and vertical spacing** is enabled, Horizontal spacing controls both axes and Vertical spacing remains locked; disabling the toggle makes Vertical independently adjustable.
+- Made the live MUF layout use Horizontal spacing as the authoritative vertical value whenever spacing is tied, repairing profiles whose saved X/Y values had drifted apart.
+- Fixed the modern settings page leaving the disabled Vertical spacing slider on a stale value after Horizontal spacing changed.
+- Added clearer help text explaining why Vertical spacing is locked and how to adjust it.
+- Refreshed linked range controls directly without rebuilding the settings page during slider movement.
+
 ## v12.0.3
 
 ### Fixed MUF sizing controls
