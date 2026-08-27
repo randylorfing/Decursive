@@ -22,7 +22,7 @@
 
 ## Version: @project-version@
 ## X-Zhaohu-Build: Zhaohu-Decursive
-## X-Zhaohu-12.1-Patch: v12.1.2-dbm-sound-trigger
+## X-Zhaohu-12.1-Patch: v12.1.3-package-hygiene
 ## X-Zhaohu-Backend: v13-hardened-compat-runtime
 ## X-Zhaohu-UI: v13-command-center-primary
 ## Author: John Wellesz, Randy Lorfing

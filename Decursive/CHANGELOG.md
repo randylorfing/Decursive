@@ -1,5 +1,21 @@
 # Zhaohu-Decursive Changelog
 
+## v12.1.3
+
+### Stopped shipping repository documentation inside the addon
+- v12.1.2 included `Decursive/README.md` and `Decursive/RELEASE_PROCESS.md` in
+  the installed addon. The packager stages the whole checkout under the package
+  folder, so any file left at the repository root ends up inside `Decursive/`.
+- `README.md` was the damaging one: the package then held both it and the
+  existing `Decursive/Readme.md`, which differ only in case. Windows treats
+  those as one filename, so extracting the zip by hand prompted to overwrite and
+  one document silently replaced the other.
+- The repository documentation, the `docs/` tree and the project dotfiles are
+  now excluded from the package. They remain in the repository.
+
+No addon code changed. Neither file was referenced by either TOC, so v12.1.2
+installations function correctly; this only cleans what is delivered.
+
 ## v12.1.2
 
 ### Native dispel-sound trigger repair
