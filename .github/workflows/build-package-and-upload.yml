@@ -62,6 +62,12 @@ jobs:
           [ "$status" -eq 0 ] && echo "OK: no rewritable debug markers, no duplicated delimiters."
           exit "$status"
 
+      # validate-v13.sh is built on ripgrep, which ubuntu-latest does not ship.
+      # Without it every `rg` call exits 127 and the script's `! rg -q ...`
+      # checks read as failures, reporting problems that do not exist.
+      - name: Install ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+
       # Repository-level invariants: workflow shape, package-token baseline,
       # licence and attribution metadata, and the v13 architecture boundaries.
       - name: Validate repository invariants
