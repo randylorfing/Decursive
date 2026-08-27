@@ -54,8 +54,8 @@
   package. They remain in the repository as project history.
 
 ### Fixes found while integrating this release
-- Restored `D.Revision = "@project-abbreviated-hash@"` in `DCR_init.lua`. The
-  packager had substituted it to a bare short hash, and the earlier token
+- Restored the abbreviated-hash package token on `D.Revision` in `DCR_init.lua`.
+  The packager had substituted it to a bare short hash, and the earlier token
   restoration only matched the longer `git describe` form. It is a public field
   that other addons may read from outside.
 - Stripped UTF-8 byte-order marks from `ZD_UI.lua`, `Dcr_opt_tree.lua` and
