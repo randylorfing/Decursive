@@ -306,7 +306,9 @@ function ZD:SetEditEnvironment(key)
         self.editEnvironment = key
         self:SetStatus("Editing " .. ENV_NAMES[key] .. " behavior.")
         if self.RefreshUI then self:RefreshUI() end
+        return true
     end
+    return false
 end
 
 function ZD:GetEnvironmentProfile(key)
@@ -390,11 +392,13 @@ function ZD:SetProfileOption(key, value)
     if key == "ShowDebuffsFrame" then
         local enabled = value and true or false
         if (D.profile.ShowDebuffsFrame and true or false) ~= enabled then
+            local applied
             if D.SetDebuffsFrameEnabled then
-                D:SetDebuffsFrameEnabled(enabled)
+                applied = D:SetDebuffsFrameEnabled(enabled)
             elseif D.ShowHideDebuffsFrame then
-                D:ShowHideDebuffsFrame()
+                applied = D:ShowHideDebuffsFrame()
             end
+            if applied == false then return false end
         end
         -- Match the mature settings behavior: an explicit Show MUFs choice
         -- disables automatic hiding so the next roster event cannot silently
@@ -405,7 +409,7 @@ function ZD:SetProfileOption(key, value)
 
     if key == "StatusLight121Enabled" then
         if D.Set121MUFStatusLightEnabled then
-            D:Set121MUFStatusLightEnabled(value and true or false)
+            return D:Set121MUFStatusLightEnabled(value and true or false) ~= false
         else
             D.profile[key] = value and true or false
         end
@@ -448,7 +452,7 @@ function ZD:GetMUFSizePixels()
         return D.MicroUnitF:GetActiveMUFSizePixels()
     end
     local base = DC.MFSIZE or 20
-    return math.floor(((D.profile and D.profile.DebuffsFrameElemScale) or 1) * base + .5)
+    return math.floor(((D.profile and D.profile.DebuffsFrameElemScale) or 1.5) * base + .5)
 end
 
 function ZD:SetPartyMUFSizePixels(pixels)

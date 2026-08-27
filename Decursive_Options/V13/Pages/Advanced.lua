@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Zhaohu's Decursive v13 Advanced page.. This file was solely written by Randy Lorfing.
+    Zhaohu's Decursive v13 Advanced page.
     Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify

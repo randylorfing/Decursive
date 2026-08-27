@@ -237,12 +237,19 @@ function D:GetDefaultsSettings()
             -- Setting to hide the MUF handle (render it mouse-non-interactive)
             HideMUFsHandle = false,
 
+            -- Match Blizzard's party/raid roster by default. Other choices
+            -- preserve the classic Decursive priority sort or mirror the
+            -- public live layout exposed by DandersFrames.
+            MUFOrderMode = "GROUP",
+
             AutoHideMUFs = 1,
 
             -- The maximum number of MUFs to be displayed
             DebuffsFrameMaxCount = 80,
 
-            DebuffsFrameElemScale = 1,
+            -- Fresh profiles display the original 20-unit MUF geometry at
+            -- 150%, producing a 30-pixel Party/Raid square by default.
+            DebuffsFrameElemScale = 1.5,
 
             DebuffsFrameElemAlpha = .35,
 
@@ -280,15 +287,12 @@ function D:GetDefaultsSettings()
             DebuffsFrameElemTieTransparency = true,
 
             DebuffsFramePerline = 10,
-            -- v11 large-raid layout: keep the MUF grid compact (max five rows)
-            -- while preserving the existing manual units-per-line setting as a fallback.
-            DebuffsFrameRaidAutoLayout121 = true,
 
             DebuffsFrameTieSpacing = true,
 
-            DebuffsFrameXSpacing = 3,
+            DebuffsFrameXSpacing = 2,
 
-            DebuffsFrameYSpacing = 3,
+            DebuffsFrameYSpacing = 2,
 
             DebuffsFrameStickToRight = false,
 
@@ -564,6 +568,9 @@ end
 local OptionsPostSetActions = { -- {{{
     ["debug"] = function(v)  D.debug = v end,
     ["HideMUFsHandle"] = ApplyMUFHandleMouseState,
+    ["MUFOrderMode"] = function(v)
+        if D.SetMUFOrderMode then D:SetMUFOrderMode(v) end
+    end,
     ["AfflictionTooltips"] = function(v) for id,lvitem in ipairs(D.LiveList.ExistingPerID) do lvitem.Frame:EnableMouse(v); end end,
     ["Amount_Of_Afflicted"] = function(v) D.LiveList:RestAllPosition(); end,
     ["ScanTime"] = function(v) D:ScheduleRepeatedCall("Dcr_LLupdate", D.LiveList.Update_Display, v, D.LiveList); D:Debug("LV scan delay changed:", v); end,
@@ -573,9 +580,26 @@ local OptionsPostSetActions = { -- {{{
     ["DebuffsFrameGrowToTop"] = function(v) D.MicroUnitF:SavePos(); D.MicroUnitF:ResetAllPositions (); end,
     ["DebuffsFrameStickToRight"] = function(v) D.MicroUnitF:SavePos(); D.MicroUnitF:ResetAllPositions (); end,
     ["DebuffsFrameVerticalDisplay"] = function(v) D.MicroUnitF:ResetAllPositions (); end,
+    -- Keep spacing behavior at the profile mutation boundary so every UI
+    -- (the original option model, v13 command center, and slash handlers)
+    -- gets the same immediate re-anchor. This is the original Decursive
+    -- contract: horizontal is authoritative while spacing is tied; otherwise
+    -- X and Y independently control their own grid axis.
+    ["DebuffsFrameTieSpacing"] = function(v)
+        if v and D.profile then
+            D.profile.DebuffsFrameYSpacing = D.profile.DebuffsFrameXSpacing;
+        end
+        D.MicroUnitF:ResetAllPositions ();
+    end,
+    ["DebuffsFrameXSpacing"] = function(v)
+        if D.profile and D.profile.DebuffsFrameTieSpacing then
+            D.profile.DebuffsFrameYSpacing = v;
+        end
+        D.MicroUnitF:ResetAllPositions ();
+    end,
+    ["DebuffsFrameYSpacing"] = function(v) D.MicroUnitF:ResetAllPositions (); end,
     ["DebuffsFrameMaxCount"] = function(v) D.MicroUnitF.MaxUnit = v; D.MicroUnitF:Delayed_MFsDisplay_Update(); end, -- just the number of MUFs is changed MFsDisplay_Update() is enough
     ["DebuffsFramePerline"] = function(v)  D.MicroUnitF:ResetAllPositions (); end,
-    ["DebuffsFrameRaidAutoLayout121"] = function(v) D.MicroUnitF:ResetAllPositions (); end,
     ["StatusLight121Enabled"] = function(v)
         if D.Set121MUFStatusLightEnabled then D:Set121MUFStatusLightEnabled(v) end
     end,
@@ -584,7 +608,7 @@ local OptionsPostSetActions = { -- {{{
         -- older configuration paths cannot be immediately undone by the
         -- context-aware sizing system.
         if D.MicroUnitF and D.MicroUnitF.SetActiveContextMUFSizePixels then
-            D.MicroUnitF:SetActiveContextMUFSizePixels((tonumber(D.profile.DebuffsFrameElemScale) or 1) * (DC.MFSIZE or 20));
+            D.MicroUnitF:SetActiveContextMUFSizePixels((tonumber(D.profile.DebuffsFrameElemScale) or 1.5) * (DC.MFSIZE or 20));
         else
             D.MicroUnitF:SetScale(D.profile.DebuffsFrameElemScale);
         end

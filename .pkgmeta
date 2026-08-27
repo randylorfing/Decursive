@@ -41,6 +41,19 @@ move-folders:
 ignore:
     - Decursive/Libs/LibStub/tests
     - Decursive/branding
+    # Superseded release notes and development docs are source-only. They stay
+    # in the repository as project history but have no business in a user's
+    # AddOns folder, and shipping them only inflates the download.
+    - Decursive/RELEASE_NOTES_v11*.md
+    - Decursive/RELEASE_NOTES_v12.0*.md
+    - Decursive/12_1_PATCH_NOTES.md
+    - Decursive/IMPLEMENTATION_SUMMARY.md
+    - Decursive/V10.20_HOTFIX.md
+    - Decursive/V10.41_12.1_SECRET_SAFETY.md
+    - Decursive/Todo.txt
+    - Decursive/Modern/V11_FEATURE_PARITY.md
+    - Decursive/Modern/V11_REBUILD.md
+    - Decursive/Modern/V11_UI_AUDIT.md
 
 optional-dependencies:
     - bug-grabber

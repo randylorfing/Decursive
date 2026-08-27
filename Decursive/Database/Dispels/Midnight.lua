@@ -122,6 +122,16 @@ D:RegisterDispelDBExpansion("Midnight", {
     { id=391031,  name="Stormcloud Barrier", cureType="ENEMYMAGIC", target="enemy", content="Ruby Life Pools", alert=false },
 
     -- Temple of Sethraliss (returning, BfA)
+    -- Exact aura IDs and friendly-dispel types below were cross-checked against
+    -- DBM-Dungeons' active 12.1 SPELL_AURA_APPLIED/Remove* module definitions
+    -- at commit 8ae1b6857b091b1284fa9bade9c3b25589efc1d5. Only factual IDs and
+    -- classifications are recorded here; no DBM code or media is included.
+    { id=263957,  name="Hadotoxin", cureType="POISON", target="friendly", content="Temple of Sethraliss", alert=true },
+    { id=268008,  name="Snake Charm", cureType="MAGIC", target="friendly", content="Temple of Sethraliss", alert=true },
+    { id=268013,  name="Flame Shock", cureType="MAGIC", target="friendly", content="Temple of Sethraliss", alert=true },
+    { id=269686,  name="Plague", cureType="DISEASE", target="friendly", content="Temple of Sethraliss", alert=true },
+    { id=272699,  name="Venomous Spit", cureType="POISON", target="friendly", content="Temple of Sethraliss", alert=true },
+    { id=273563,  name="Neurotoxin", cureType="POISON", target="friendly", content="Temple of Sethraliss", alert=true },
     { id=1291399, name="Serrated Charge", cureType="BLEED", target="friendly", content="Temple of Sethraliss", alert=true },
     { id=1296052, name="Imbued Conduction", cureType="MAGIC", target="friendly", content="Temple of Sethraliss", alert=true },
     { id=1308100, name="Poisoned Cheap Shot", cureType="POISON", target="friendly", content="Temple of Sethraliss", alert=true },
@@ -129,6 +139,13 @@ D:RegisterDispelDBExpansion("Midnight", {
     { id=267027,  name="Poison Spit", cureType="POISON", target="friendly", content="Temple of Sethraliss", alert=true },
     { id=1303486, name="Caustic Stomp", cureType="POISON", target="friendly", content="Temple of Sethraliss", alert=true },
     { id=1308546, name="Venomous Slash", cureType="POISON", target="friendly", content="Temple of Sethraliss", alert=true },
+
+    -- Current Midnight raid auras that DBM registers through AddAuraSound and
+    -- explicitly identifies as dispellable. instanceID keeps raid registration
+    -- locale-independent while avoiding a dungeon-wide ID fan-out.
+    { id=1286922, name="Icebound Flames", cureType="MAGIC", target="friendly", content="The Venomous Abyss", instanceID=3004, alert=true },
+    { id=1301800, name="Acidic Burst", cureType="POISON", target="friendly", content="The Venomous Abyss", instanceID=3004, alert=true },
+    { id=1306906, name="Venomfang", cureType="POISON", target="friendly", content="The Venomous Abyss", instanceID=3004, alert=true },
 
     -- ===== Prior season (S1) content, no longer in the Season 2 M+ rotation =====
     -- Kept for reference / non-M+ content (Delves, world content, etc.); not verified against Season 2 sources.

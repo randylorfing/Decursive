@@ -1,7 +1,7 @@
 ## Interface: 120100
 ## Title: Zhaohu's Decursive |cff55ffffOptions - v13|r
 ## Notes: LoadOnDemand settings for the v13 command center.
-## Author: Randy Lorfing
+## Author: John Wellesz, Randy Lorfing
 ## X-License: GNU GPL V3
 ## Version: @project-version@
 ## IconTexture: Interface/AddOns/Decursive/iconON.tga

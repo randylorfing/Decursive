@@ -22,14 +22,14 @@
 
 ## Version: @project-version@
 ## X-Zhaohu-Build: Zhaohu-Decursive
-## X-Zhaohu-12.1-Patch: v12.1.1-command-center
+## X-Zhaohu-12.1-Patch: v12.1.2-dbm-sound-trigger
 ## X-Zhaohu-Backend: v13-hardened-compat-runtime
 ## X-Zhaohu-UI: v13-command-center-primary
-## Author: Randy Lorfing
+## Author: John Wellesz, Randy Lorfing
 
 ## X-License: GNU GPL V3
 
-## OptionalDeps: Ace3, LibQTip-1.0, LibDataBroker-1.1, LibDBIcon-1.0, !BugGrabber, LibDualSpec-1.0
+## OptionalDeps: Ace3, LibQTip-1.0, LibDataBroker-1.1, LibDBIcon-1.0, !BugGrabber, LibDualSpec-1.0, DandersFrames
 
 ## LoadManagers: AddonLoader
 ## X-LoadOn-Class: Mage, Priest, Paladin, Druid, Hunter, Warlock, Shaman, Monk, Deathknight, Evoker
@@ -41,7 +41,7 @@
 ## X-ReleaseDate: "@project-date-iso@"
 ## X-Category: Combat
 ## X-Website: https://github.com/randylorfing/Decursive/
-## X-Credits: Sylvin (Full french translation), Peter Sun, Ananhaid (ZhTW and zhCN translation), Fenlis, Chkid (koKR translation), Hemathio, Swix, Athariel, StingerSoft (Russian Translation), Freydis88, Floyddotnet, Vilogity, Dessa, Farook (German translation)
+## X-Credits: Patrick Bohnet (original Decursive), John Wellesz (maintainer and developer, 2006-2026), Sylvin (Full french translation), Peter Sun, Ananhaid (ZhTW and zhCN translation), Fenlis, Chkid (koKR translation), Hemathio, Swix, Athariel, StingerSoft (Russian Translation), Freydis88, Floyddotnet, Vilogity, Dessa, Farook (German translation)
 
 ## X-Curse-Project-ID: 1659159
 ## X-AceForum: 4195

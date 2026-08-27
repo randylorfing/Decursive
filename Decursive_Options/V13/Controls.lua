@@ -29,6 +29,39 @@ V13.Options = UI
 local Controls = {}
 UI.Controls = Controls
 
+-- Run a setting mutation through one shared boundary.  Earlier controls
+-- refreshed themselves even when a setter raised an error or returned false,
+-- which made a rejected change look like an inert button.  Preserve any more
+-- specific status emitted by the backend and otherwise give immediate footer
+-- feedback for both success and failure.
+function Controls:Apply(labelText, setter, value)
+    if type(setter) ~= "function" then
+        if UI.SetStatus then UI:SetStatus((labelText or "Setting") .. " is unavailable.", "error") end
+        return false
+    end
+
+    local previousStatus = UI.statusText
+    local ok, result = pcall(setter, value)
+    if not ok then
+        if UI.SetStatus then
+            UI:SetStatus("Could not change " .. tostring(labelText or "setting") .. ": " .. tostring(result), "error")
+        end
+        return false
+    end
+
+    if result == false then
+        if UI.SetStatus and (UI.statusText == previousStatus or UI.statusKind ~= "error") then
+            UI:SetStatus(tostring(labelText or "Setting") .. " could not be applied.", "error")
+        end
+        return false
+    end
+
+    if UI.SetStatus and UI.statusText == previousStatus then
+        UI:SetStatus(tostring(labelText or "Setting") .. " updated.", "success")
+    end
+    return true
+end
+
 local function rgba(color, alpha)
     color = color or Theme.color.text
     return color[1], color[2], color[3], alpha or color[4] or 1
@@ -144,6 +177,7 @@ end
 
 function Controls:Toggle(card, labelText, description, getter, setter)
     local row = CreateFrame("Button", nil, card)
+    row:RegisterForClicks("LeftButtonUp")
     row:SetPoint("TOPLEFT", Theme.spacing.card, card.nextY)
     row:SetPoint("RIGHT", -Theme.spacing.card, 0)
     row:SetHeight(description and 50 or 36)
@@ -182,15 +216,15 @@ function Controls:Toggle(card, labelText, description, getter, setter)
     end
 
     row:SetScript("OnClick", function(self)
-        if setter then setter(not (getter and getter())) end
-        self:Refresh()
+        Controls:Apply(labelText, setter, not (getter and getter()))
+        card:Refresh()
     end)
     card:AddRefresher(function() row:Refresh() end)
     row:Refresh()
     return row
 end
 
-function Controls:Stepper(card, labelText, getter, setter, minimum, maximum, step, unit)
+function Controls:Stepper(card, labelText, getter, setter, minimum, maximum, step, unit, enabledGetter)
     local row = CreateFrame("Frame", nil, card)
     row:SetPoint("TOPLEFT", Theme.spacing.card, card.nextY)
     row:SetPoint("RIGHT", -Theme.spacing.card, 0)
@@ -202,12 +236,13 @@ function Controls:Stepper(card, labelText, getter, setter, minimum, maximum, ste
     row.label:SetPoint("RIGHT", -166, 0)
 
     local function change(delta)
+        if enabledGetter and enabledGetter() == false then return end
         local value = tonumber(getter and getter()) or minimum or 0
         value = value + delta
         if minimum then value = math.max(minimum, value) end
         if maximum then value = math.min(maximum, value) end
-        if setter then setter(value) end
-        row:Refresh()
+        Controls:Apply(labelText, setter, value)
+        card:Refresh()
     end
 
     row.minus = self:Button(row, "-", 28, function() change(-(step or 1)) end)
@@ -222,6 +257,7 @@ function Controls:Stepper(card, labelText, getter, setter, minimum, maximum, ste
     row.plus:SetPoint("LEFT", row.value, "RIGHT", 4, 0)
 
     function row:Refresh()
+        local enabled = not enabledGetter or enabledGetter() ~= false
         local value = tonumber(getter and getter()) or 0
         local display
         if (step or 1) < 1 then
@@ -230,6 +266,9 @@ function Controls:Stepper(card, labelText, getter, setter, minimum, maximum, ste
             display = tostring(math.floor(value + 0.5))
         end
         self.value.text:SetText(display .. (unit and (" " .. unit) or ""))
+        if self.minus.SetEnabled then self.minus:SetEnabled(enabled) end
+        if self.plus.SetEnabled then self.plus:SetEnabled(enabled) end
+        self:SetAlpha(enabled and 1 or 0.5)
     end
     card:AddRefresher(function() row:Refresh() end)
     row:Refresh()
@@ -255,8 +294,8 @@ function Controls:Cycle(card, labelText, valuesGetter, getter, setter)
             if option.key == current then index = i break end
         end
         index = (index % #values) + 1
-        if setter then setter(values[index].key) end
-        row:Refresh()
+        Controls:Apply(labelText, setter, values[index].key)
+        card:Refresh()
     end)
     row.button:SetPoint("RIGHT", 0, 0)
 

@@ -124,10 +124,13 @@ UI:RegisterPage("SETTINGS", "All Settings", function(parent)
     page.categoryBar = categoryBar
 
     for _, category in ipairs(categories) do
-        local button = Controls:Button(categoryBar, category.label, 140, function()
-            page:SetRoute(category.routes[1].key)
+        local categoryKey = category.key
+        local firstRouteKey = category.routes[1].key
+        local button = Controls:Button(categoryBar, category.label, 140, function(self)
+            page:SetRoute(self.firstRouteKey)
         end)
-        button.categoryKey = category.key
+        button.categoryKey = categoryKey
+        button.firstRouteKey = firstRouteKey
         button:SetScript("OnEnter", function(self)
             self:SetBackdropBorderColor(unpack(Theme.color.cyan))
         end)
@@ -135,7 +138,7 @@ UI:RegisterPage("SETTINGS", "All Settings", function(parent)
             local activeRoute = routeIndex[page.currentRoute or "general"]
             setButtonActive(self, activeRoute and activeRoute.category.key == self.categoryKey)
         end)
-        page.categoryButtons[category.key] = button
+        page.categoryButtons[categoryKey] = button
     end
 
     local routeBar = CreateFrame("Frame", nil, page, "BackdropTemplate")
@@ -147,17 +150,18 @@ UI:RegisterPage("SETTINGS", "All Settings", function(parent)
 
     for _, category in ipairs(categories) do
         for _, route in ipairs(category.routes) do
-            local button = Controls:Button(routeBar, route.label, 140, function()
-                page:SetRoute(route.key)
+            local routeKey = route.key
+            local button = Controls:Button(routeBar, route.label, 140, function(self)
+                page:SetRoute(self.routeKey)
             end)
-            button.routeKey = route.key
+            button.routeKey = routeKey
             button:SetScript("OnEnter", function(self)
                 self:SetBackdropBorderColor(unpack(Theme.color.cyan))
             end)
             button:SetScript("OnLeave", function(self)
                 setButtonActive(self, page.currentRoute == self.routeKey)
             end)
-            page.routeButtons[route.key] = button
+            page.routeButtons[routeKey] = button
         end
     end
 

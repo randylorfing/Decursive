@@ -1,28 +1,41 @@
 name: Check and build addon
 
+# Publishing is driven by version tags only. Branch pushes no longer build,
+# because a branch build produced no artifact anyone could install while still
+# consuming a run -- and, more importantly, the credential-carrying step now
+# lives behind a gate that only a tag should ever open.
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual rehearsal. Running this from the Actions tab executes `verify` only:
+  # the `release` job is gated on a tag ref below, so a dispatch can lint,
+  # package and validate without any possibility of publishing. This replaces
+  # the rehearsal that branch builds used to provide.
+  workflow_dispatch:
+
 permissions:
   contents: write
 
-on:
-  push:
-    branches:
-      - master
-    tags:
-      - '*'
-    # paths-ignore:
-    #- '.github/**'
-
 jobs:
-  build:
+  # ---------------------------------------------------------------------------
+  # Stage 1 -- prove the build is sound WITHOUT any publishing credentials.
+  #
+  # This job has no secrets in scope at all. It packages with `-d` (skip
+  # uploading) and then parses and inspects the packaged output. Nothing here
+  # can reach CurseForge or create a release even if it wanted to.
+  #
+  # This ordering is the whole point. On a tag build the CurseForge upload
+  # happens *inside* the packager step, so a check placed after that step only
+  # reports a problem once the broken file is already published -- which is
+  # exactly how v11.0.46, v12.0.4 and v12.0.5 escaped.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify (no credentials)
     runs-on: ubuntu-latest
-    env:
-        CF_API_KEY: ${{ secrets.CF_API_KEY }}
-        #WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
-        #WOWI_API_TOKEN: ${{ secrets.WOWI_API_TOKEN }}
-        GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -31,26 +44,17 @@ jobs:
         with:
           args: -qo 011
 
-      # Guards the fault that shipped broken in v11.0.46, v12.0.4 and v12.0.5:
-      # the packager matches a "--@end-debug@" closer and appends its own "]==]"
-      # to a line that already ended in "]==]", yielding "]==]]==]". Where a real
-      # long comment was open the extra bracket became bare code and the whole
-      # file failed to parse. luacheck cannot catch it -- the SOURCE is valid,
-      # the corruption is introduced during packaging.
-      #
-      # This runs BEFORE the packager on purpose: failing here aborts the job so
-      # a broken build is never uploaded, rather than discovering it afterwards.
+      # Guards the root cause of the delimiter corruption. The packager appends
+      # its own ]==] to any surviving --@end-debug@ closer, and where a long
+      # comment was open the extra bracket is left as bare code.
       - name: Check for packager-rewritable debug markers
         run: |
           set -euo pipefail
           status=0
-          # Root cause: any marker the packager will rewrite. Spacing them out
-          # ("-- @debug @") or removing them keeps the blocks inert long comments.
           if grep -rn --include='*.lua' -- '--@debug@\|--@end-debug@' Decursive Decursive_Options; then
             echo "::error::Found packager-rewritable @debug@/@end-debug@ markers (see above). The packager appends ]==] to these, producing ]==]]==] and a Lua syntax error. Space the markers out or remove them."
             status=1
           fi
-          # Symptom, in case a corrupted file is ever committed directly.
           if grep -rn --include='*.lua' -e ']==]]==]' -e ']===]]===]' Decursive Decursive_Options; then
             echo "::error::Found a duplicated long-string delimiter (see above). This will not parse in game."
             status=1
@@ -58,27 +62,37 @@ jobs:
           [ "$status" -eq 0 ] && echo "OK: no rewritable debug markers, no duplicated delimiters."
           exit "$status"
 
-      - name: Package retail
-        if: >-
-          !contains(github.event.head_commit.message, '#skipretail') &&
-          !contains(github.event.head_commit.message, '#skipall')
-        uses: BigWigsMods/packager@master
+      # Repository-level invariants: workflow shape, package-token baseline,
+      # licence and attribution metadata, and the v13 architecture boundaries.
+      - name: Validate repository invariants
+        run: bash .github/scripts/validate-v13.sh
 
-      # Backstop: verify what was actually built. The step above prevents the
-      # known cause; this catches any future packager change that reintroduces
-      # the corruption by some other route.
-      - name: Verify packaged output has no duplicated delimiters
-        if: >-
-          !contains(github.event.head_commit.message, '#skipretail') &&
-          !contains(github.event.head_commit.message, '#skipall')
-        run: |
-          set -euo pipefail
-          if [ ! -d .release ]; then
-            echo "No .release directory to verify; packaging was skipped."
-            exit 0
-          fi
-          if grep -rn --include='*.lua' -e ']==]]==]' -e ']===]]===]' .release; then
-            echo "::error::Packaged output contains a duplicated long-string delimiter. The uploaded build will not load in game."
-            exit 1
-          fi
-          echo "OK: packaged output is free of duplicated delimiters."
+      - name: Package (dry run, no upload)
+        uses: BigWigsMods/packager@master
+        with:
+          args: -d
+
+      - name: Validate packaged artifact
+        run: bash .github/scripts/validate-package.sh .release
+
+  # ---------------------------------------------------------------------------
+  # Stage 2 -- publish. Runs only after `verify` succeeds, and is the only job
+  # that is given publishing credentials.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Package and publish
+    needs: verify
+    # Only a version tag may publish. A manual dispatch stops after `verify`.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Package and upload
+        uses: BigWigsMods/packager@master
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_KEY }}
+          GITHUB_API_TOKEN: ${{ github.token }}

@@ -3572,6 +3572,20 @@ local function styleAlertFontString(text, applyColor)
     end
 end
 
+-- The ordinary UIParent banner is never a protected AuraSlot child. Style it
+-- directly so the settings preview and fallback warning still honor the exact
+-- configured pixels/color while native aura display mutation is restricted.
+-- Do not attach the shared Font object here: native users of that object may be
+-- protected, while this direct SetFont call remains safe.
+local function styleUnprotectedAlertFontString(text)
+    if not text then return end
+    local size = (D.profile and D.profile.Alert121FontSize) or DEFAULT_ALERT_FONT_SIZE
+    local fontPath = select(1, GameFontNormalHuge:GetFont())
+    text:SetFont(fontPath, size, "THICKOUTLINE")
+    local color = (D.profile and D.profile.Alert121Color) or DEFAULT_ALERT_COLOR
+    text:SetTextColor(color[1], color[2], color[3])
+end
+
 -- AuraButton children may remain forbidden while aura secrecy is active even
 -- outside ordinary combat lockdown (for example during an active challenge or
 -- encounter). Query Blizzard's access boundary before touching a registered
@@ -3599,6 +3613,16 @@ function D:Normalize121NativeAlertFontScale(text)
 end
 
 function D:Apply121AlertWarningStyle()
+    -- Always update the unprotected preview/fallback first. Follower dungeons,
+    -- encounters, and other secret-aura contexts can forbid native AuraSlot
+    -- mutation even outside normal combat lockdown.
+    local size = (D.profile and D.profile.Alert121FontSize) or DEFAULT_ALERT_FONT_SIZE
+    local bannerH = math.max(120, math.floor(size * 2.5 + 0.5))
+    if alert121Banner then alert121Banner:SetHeight(bannerH) end
+    if alert121Banner and alert121Banner.Text then
+        styleUnprotectedAlertFontString(alert121Banner.Text)
+    end
+
     -- FontStrings registered with CustomAuraButton become protected display
     -- elements. Restyle them only out of combat; their timed color is owned by
     -- the native DurationTextBinding curve rather than SetTextColor().
@@ -3607,10 +3631,6 @@ function D:Apply121AlertWarningStyle()
         return false
     end
     self:Refresh121AlertFontObject()
-    local size = (D.profile and D.profile.Alert121FontSize) or DEFAULT_ALERT_FONT_SIZE
-    local bannerH = math.max(120, math.floor(size * 2.5 + 0.5))
-    if alert121Banner then alert121Banner:SetHeight(bannerH) end
-    if alert121Banner and alert121Banner.Text then styleAlertFontString(alert121Banner.Text) end
     local styleFailed = false
     for _, layer in pairs(dispelAlertLayers) do
         if layer and layer.Text then
@@ -3964,6 +3984,7 @@ function D:Show121AlertWarning(message, durationSeconds, bypassEnvironmentProfil
         return false
     end
     local f = ensureAlert121Banner()
+    styleUnprotectedAlertFontString(f.Text)
     f.Text:SetText(message)
     f:Show()
     f.generation = (f.generation or 0) + 1

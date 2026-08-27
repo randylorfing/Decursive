@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Zhaohu's Decursive v13 Overview page.. This file was solely written by Randy Lorfing.
+    Zhaohu's Decursive v13 Overview page.
     Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify
@@ -73,18 +73,22 @@ UI:RegisterPage("OVERVIEW", "Overview", function(parent)
     quick:SetHeight(205)
     Controls:Toggle(quick, "Show Micro Unit Frames", nil,
         function() return D.profile and D.profile.ShowDebuffsFrame end,
-        function(value) ZD:SetProfileOption("ShowDebuffsFrame", value) end)
+        function(value) return ZD:SetProfileOption("ShowDebuffsFrame", value) end)
     Controls:Toggle(quick, "Dispel text alert", nil,
         function() return D.profile and D.profile.Alert121DispelEnabled ~= false end,
         function(value)
-            if D.profile then D.profile.Alert121DispelEnabled = value and true or false end
+            if not D.profile then return false end
+            D.profile.Alert121DispelEnabled = value and true or false
             if D.Refresh121DispelAlertWarning then D:Refresh121DispelAlertWarning() end
+            return true
         end)
     Controls:Toggle(quick, "Dispel sound", nil,
         function() return D.profile and D.profile.PlaySound ~= false end,
         function(value)
-            if D.profile then D.profile.PlaySound = value and true or false end
+            if not D.profile then return false end
+            D.profile.PlaySound = value and true or false
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("v13 overview") end
+            return true
         end)
 
     function page:Refresh()

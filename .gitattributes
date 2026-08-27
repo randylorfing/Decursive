@@ -1,0 +1,11 @@
+# Shell scripts must keep LF endings. A CRLF checkout makes Linux reject the
+# shebang with "bad interpreter: /usr/bin/env bash^M", which would break the
+# CI validation gates on every run.
+*.sh text eol=lf
+
+# YAML is parsed by GitHub Actions on Linux; keep it LF for the same reason.
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Addon sources are authored on Windows and shipped to the WoW client, which
+# accepts either. Leave git's normal handling in place for them.

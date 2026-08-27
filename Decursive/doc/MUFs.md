@@ -54,12 +54,16 @@ Besides casting, MUFs allow you to *target* the units by *Middle-clicking*,
 command /clearfocus)
 Mouse button mapping can be [completely customized][mufsmousebuttons].
 
-**MUFs are organized intelligently by default**, you're always first then the rest
-of your group, the groups after yours, the group before yours and the **pets (you
-can choose to monitor them or not)** and, at last, your focused unit (changed
-using the command /focus 'name' or by *Ctrl-Middle-Clicking* on a MUF).
-**You can completely change this order by using the [priority and skip list][prioskipopts], a
-very manageable list of players.** (see [Decursive usage][user-actions] for more information)
+**MUFs follow Group / roster order by default**, matching Blizzard's party or
+raid roster. The MUF order setting can instead use Decursive's traditional
+priority-list/current-group sequence, or mirror the visible DandersFrames order
+when that optional addon is installed. Pets and a friendly focus remain
+supported after the matched group members.
+
+The [priority and skip list][prioskipopts] still controls cure priority and
+exclusions. Choose **Decursive priority** as the MUF order when you want that
+same priority list reflected in the visible frame sequence. (See
+[Decursive usage][user-actions] for more information.)
 
 **IMPORTANT:**
 

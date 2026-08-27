@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Zhaohu's Decursive v13 Alerts page.. This file was solely written by Randy Lorfing.
+    Zhaohu's Decursive v13 Alerts page.
     Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify
@@ -107,26 +107,34 @@ UI:RegisterPage("ALERTS", "Alerts", function(parent)
     Controls:Toggle(text, "Enable dispel text", nil,
         function() return D.profile and D.profile.Alert121DispelEnabled ~= false end,
         function(value)
-            if D.profile then D.profile.Alert121DispelEnabled = value and true or false end
+            if not D.profile then return false end
+            D.profile.Alert121DispelEnabled = value and true or false
             refreshText()
+            return true
         end)
     Controls:Cycle(text, "Display mode", function() return textModes end,
         function() return D.profile and D.profile.Alert121DispelMode or "TIMED" end,
         function(value)
-            if D.profile then D.profile.Alert121DispelMode = value end
+            if not D.profile then return false end
+            D.profile.Alert121DispelMode = value
             refreshText()
+            return true
         end)
     Controls:Stepper(text, "Display duration",
         function() return D.profile and D.profile.Alert121DispelDuration or 2 end,
         function(value)
-            if D.profile then D.profile.Alert121DispelDuration = value end
+            if not D.profile then return false end
+            D.profile.Alert121DispelDuration = value
             refreshText()
+            return true
         end, 0.5, 30, 0.5, "sec")
     Controls:Stepper(text, "Text size",
         function() return D.profile and D.profile.Alert121FontSize or 48 end,
         function(value)
-            if D.profile then D.profile.Alert121FontSize = value end
+            if not D.profile then return false end
+            D.profile.Alert121FontSize = value
             refreshText()
+            return true
         end, 12, 96, 1, "px")
 
     local sound = Controls:Card(page, "Dispel sound",
@@ -137,31 +145,42 @@ UI:RegisterPage("ALERTS", "Alerts", function(parent)
     Controls:Toggle(sound, "Enable sound", nil,
         function() return D.profile and D.profile.PlaySound ~= false end,
         function(value)
-            if D.profile then D.profile.PlaySound = value and true or false end
+            if not D.profile then return false end
+            D.profile.PlaySound = value and true or false
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("v13 sound toggle") end
+            return true
         end)
     Controls:Cycle(sound, "Alert sound", function() return soundPresets end,
         function() return D.profile and D.profile.SoundNotificationPreset or "FEMALE_DISPEL" end,
         function(value)
-            if not D.profile then return end
+            if not D.profile then return false end
             D.profile.SoundNotificationPreset = value
             D.profile.SoundFile = soundFiles[value] or (DC and DC.AfflictionSound)
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("v13 sound preset") end
+            return true
         end)
     Controls:Cycle(sound, "Output channel", function() return soundChannels end,
         function() return D.profile and D.profile.SoundNotificationChannel or "Master" end,
         function(value)
-            if D.profile then D.profile.SoundNotificationChannel = value end
+            if not D.profile then return false end
+            D.profile.SoundNotificationChannel = value
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("v13 sound channel") end
+            return true
         end)
     Controls:Stepper(sound, "Fallback debounce",
         function() return D.profile and D.profile.SoundNotificationIgnoreSeconds or 2 end,
         function(value)
-            if D.profile then D.profile.SoundNotificationIgnoreSeconds = value end
+            if not D.profile then return false end
+            D.profile.SoundNotificationIgnoreSeconds = value
+            return true
         end, 0, 5, 0.25, "sec")
     Controls:Toggle(sound, "Cure-failure sound", nil,
         function() return D.profile and D.profile.PlayFailureSound == true end,
-        function(value) if D.profile then D.profile.PlayFailureSound = value and true or false end end)
+        function(value)
+            if not D.profile then return false end
+            D.profile.PlayFailureSound = value and true or false
+            return true
+        end)
 
     local feedback = Controls:Card(page, "Environment feedback",
         "These switches apply to the environment selected on the Profiles page.")
@@ -174,13 +193,13 @@ UI:RegisterPage("ALERTS", "Alerts", function(parent)
     end, function() return Theme.color.cyan end)
     Controls:Toggle(feedback, "On-screen text alerts", nil,
         function() local env = environment(); return not env or env.TextAlerts121Enabled ~= false end,
-        function(value) ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "TextAlerts121Enabled", value) end)
+        function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "TextAlerts121Enabled", value) end)
     Controls:Toggle(feedback, "Chat status messages", nil,
         function() local env = environment(); return not env or env.EnvironmentChat121Enabled ~= false end,
-        function(value) ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "EnvironmentChat121Enabled", value) end)
+        function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "EnvironmentChat121Enabled", value) end)
     Controls:Toggle(feedback, "Out-of-range indication", nil,
         function() local env = environment(); return env and env.OutOfRange121Enabled == true end,
-        function(value) ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "OutOfRange121Enabled", value) end)
+        function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "OutOfRange121Enabled", value) end)
 
     local cooldown = Controls:Card(page, "MUF cooldown overlay",
         "Environment override for the profile currently being edited.")
@@ -189,13 +208,13 @@ UI:RegisterPage("ALERTS", "Alerts", function(parent)
     cooldown:SetHeight(205)
     Controls:Toggle(cooldown, "Enable overlay", nil,
         function() local env = environment(); return not env or env.CooldownOverlay121Enabled ~= false end,
-        function(value) ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Enabled", value) end)
+        function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Enabled", value) end)
     Controls:Toggle(cooldown, "Countdown numbers", nil,
         function() local env = environment(); return not env or env.CooldownOverlay121Numbers ~= false end,
-        function(value) ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Numbers", value) end)
+        function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Numbers", value) end)
     Controls:Stepper(cooldown, "Overlay darkness",
         function() local env = environment(); return env and env.CooldownOverlay121Opacity or 0.62 end,
-        function(value) ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Opacity", value) end,
+        function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Opacity", value) end,
         0, 1, 0.05, "")
 
     function page:Refresh()

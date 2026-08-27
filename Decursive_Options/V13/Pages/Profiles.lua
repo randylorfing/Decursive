@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Zhaohu's Decursive v13 Profiles page.. This file was solely written by Randy Lorfing.
+    Zhaohu's Decursive v13 Profiles page.
     Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify
@@ -82,9 +82,11 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
     Controls:Cycle(named, "Current profile", profileValues,
         function() return ZD.GetUserProfileName and ZD:GetUserProfileName() or "Default" end,
         function(value)
-            if ZD.SetUserProfile and ZD:SetUserProfile(value) then
+            local applied = ZD.SetUserProfile and ZD:SetUserProfile(value) or false
+            if applied then
                 UI:SetStatus("Switched to profile " .. value .. ".", "success")
             end
+            return applied
         end)
     local nameInput = Controls:TextInput(named, "Profile name", "Example: Mythic Healer")
     local createProfile = Controls:Button(named, "Create / Switch", 150, function()
@@ -129,8 +131,9 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
     Controls:Cycle(behavior, "Activation mode", function() return environmentValues end,
         function() return ZD.GetEnvironmentSetting and ZD:GetEnvironmentSetting() or "AUTO" end,
         function(value)
-            if ZD.SetEnvironmentSetting then ZD:SetEnvironmentSetting(value) end
-            UI:SetStatus("Environment activation updated.", "success")
+            local applied = ZD.SetEnvironmentSetting and ZD:SetEnvironmentSetting(value) or false
+            if applied then UI:SetStatus("Environment activation updated.", "success") end
+            return applied
         end)
     Controls:StatusRow(behavior, "Currently active", function()
         if not ZD.GetActiveEnvironment then return "Open World" end
@@ -140,8 +143,11 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
     Controls:Cycle(behavior, "Edit environment", function() return editEnvironmentValues end,
         function() return ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD" end,
         function(value)
-            if ZD.SetEditEnvironment then ZD:SetEditEnvironment(value) end
-            UI:SetStatus("Editing " .. (V13.SettingsSchema.environmentNames[value] or value) .. ".", "success")
+            local applied = ZD.SetEditEnvironment and ZD:SetEditEnvironment(value) or false
+            if applied then
+                UI:SetStatus("Editing " .. (V13.SettingsSchema.environmentNames[value] or value) .. ".", "success")
+            end
+            return applied
         end)
 
     local resetEnvironment = Controls:ConfirmButton(behavior, "Reset Edited Environment", 190, function()

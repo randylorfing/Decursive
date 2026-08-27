@@ -138,7 +138,7 @@ function ZD:BuildTestMode(parent)
     previewOne:SetPoint("LEFT", previewAll, "RIGHT", 12, 0)
 
     local layout = section(p, "Layout Stress Test", -240, 176)
-    local lhelp = label(layout, "Fills the MUF grid with placeholder slots so you can tune spacing and raid auto-layout without a full group.", 10, C.muted, "TOPLEFT", 18, -40)
+    local lhelp = label(layout, "Fills the MUF grid with placeholder slots so you can tune original-style spacing and units per line without a full group.", 10, C.muted, "TOPLEFT", 18, -40)
     lhelp:SetWidth(600)
 
     local toggleLayout = button(layout, "Toggle Test Layout", 170, 30, function()

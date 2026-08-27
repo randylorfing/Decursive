@@ -229,9 +229,14 @@ function UI:CreateShell()
 
     local previous
     for _, item in ipairs(Theme.navigation) do
+        -- WoW's Lua runtime reuses generic-for control variables. Store the
+        -- destination on the button instead of closing over `item`, otherwise
+        -- every command-bar button can resolve to the final navigation entry.
+        local navigationKey = item.key
         local button = CreateFrame("Button", nil, commandBar)
+        button:RegisterForClicks("LeftButtonUp")
         button:SetHeight(Theme.size.commandBarHeight - 2)
-        button:SetWidth(item.key == "PROFILES" and 108 or 96)
+        button:SetWidth(navigationKey == "PROFILES" and 108 or 96)
         if previous then button:SetPoint("LEFT", previous, "RIGHT", 2, 0)
         else button:SetPoint("LEFT", 12, 0) end
         button.label = Controls:Label(button, item.label:upper(), 10, Theme.color.muted)
@@ -242,14 +247,15 @@ function UI:CreateShell()
         button.line:SetPoint("BOTTOMRIGHT", -8, 0)
         button.line:SetColorTexture(unpack(Theme.color.cyan))
         button.line:Hide()
-        button:SetScript("OnClick", function() UI:ShowPage(item.key) end)
+        button.navigationKey = navigationKey
+        button:SetScript("OnClick", function(self) UI:ShowPage(self.navigationKey) end)
         button:SetScript("OnEnter", function(self)
-            if UI.currentPage ~= item.key then self.label:SetTextColor(unpack(Theme.color.text)) end
+            if UI.currentPage ~= self.navigationKey then self.label:SetTextColor(unpack(Theme.color.text)) end
         end)
         button:SetScript("OnLeave", function(self)
-            if UI.currentPage ~= item.key then self.label:SetTextColor(unpack(Theme.color.muted)) end
+            if UI.currentPage ~= self.navigationKey then self.label:SetTextColor(unpack(Theme.color.muted)) end
         end)
-        frame.navButtons[item.key] = button
+        frame.navButtons[navigationKey] = button
         previous = button
     end
 

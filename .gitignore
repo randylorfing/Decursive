@@ -3,3 +3,7 @@ changelog.txt
 
 /exclude-rsyncptr.txt
 /tags
+
+# Build artifacts produced by local packaging runs
+Decursive.zip
+*.zip

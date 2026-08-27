@@ -933,7 +933,7 @@ local function InitVariables_Once() -- {{{
     -- A table UnitID=>IsDebuffed (boolean)
     D.UnitDebuffed = {};
 
-    D.Revision = "a61713f"; -- not used here but some other add-on may request it from outside
+    D.Revision = "@project-abbreviated-hash@"; -- not used here but some other add-on may request it from outside
     D.date = "@project-date-iso@";
     D.version = "@project-version@";
 

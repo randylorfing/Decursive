@@ -741,14 +741,19 @@ local function optionSet(page, option, state, info, value, ...)
     end
 
     local function apply()
-        local ok, err = invokeOption(setSpec, option.handler or state.handler, info, value, unpack(extraArgs))
+        local ok, result = invokeOption(setSpec, option.handler or state.handler, info, value, unpack(extraArgs))
         if not ok then
-            ZD:SetStatus("Could not change setting: " .. tostring(err), true)
-            return
+            ZD:SetStatus("Could not change setting: " .. tostring(result), true)
+            return false
+        end
+        if result == false then
+            ZD:SetStatus("Setting could not be applied.", true)
+            return false
         end
         ZD:SetStatus("Setting updated.")
         page._needsRebuild = true
         ZD:RefreshUI()
+        return true
     end
 
     local confirm = option.confirm
@@ -765,10 +770,9 @@ local function optionSet(page, option, state, info, value, ...)
             message = tostring(confirm)
         end
         showConfirm(message, apply)
-    else
-        apply()
+        return true
     end
-    return true
+    return apply()
 end
 
 -- Pooled "toggle" widget. create() builds the bare row + switch once; bind()
@@ -1029,8 +1033,10 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                     b:SetScript("OnClick",function()
                         if isDisabled or not ZD:CanConfigure() then return end
                         local function run()
-                            local ok,err=invokeOption(option.func,handler,info)
-                            if not ok then ZD:SetStatus("Action failed: "..tostring(err),true) else ZD:SetStatus("Action completed.") end
+                            local ok,result=invokeOption(option.func,handler,info)
+                            if not ok then ZD:SetStatus("Action failed: "..tostring(result),true)
+                            elseif result == false then ZD:SetStatus("Action could not be completed.",true)
+                            else ZD:SetStatus("Action completed.") end
                             page._needsRebuild=true; ZD:RefreshUI()
                         end
                         if option.confirm then
@@ -1069,8 +1075,10 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                             if isDisabled or not ZD:CanConfigure(true) then return end
                             local okA,ar,ag,ab=invokeOption(getSpec,handler,info); if not okA then return end
                             local setSpec=inheritedSpec(option.set,state.set)
-                            local okSet,err=invokeOption(setSpec,handler,info,ar or 1,ag or 1,ab or 1,value)
-                            if okSet then alphaStepper:Refresh(value) else ZD:SetStatus("Could not change alpha: "..tostring(err),true) end
+                            local okSet,result=invokeOption(setSpec,handler,info,ar or 1,ag or 1,ab or 1,value)
+                            if not okSet then ZD:SetStatus("Could not change alpha: "..tostring(result),true)
+                            elseif result == false then ZD:SetStatus("Alpha could not be applied.",true)
+                            else alphaStepper:Refresh(value) end
                         end)
                     end
                     sw:SetScript("OnClick",function()
@@ -1084,8 +1092,10 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                             local na=ca
                             if option.hasAlpha and ColorPickerFrame.GetColorAlpha then na=ColorPickerFrame:GetColorAlpha() end
                             local setSpec=inheritedSpec(option.set, state.set)
-                            local okSet,err=invokeOption(setSpec,handler,info,nr,ng,nb,na)
-                            if not okSet then ZD:SetStatus("Could not change color: "..tostring(err),true) else sw.sample:SetColorTexture(nr,ng,nb,na); ZD:SetStatus("Color updated.") end
+                            local okSet,result=invokeOption(setSpec,handler,info,nr,ng,nb,na)
+                            if not okSet then ZD:SetStatus("Could not change color: "..tostring(result),true)
+                            elseif result == false then ZD:SetStatus("Color could not be applied.",true)
+                            else sw.sample:SetColorTexture(nr,ng,nb,na); ZD:SetStatus("Color updated.") end
                         end
                         picker.swatchFunc=commit; picker.opacityFunc=commit
                         picker.cancelFunc=function(previous)
@@ -1103,13 +1113,14 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                     y=y-28
                     local values=normalizeSelectValues(optionValue(option.values,handler,info,{}))
                     for _,entry in ipairs(values) do
+                        local entryKey = entry.key
                         local row=trackRendered(page,CreateFrame("Frame",nil,canvas))
                         row:SetPoint("TOPLEFT",indent+22,y); row:SetPoint("TOPRIGHT",-8,y); row:SetHeight(30)
                         label(row,entry.name,11,C.text,"LEFT",0,0)
                         local sw=CreateFrame("Button",nil,row,"BackdropTemplate"); sw:SetSize(38,20); sw:SetPoint("RIGHT",0,0); makeBackdrop(sw,C.off,C.border)
-                        local function read() local ok2,val=invokeOption(option.get,handler,info,entry.key); return ok2 and val and true or false end
+                        local function read() local ok2,val=invokeOption(option.get,handler,info,entryKey); return ok2 and val and true or false end
                         local function refresh() local on=read(); sw:SetBackdropColor(on and C.accent[1] or C.off[1],on and C.accent[2] or C.off[2],on and C.accent[3] or C.off[3],1) end
-                        sw:SetScript("OnClick",function() if isDisabled or not ZD:CanConfigure() then return end; local ok2,err=invokeOption(option.set,handler,info,entry.key,not read()); if not ok2 then ZD:SetStatus(tostring(err),true) else ZD:SetStatus("Filter updated.") end; refresh() end)
+                        sw:SetScript("OnClick",function() if isDisabled or not ZD:CanConfigure() then return end; local ok2,result=invokeOption(option.set,handler,info,entryKey,not read()); if not ok2 then ZD:SetStatus(tostring(result),true) elseif result == false then ZD:SetStatus("Filter could not be applied.",true) else ZD:SetStatus("Filter updated.") end; refresh() end)
                         refresh(); setDisabledVisual(row,isDisabled)
                         y=y-34
                     end
@@ -1194,14 +1205,15 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
 
     local x = 0
     for _, tab in ipairs(p.tabs) do
+        local tabKey = tab.key
         local w = tab.width or math.max(110, math.min(180, (#tab.name * 7) + 28))
         local b = button(tabBar, tab.name, w, 30, function()
-            p.activeTab = tab.key
+            p.activeTab = tabKey
             p._needsRebuild = true
             p:Rebuild()
         end)
         b:SetPoint("TOPLEFT", x, -2)
-        p.tabButtons[tab.key] = b
+        p.tabButtons[tabKey] = b
         x = x + w + 8
     end
 
@@ -1251,7 +1263,8 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
             inherited.set=inheritedSpec(node.set,inherited.set)
             inherited.disabled=inherited.disabled or optionValue(node.disabled,inherited.handler,optionInfo(tab.path,node,inherited.handler),false)==true
         end
-        local y=renderOptions(self,group,tab.path,inherited,-8,0,tab.skipKeys)
+        local startY = tonumber(self._renderStartY) or -8
+        local y=renderOptions(self,group,tab.path,inherited,startY,0,tab.skipKeys)
         self.optionCanvas:SetHeight(math.max(520,-y+24))
         self._needsRebuild=false
     end
@@ -2037,17 +2050,23 @@ function ZD:BuildFrames(parent)
         DebuffsFramePartyPixelSize121=true, DebuffsFrameRaidPixelSize121=true,
         ResetDebuffsFrameContextPixelSizes121=true, DebuffsFramePixelSize=true,
         ResetDebuffsFramePixelSize=true, DebuffsFrameElemScale=true,
+        MUFOrderMode=true,
         Test121MUFVisualsOne=true, Test121MUFVisualsAll=true,
     }
     local p = self:BuildTabbedOptionPathPage(parent, "Micro Unit Frames",
-        "MUF settings are separated by purpose. Party and Raid can use different MUF sizes, large raids can auto-reflow into a compact grid. Optional status lights sit above each square (yellow range, red fail, green success); turning them off restores the original tighter party/raid spacing.", {
+        "Control MUF visibility, size, ordering, spacing, colors, and performance.", {
             {key="layout", name="Layout & Display", path={"MicroFrameOpt","displayOpts"}, skipKeys=skipDisplay, width=145},
             {key="spacing", name="Spacing & Opacity", path={"MicroFrameOpt","AdvDispOptions"}, width=155},
             {key="colors", name="Colors", path={"MicroFrameOpt","MUFsColors"}, width=105},
             {key="performance", name="Performance", path={"MicroFrameOpt","PerfOptions"}, width=120},
         }, "layout")
 
-    local basics = section(p, "Frame Basics", -146, 176)
+    -- Keep the hand-built Layout controls inside the same scroll canvas as the
+    -- generated tab content. The former fixed page coordinates could make the
+    -- lower scroll frame collapse on short windows, stacking its arrows on the
+    -- size steppers; other tabs also appeared inert because their changing
+    -- controls began below two always-visible cards.
+    local basics = section(p.optionCanvas, "Frame Basics", -8, 210)
     p.basicShow = switch(basics, "Show MUFs", -34,
         function() return D.profile and D.profile.ShowDebuffsFrame end,
         function(v) ZD:SetProfileOption("ShowDebuffsFrame", v) end)
@@ -2064,6 +2083,19 @@ function ZD:BuildFrames(parent)
             end
         end,
         "Small circle above each MUF for range/fail/success. Off hides the light and restores pre-status-light party/raid spacing.")
+    local orderValues = function()
+        return {
+            { key = "GROUP", name = "Group / roster" },
+            { key = "PRIORITY", name = "Decursive priority" },
+            { key = "DANDERSFRAMES", name = "DandersFrames" },
+        }
+    end
+    p.basicOrder = cycleButton(basics, "MUF order", -158, orderValues,
+        function() return D.GetMUFOrderMode and D:GetMUFOrderMode() or "GROUP" end,
+        function(v)
+            if D.SetMUFOrderMode then return D:SetMUFOrderMode(v) end
+            return ZD:SetProfileOption("MUFOrderMode", v)
+        end)
 
     -- MUF size was previously unreachable from the UI: the underlying
     -- DebuffsFrameElemScale option is marked hidden/guiHidden in the classic
@@ -2074,7 +2106,7 @@ function ZD:BuildFrames(parent)
     -- Built as a dedicated section using ZD:Get/SetPartyMUFSizePixels and
     -- ZD:Get/SetRaidMUFSizePixels (Modern/ZD_Core.lua), which already existed
     -- and worked, just had no control wired to them anywhere.
-    local sizeSection = section(p, "MUF Size", -334, 188)
+    local sizeSection = section(p.optionCanvas, "MUF Size", -230, 188)
     p.partySize = slider(sizeSection, "Party MUF size (px)", -34, 10, 80, 1,
         function() return ZD:GetPartyMUFSizePixels() end,
         function(v) return ZD:SetPartyMUFSizePixels(v) end, "px")
@@ -2085,12 +2117,20 @@ function ZD:BuildFrames(parent)
     p.activeSizeContext:SetPoint("RIGHT", -16, 0)
     p.activeSizeContext:SetJustifyH("LEFT")
 
-    p.optionScroll:ClearAllPoints(); p.optionScroll:SetPoint("TOPLEFT",0,-540); p.optionScroll:SetPoint("BOTTOMRIGHT",-22,0)
+    local baseRebuild = p.Rebuild
+    function p:Rebuild()
+        local isLayout = self.activeTab == "layout"
+        basics:SetShown(isLayout)
+        sizeSection:SetShown(isLayout)
+        self._renderStartY = isLayout and -438 or -8
+        baseRebuild(self)
+    end
     local oldRefresh=p.Refresh
     function p:Refresh()
         if p.basicShow and p.basicShow.control then p.basicShow.control:Refresh() end
         if p.basicLock and p.basicLock.control then p.basicLock.control:Refresh() end
         if p.basicStatusLight and p.basicStatusLight.control then p.basicStatusLight.control:Refresh() end
+        if p.basicOrder and p.basicOrder.control then p.basicOrder.control:Refresh() end
         if p.partySize and p.partySize.control then p.partySize.control:Refresh() end
         if p.raidSize and p.raidSize.control then p.raidSize.control:Refresh() end
         if p.activeSizeContext then
@@ -2101,6 +2141,7 @@ function ZD:BuildFrames(parent)
         end
         if oldRefresh then oldRefresh(self) end
     end
+    p:Rebuild()
     return p
 end
 
@@ -2408,19 +2449,20 @@ function ZD:BuildLists(parent)
         list = list or {}
         local y = -2
         for i, value in ipairs(list) do
+            local rowIndex = i
             local row = CreateFrame("Frame", nil, card.listChild, "BackdropTemplate")
             row:SetPoint("TOPLEFT", 0, y); row:SetSize(266, 36)
             makeBackdrop(row, C.panel, C.border)
             local nm = label(row, format("%d. %s", i, listName(card.kind, value)), 10, C.text, "LEFT", 8, 0)
             nm:SetWidth(100); nm:SetJustifyH("LEFT")
             -- Plain ASCII labels (UTF-8 arrows were corrupted to mojibake in this file).
-            local up = button(row, "Up", 28, 24, function() move(card.kind, i, "up") end); up:SetPoint("LEFT", 112, 0)
-            local down = button(row, "Dn", 28, 24, function() move(card.kind, i, "down") end); down:SetPoint("LEFT", 142, 0)
-            local top = button(row, "Top", 32, 24, function() move(card.kind, i, "top") end); top:SetPoint("LEFT", 172, 0)
-            local bottom = button(row, "End", 32, 24, function() move(card.kind, i, "bottom") end); bottom:SetPoint("LEFT", 206, 0)
+            local up = button(row, "Up", 28, 24, function() move(card.kind, rowIndex, "up") end); up:SetPoint("LEFT", 112, 0)
+            local down = button(row, "Dn", 28, 24, function() move(card.kind, rowIndex, "down") end); down:SetPoint("LEFT", 142, 0)
+            local top = button(row, "Top", 32, 24, function() move(card.kind, rowIndex, "top") end); top:SetPoint("LEFT", 172, 0)
+            local bottom = button(row, "End", 32, 24, function() move(card.kind, rowIndex, "bottom") end); bottom:SetPoint("LEFT", 206, 0)
             local remove = button(row, "X", 22, 24, function()
                 if not ZD:CanConfigure() then return end
-                if card.kind == "priority" then D:RemoveIDFromPriorityList(i) else D:RemoveIDFromSkipList(i) end
+                if card.kind == "priority" then D:RemoveIDFromPriorityList(rowIndex) else D:RemoveIDFromSkipList(rowIndex) end
                 ZD:SetStatus("List entry removed.")
                 p:Refresh()
             end, "danger"); remove:SetPoint("LEFT", 240, 0)
@@ -2486,9 +2528,17 @@ function ZD:BuildBindings(parent)
             end
         end
         local setSpec = option.set or group.set or model.set
-        local ok, err = invokeOption(setSpec, handler, info, value, ...)
+        if setSpec == nil then
+            ZD:SetStatus("This setting is unavailable.", true)
+            return false
+        end
+        local ok, result = invokeOption(setSpec, handler, info, value, ...)
         if not ok then
-            ZD:SetStatus("Could not change setting: " .. tostring(err), true)
+            ZD:SetStatus("Could not change setting: " .. tostring(result), true)
+            return false
+        end
+        if result == false then
+            ZD:SetStatus("Setting could not be applied.", true)
             return false
         end
         ZD:SetStatus("Setting updated.")
@@ -2510,9 +2560,13 @@ function ZD:BuildBindings(parent)
         if type(option) ~= "table" or not option.func then return false end
         local handler = option.handler or group.handler or model.handler
         local info = buildInfo(path, option, handler)
-        local ok, err = invokeOption(option.func, handler, info)
+        local ok, result = invokeOption(option.func, handler, info)
         if not ok then
-            ZD:SetStatus("Action failed: " .. tostring(err), true)
+            ZD:SetStatus("Action failed: " .. tostring(result), true)
+            return false
+        end
+        if result == false then
+            ZD:SetStatus("Action could not be completed.", true)
             return false
         end
         ZD:SetStatus("Action completed.")
@@ -2550,10 +2604,11 @@ function ZD:BuildBindings(parent)
 
         local y = 0
         for _, item in ipairs(items) do
+            local choiceKey = item.key
             local choice = button(child, item.name, 222, 24, function()
                 popup:Hide()
-                if onSelect then onSelect(item.key) end
-            end, item.key == selectedKey and "primary" or nil)
+                if onSelect then onSelect(choiceKey) end
+            end, choiceKey == selectedKey and "primary" or nil)
             choice:SetPoint("TOPLEFT", 0, -y)
             choice.text:SetJustifyH("LEFT")
             choice.text:ClearAllPoints()
@@ -2695,26 +2750,27 @@ function ZD:BuildBindings(parent)
         local seenRows = {}
         local rowY = -88
         for _, comboIndex in ipairs(bindingRows) do
-            if comboIndex > 0 and mouseButtons[comboIndex] and not seenRows[comboIndex] then
-                seenRows[comboIndex] = true
+            local bindingIndex = comboIndex
+            if bindingIndex > 0 and mouseButtons[bindingIndex] and not seenRows[bindingIndex] then
+                seenRows[bindingIndex] = true
                 local row = trackRendered(p, CreateFrame("Frame", nil, mouseCard))
                 row:SetPoint("TOPLEFT", 16, rowY)
                 row:SetPoint("TOPRIGHT", -16, rowY)
                 row:SetHeight(30)
                 local actionName
-                if comboIndex <= 7 then actionName = "Priority " .. comboIndex
-                elseif comboIndex == #mouseButtons - 1 then actionName = "Target unit"
+                if bindingIndex <= 7 then actionName = "Priority " .. bindingIndex
+                elseif bindingIndex == #mouseButtons - 1 then actionName = "Target unit"
                 else actionName = "Focus unit" end
                 label(row, actionName, 11, C.text, "LEFT", 0, 0)
-                local pick = button(row, mouseReadable(mouseButtons[comboIndex]), 246, 26, nil)
+                local pick = button(row, mouseReadable(mouseButtons[bindingIndex]), 246, 26, nil)
                 pick:SetPoint("RIGHT", 0, 0)
                 pick.text:SetJustifyH("LEFT"); pick.text:ClearAllPoints(); pick.text:SetPoint("LEFT", 9, 0)
                 pick:SetScript("OnClick", function(self)
                     if not ZD:CanConfigure() then return end
-                    showChoicePopup(self, mouseChoices, comboIndex, function(choiceIndex)
-                        if choiceIndex == comboIndex then return end
-                        local opt = group.args.MouseBindings and group.args.MouseBindings.args and group.args.MouseBindings.args["KeyCombo" .. comboIndex]
-                        if opt and runSet(model, group, opt, { "CustomSpells", "MouseBindings", "KeyCombo" .. comboIndex }, choiceIndex) then
+                    showChoicePopup(self, mouseChoices, bindingIndex, function(choiceIndex)
+                        if choiceIndex == bindingIndex then return end
+                        local opt = group.args.MouseBindings and group.args.MouseBindings.args and group.args.MouseBindings.args["KeyCombo" .. bindingIndex]
+                        if opt and runSet(model, group, opt, { "CustomSpells", "MouseBindings", "KeyCombo" .. bindingIndex }, choiceIndex) then
                             p:Rebuild()
                         end
                     end)
@@ -2781,7 +2837,10 @@ function ZD:BuildBindings(parent)
         end
 
         local typeList = typeEntries()
-        for _, spellID in ipairs(spellIDs) do
+        for _, spellIDValue in ipairs(spellIDs) do
+            -- Keep a per-card value for every deferred script callback. WoW's
+            -- Lua loop control variable is shared across iterations.
+            local spellID = spellIDValue
             local spellData = D.classprofile.UserSpells[spellID]
             local holder = group.args.CustomSpellsHolder
             local spellGroup = holder and holder.args and holder.args[tostring(spellID)]
@@ -2831,7 +2890,8 @@ function ZD:BuildBindings(parent)
                 local contentTop = -72
                 label(card, "Cure Types", 11, C.accent, "TOPLEFT", 16, contentTop)
                 local chipX, chipY = 16, contentTop - 24
-                for _, typeEntry in ipairs(typeList) do
+                for _, typeEntryValue in ipairs(typeList) do
+                    local typeEntry = typeEntryValue
                     local typeOpt = spellGroup.args.cureTypes and spellGroup.args.cureTypes.args and spellGroup.args.cureTypes.args[typeEntry.key]
                     if typeOpt then
                         local chip = compactToggle(card, chipX, chipY, 138, typeEntry.name, function()
@@ -2912,7 +2972,8 @@ function ZD:BuildBindings(parent)
                 if enabledTypeCount > 0 then
                     label(card, "Unit Filtering", 11, C.accent, "TOPLEFT", 16, afterTypesY)
                     afterTypesY = afterTypesY - 25
-                    for _, typeEntry in ipairs(typeList) do
+                    for _, typeEntryValue in ipairs(typeList) do
+                        local typeEntry = typeEntryValue
                         if D:tcheckforval(spellData.Types or {}, typeEntry.type) then
                             local filterOpt = spellGroup.args.UnitFiltering and spellGroup.args.UnitFiltering.args and spellGroup.args.UnitFiltering.args[typeEntry.key]
                             if filterOpt then

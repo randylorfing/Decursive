@@ -450,8 +450,8 @@ do
 
         -- A registry rebuild includes restricted AddAuraSound calls. Apply any
         -- roster/spec/learned-ID refresh requested during combat only after
-        -- lockdown has fully ended (the central guard also checks any active
-        -- addon restriction).
+        -- lockdown has fully ended; the central registry guard checks the
+        -- precise chat-messaging boundary used by Blizzard's sound API.
         if self.FlushProtectedAuraSoundRefresh then
             self:FlushProtectedAuraSoundRefresh("PLAYER_REGEN_ENABLED");
         end

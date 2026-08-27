@@ -431,6 +431,29 @@ end --}}}
 -- normal 12.1 COMBAT_LOG_EVENT_UNFILTERED path is not queried by this addon;
 -- protected detection and playback remain Blizzard-owned.
 
+local function nativeAuraSoundMutationBlocked()
+    -- Match DBM's working 12.1 permission boundary. AddAuraSound is tied to
+    -- chat-messaging lockdown, not every AddOnRestrictionState. Treating any
+    -- unrelated active restriction as a blocker left the desired registry
+    -- permanently deferred in some dungeons even though Blizzard would accept
+    -- the registration.
+    if _G.C_ChatInfo and type(_G.C_ChatInfo.InChatMessagingLockdown) == "function" then
+        local ok, blocked = pcall(_G.C_ChatInfo.InChatMessagingLockdown);
+        if not ok or not isAccessiblePublicValue(blocked) or type(blocked) ~= "boolean" then
+            return true;
+        end
+        return blocked;
+    end
+
+    -- Compatibility fallback for clients without the 12.1-specific gate.
+    if _G.InCombatLockdown then
+        local ok, blocked = pcall(_G.InCombatLockdown);
+        if not ok or not isAccessiblePublicValue(blocked) then return true; end
+        return blocked == true;
+    end
+    return false;
+end
+
 local function getProtectedAuraSoundContextKey()
     local classToken = "UNKNOWN";
     if _G.UnitClass then
@@ -574,10 +597,9 @@ function D:LearnProtectedAuraSoundSpellID(spellID, source)
     T._AuraSoundDiag = T._AuraSoundDiag or {};
     T._AuraSoundDiag.lastLearned = spellID;
     T._AuraSoundDiag.lastLearnedName = spellName;
-    local refreshBlocked = (_G.InCombatLockdown and _G.InCombatLockdown())
-        or (self.HasActiveAddonRestriction and self:HasActiveAddonRestriction())
+    local refreshBlocked = nativeAuraSoundMutationBlocked()
     local refreshState = refreshBlocked
-        and "registration queued until combat ends"
+        and "registration queued until messaging lockdown ends"
         or "registration refreshed";
     self:Println(("Sound Notifications: learned dispellable aura %s (%d) for %s. Blizzard aura-sound %s."):format(spellName or "spell", spellID, contextKey or "current spec", refreshState));
     if type(self.RefreshProtectedAuraSounds) == "function" then
@@ -612,11 +634,6 @@ local NativeAuraSoundRetryReason = nil;
 local NativeAuraSoundRetryMode = nil;
 local MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES = 3;
 T._AuraSoundDiag = T._AuraSoundDiag or { registered = 0, attempted = 0, lastReason = "never", lastError = nil, lastLearned = nil };
-
-local function nativeAuraSoundMutationBlocked()
-    if _G.InCombatLockdown and _G.InCombatLockdown() then return true; end
-    return D.HasActiveAddonRestriction and D:HasActiveAddonRestriction() or false;
-end
 
 local function resetNativeAuraSoundRemovalRetry()
     -- C_Timer.After cannot be cancelled. Advancing the serial makes any older
@@ -982,8 +999,8 @@ function D:GetProtectedAuraSoundUnitTokens(context)
     local units, seen = {}, {};
     addUniqueUnitToken(units, seen, "player");
 
-    -- Follower parties can be created only after zoning, at which point the
-    -- dungeon-wide addon restriction may already forbid AddAuraSound. Reserve
+    -- Follower parties can be created only after zoning, at which point chat-
+    -- messaging lockdown may already forbid AddAuraSound. Reserve
     -- the four stable party tokens while mutation is still legal so those MUFs
     -- are armed before their units exist. Invalid/nonexistent tokens simply
     -- produce a failed desired registration and are retried on the next safe
@@ -1010,8 +1027,15 @@ local function builtInEntriesAllowedForUnit(entries, unitToken, context)
         local entry = entries[i];
         local contentAllowed = true;
         if context and context.isRaid and unitToken ~= "player" then
-            contentAllowed = activeContent ~= nil
-                and normalizeProtectedAuraSoundContentName(entry and entry.content) == activeContent;
+            local entryInstanceID = type(entry) == "table" and tonumber(entry.instanceID) or nil;
+            if entryInstanceID and type(context.instanceID) == "number" then
+                -- Numeric zone identity is locale-independent and mirrors
+                -- DBM's per-zone aura-sound registration model.
+                contentAllowed = entryInstanceID == context.instanceID;
+            else
+                contentAllowed = activeContent ~= nil
+                    and normalizeProtectedAuraSoundContentName(entry and entry.content) == activeContent;
+            end
         end
         if contentAllowed and type(entry) == "table" then
             local key = entry.cureType;

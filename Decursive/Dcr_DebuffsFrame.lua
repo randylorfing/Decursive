@@ -214,7 +214,7 @@ function MicroUnitF:EnsureContextMUFSizeSettings()
     if not D.profile then return end
 
     local base = DC.MFSIZE or 20
-    local legacyPixels = ClampMUFSizePixels((tonumber(D.profile.DebuffsFrameElemScale) or 1) * base)
+    local legacyPixels = ClampMUFSizePixels((tonumber(D.profile.DebuffsFrameElemScale) or 1.5) * base)
 
     if type(D.profile.DebuffsFramePartyPixelSize121) ~= "number" then
         D.profile.DebuffsFramePartyPixelSize121 = legacyPixels
@@ -355,28 +355,12 @@ function MicroUnitF:GetVerticalCellStride()
     return originalStride + self:GetStatusLightReserve()
 end
 
--- Raid auto-layout targets a compact grid of at most five rows.  In the
--- default horizontal layout this produces 5 columns at 20/25 players, 6 at
--- 30, 7 at 35 and 8 at 40 -- matching the visual target for large raids.
--- Decursive's roster order controls UNIT ORDER; this only controls how
--- that ordered sequence is laid out on screen.
+-- Preserve original Decursive geometry in every activity. "Units per line"
+-- is authoritative in parties, raids, battleground raid groups and arenas;
+-- an environment transition must never silently change the grid shape.
 function MicroUnitF:GetEffectivePerLine()
     local configured = tonumber(D.profile.DebuffsFramePerline) or 10
     configured = math.max(1, math.min(40, math.floor(configured + 0.5)))
-
-    if D.profile.DebuffsFrameRaidAutoLayout121 ~= false and IsInRaid and IsInRaid() then
-        local count = tonumber(D.Status and D.Status.UnitNum) or tonumber(self.UnitShown) or 0
-        count = math.min(count, tonumber(self.MaxUnit) or count)
-        if count > 5 then
-            if D.profile.DebuffsFrameVerticalDisplay then
-                -- Vertical fill reads down each column.  Five units per column
-                -- yields the same compact 5-row footprint for a 40-player raid.
-                return math.min(5, count)
-            end
-            return math.min(8, math.max(5, math.ceil(count / 5)))
-        end
-    end
-
     return configured
 end
 

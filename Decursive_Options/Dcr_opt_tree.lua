@@ -1054,6 +1054,25 @@ local function GetStaticOptions ()
                         disabled = function () return not D.profile.ShowDebuffsFrame and D.profile.AutoHideMUFs == 1; end,
                         args = {
                             -- {{{
+                            MUFOrderMode = {
+                                type = "select",
+                                name = "MUF order",
+                                desc = "Choose how Micro Unit Frames are arranged. Group / roster follows Blizzard's party or raid roster. Decursive priority preserves the traditional priority-list order. DandersFrames mirrors its current visible frame order when that addon is loaded.",
+                                values = {
+                                    GROUP = "Group / roster",
+                                    PRIORITY = "Decursive priority",
+                                    DANDERSFRAMES = "DandersFrames",
+                                },
+                                get = function()
+                                    return D.GetMUFOrderMode and D:GetMUFOrderMode() or "GROUP"
+                                end,
+                                set = function(info, value)
+                                    if D.SetMUFOrderMode then D:SetMUFOrderMode(value)
+                                    else D.profile.MUFOrderMode = value end
+                                end,
+                                disabled = "disabled",
+                                order = 1290,
+                            },
                             DebuffsFrameGrowToTop = {
                                 type = "toggle",
                                 name = L["OPT_GROWDIRECTION"],
@@ -1492,13 +1511,6 @@ local function GetStaticOptions ()
                                 disabled = "disabled",
                                 order = 1600,
                             },
-                            DebuffsFrameRaidAutoLayout121 = {
-                                type = 'toggle',
-                                name = "Automatic raid grid",
-                                desc = "For raids larger than 5 players, automatically reflow MUFs into a compact grid of at most five rows. A 40-player raid becomes 8 columns by 5 rows. Decursive controls unit order and grid shape.",
-                                disabled = "disabled",
-                                order = 1605,
-                            },
                             DebuffsFramePartyPixelSize121 = {
                                 type = 'range',
                                 name = "Party MUF size (pixels)",
@@ -1510,7 +1522,7 @@ local function GetStaticOptions ()
                                     if D.MicroUnitF and D.MicroUnitF.GetContextMUFSizePixels then
                                         return D.MicroUnitF:GetContextMUFSizePixels("PARTY");
                                     end
-                                    return math.floor((D.profile.DebuffsFrameElemScale or 1) * (DC.MFSIZE or 20) + 0.5);
+                                    return math.floor((D.profile.DebuffsFrameElemScale or 1.5) * (DC.MFSIZE or 20) + 0.5);
                                 end,
                                 set = function(info, value)
                                     if D.Status.Combat then return false end
@@ -1533,7 +1545,7 @@ local function GetStaticOptions ()
                                     if D.MicroUnitF and D.MicroUnitF.GetContextMUFSizePixels then
                                         return D.MicroUnitF:GetContextMUFSizePixels("RAID");
                                     end
-                                    return math.floor((D.profile.DebuffsFrameElemScale or 1) * (DC.MFSIZE or 20) + 0.5);
+                                    return math.floor((D.profile.DebuffsFrameElemScale or 1.5) * (DC.MFSIZE or 20) + 0.5);
                                 end,
                                 set = function(info, value)
                                     if D.Status.Combat then return false end
@@ -1547,13 +1559,13 @@ local function GetStaticOptions ()
                             },
                             ResetDebuffsFrameContextPixelSizes121 = {
                                 type = 'execute',
-                                name = "Reset Party & Raid sizes (20 px)",
-                                desc = "Reset both Party and Raid Micro Unit Frame sizes to Decursive's original 20 pixel size.",
+                                name = "Reset Party & Raid sizes (30 px)",
+                                desc = "Reset both Party and Raid Micro Unit Frame sizes to Zhaohu's 30 pixel default.",
                                 func = function()
                                     if D.Status.Combat then return end
                                     if D.MicroUnitF and D.MicroUnitF.SetContextMUFSizePixels then
-                                        D.MicroUnitF:SetContextMUFSizePixels("PARTY", 20);
-                                        D.MicroUnitF:SetContextMUFSizePixels("RAID", 20);
+                                        D.MicroUnitF:SetContextMUFSizePixels("PARTY", 30);
+                                        D.MicroUnitF:SetContextMUFSizePixels("RAID", 30);
                                         D.MicroUnitF:ApplyContextMUFScale();
                                     end
                                 end,
@@ -1575,7 +1587,7 @@ local function GetStaticOptions ()
                                     if D.MicroUnitF and D.MicroUnitF.GetActiveMUFSizePixels then
                                         return D.MicroUnitF:GetActiveMUFSizePixels();
                                     end
-                                    return math.floor((D.profile.DebuffsFrameElemScale or 1) * (DC.MFSIZE or 20) + 0.5);
+                                    return math.floor((D.profile.DebuffsFrameElemScale or 1.5) * (DC.MFSIZE or 20) + 0.5);
                                 end,
                                 set = function(info, value)
                                     if D.Status.Combat then return end
@@ -1588,14 +1600,14 @@ local function GetStaticOptions ()
                             },
                             ResetDebuffsFramePixelSize = {
                                 type = 'execute',
-                                name = "Reset MUF size (20 px)",
+                                name = "Reset MUF size (30 px)",
                                 desc = "Legacy single-size reset.",
                                 hidden = true,
                                 guiHidden = true,
                                 func = function()
                                     if D.Status.Combat then return end
                                     if D.MicroUnitF and D.MicroUnitF.SetActiveContextMUFSizePixels then
-                                        D.MicroUnitF:SetActiveContextMUFSizePixels(20);
+                                        D.MicroUnitF:SetActiveContextMUFSizePixels(30);
                                     end
                                 end,
                                 disabled = "disabled",
@@ -1737,10 +1749,6 @@ local function GetStaticOptions ()
                                         desc = L["OPT_TIEXYSPACING_DESC"] .. "\n\nWhen enabled, Vertical spacing is locked and follows Horizontal spacing.",
                                         set = function(info,v)
                                             D.SetHandler(info, v);
-                                            if v then
-                                                D.profile.DebuffsFrameYSpacing = D.profile.DebuffsFrameXSpacing;
-                                            end
-                                            D.MicroUnitF:ResetAllPositions ();
                                             return true;
                                         end,
                                         order = 104
@@ -1756,10 +1764,6 @@ local function GetStaticOptions ()
                                         end,
                                         set = function(info,v)
                                             D.SetHandler(info, v);
-                                            if D.profile.DebuffsFrameTieSpacing then
-                                                D.profile.DebuffsFrameYSpacing = v;
-                                            end
-                                            D.MicroUnitF:ResetAllPositions ();
                                             return true;
                                         end,
                                         min = 0,
@@ -1779,8 +1783,6 @@ local function GetStaticOptions ()
                                         end,
                                         set = function(info,v)
                                             D.SetHandler(info, v);
-
-                                            D.MicroUnitF:ResetAllPositions ();
                                             return true;
                                         end,
                                         disabled = function() return D.Status.Combat or D.profile.DebuffsFrameTieSpacing end,
@@ -2396,7 +2398,7 @@ local function GetStaticOptions ()
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
                                     "\n\n|cFFDDDD00 %s|r:\n   %s"..
-                                    "\n\n|cFFDDDD00 %s|r:\n   %s\n\n   %s\n\n   %s"
+                                    "\n\n|cFFDDDD00 %s|r:\n   %s\n\n   %s\n\n   %s\n\n   %s"
                                 ):format(
                                     "@project-version@", "Randy Lorfing", ("@project-date-iso@"):sub(1,10),
                                     L["ABOUT_NOTES"],
@@ -2406,7 +2408,8 @@ local function GetStaticOptions ()
                                     L["ABOUT_AUTHOREMAIL"],     GetAddOnMetadata(addonName, "X-eMail")   or 'GetAddOnMetadata() failure',
                                     L["ABOUT_CREDITS"]
                                     ,    "Decursive is inspired from the original \"Decursive v1.9.4\" released in 2006 by Patrick Bohnet (Quutar of Earthen Ring (US))"
-                                    ,    "John Wellesz (Decursive AT 2072productions.com) took over Decursive after its first year and maintained and developed it for nearly 20 years, from 2006 to 2025."
+                                    ,    "John Wellesz (Decursive AT 2072productions.com) took over Decursive after its first year and maintained and developed it from 2006 through 2026."
+                                    ,    "WoW 12.1 compatibility, the protected-aura runtime, and Zhaohu's Decursive are maintained by Randy Lorfing."
                                     ,    GetAddOnMetadata(addonName, "X-Credits") or 'GetAddOnMetadata() failure'
                                 ),
                         order = 0,

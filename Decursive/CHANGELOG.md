@@ -1,8 +1,73 @@
 # Zhaohu-Decursive Changelog
 
-## v12.1.1
+## v12.1.2
+
+### Native dispel-sound trigger repair
+- Matched DBM's proven WoW 12.1 registration boundary by checking
+  `C_ChatInfo.InChatMessagingLockdown()` instead of treating every unrelated
+  active addon restriction as a reason to defer `C_UnitAuras.AddAuraSound`.
+  Registrations can now arm at the safe zone/roster edge where Blizzard accepts
+  them instead of remaining silently queued for an entire dungeon.
+- Audited DBM's current encounter modules and imported only exact aura IDs that
+  DBM explicitly tags as friendly Magic, Curse, Disease, Poison, or Bleed
+  dispels. Ordinary DBM movement, targeting, and ground-effect aura IDs were
+  intentionally excluded so they cannot produce false cleanse sounds.
+- Added six missing Temple of Sethraliss dispels plus three current Midnight
+  raid dispels. Raid entries carry Blizzard instance IDs so registration is
+  locale-independent and remains scoped to the active raid.
+
+### MUF ordering, responsive menu layout, and alert styling
+- Added a profile-scoped MUF order selector: **Group / roster** (the fresh-profile
+  default), **Decursive priority**, or **DandersFrames**.
+- Group / roster follows Blizzard's canonical party/raid roster. Priority mode
+  preserves the established priority-list/current-group comparator.
+- DandersFrames mode derives the live visual sequence exclusively through its
+  published frame, layout/header, and `OnFramesSorted` APIs. Missing integration
+  falls back to Group / roster, and combat-time re-sorts are deferred safely.
+- Moved the All Settings MUF Layout cards into the tab's single full-height
+  scroll canvas. Other tabs now show changing content directly below the tab
+  row, short windows no longer collapse a second scrollbar, and its arrow
+  buttons cannot overlap the Party/Raid size steppers.
+- Made the ordinary DISPEL preview/fallback banner apply its saved pixel size
+  and RGB color before the protected-native mutation guard. A 54 px red preview
+  therefore remains 54 px and red inside follower dungeons and other restricted
+  instances.
+
+### Source provenance, licensing, and fork identity
+- Renumbered the production candidate and release notes to v12.1.1 while
+  retaining the internal v13 module namespace for the redesigned UI/runtime.
+- Both addon TOCs now credit John Wellesz and Randy Lorfing, retain the
+  packager-owned version/date tokens, identify the fork's CurseForge project,
+  and route bug reports to Randy.
+- Expanded all 16 newly added v13 Lua files to the complete GPLv3-or-later
+  notice with Randy as their sole copyright holder. Original Decursive files
+  modified by Randy continue to preserve John's 2006-2026 copyright alongside
+  Randy's 2026 maintenance attribution.
+- Updated the in-game About history to preserve Patrick Bohnet's original
+  contribution, John Wellesz's 2006-2026 stewardship, and Randy Lorfing's WoW
+  12.1 compatibility and Zhaohu's Decursive maintenance work.
+- Kept the fork-specific 16-character `ZhaohuDcrVersion` AceComm prefix in both
+  registration and send paths so version announcements cannot collide with
+  the original Decursive project.
+- Added source validation for authorship, GPL headers, credits, fork identity,
+  all 50 version tokens, four date tokens, the abbreviated-hash token, the 19
+  source-only historical/design/branding files, and the generated-only Options
+  license rule.
+- Corrected the release checks to recognize canonical BigWigs `@debug@`
+  directives as valid source syntax. Packaged Lua is still parsed and rejected
+  if a directive or malformed long-comment delimiter survives rewriting.
 
 ### Restored original MUF visual bounds and range semantics
+- Changed fresh-profile and reset defaults to 30-pixel Party MUFs, 30-pixel
+  Raid MUFs, and linked 2-pixel horizontal/vertical spacing. Existing saved
+  Party/Raid sizes and spacing values are not forcibly overwritten.
+- Restored original Decursive grid geometry in parties, raids, battlegrounds,
+  and arenas: the configured **Units per line** value is authoritative and no
+  activity-specific auto-grid silently reshapes the MUFs.
+- Fixed the v13 horizontal, vertical, and linked-spacing controls so every
+  change re-anchors the live MUFs. While linked, Horizontal controls both axes
+  and Vertical is visibly disabled, matching original Decursive; when unlinked,
+  each axis changes independently across the original 0-100 pixel range.
 - Fixed a method-style call to the plain `D.IsSpellInRange(spellName, unit)`
   helper that shifted both arguments and painted every non-player MUF yellow
   on dungeon entry.
@@ -51,6 +116,20 @@
 - Removed the legacy beta/RC startup notice window. Non-stable builds remain
   classified internally for diagnostics, expiration checks and version exchange
   without interrupting login.
+
+### Menu UI callback audit
+- Fixed the V13 command bar and **All Settings** category/page buttons so every
+  button stores and opens its own destination instead of relying on a reused
+  Lua loop variable.
+- Audited the mature option builders used inside **All Settings** and fixed the
+  same deferred-callback problem in tabs, multiselect rows, Priority/Skip list
+  actions, choice popups, secure mouse-binding rows and custom-spell cards.
+- Routed toggle, stepper and cycle changes through one guarded apply boundary.
+  A backend error or rejected combat-time change now remains on the saved value
+  and reports a visible footer error instead of looking like a dead control.
+- Propagated real apply results through the MUF, Cure, Alerts, Overview and
+  Profiles pages so successful changes refresh immediately and failures are no
+  longer overwritten by a false success message.
 
 ### Cold-client MUF recovery
 - Replaced visibility toggling based on `Frame:IsVisible()` with an explicit

@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Zhaohu's Decursive v13 Cure page.. This file was solely written by Randy Lorfing.
+    Zhaohu's Decursive v13 Cure page.
     Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify
@@ -64,8 +64,9 @@ UI:RegisterPage("CURE", "Cure", function(parent)
             Controls:Toggle(priorities, labelText, nil,
                 function() return ZD.GetCureEnabled and ZD:GetCureEnabled(capturedTypeID) end,
                 function()
-                    if ZD.ToggleCure then ZD:ToggleCure(capturedTypeID) end
-                    UI:SetStatus(labelText .. " priority updated.", "success")
+                    local applied = ZD.ToggleCure and ZD:ToggleCure(capturedTypeID) or false
+                    if applied then UI:SetStatus(labelText .. " priority updated.", "success") end
+                    return applied
                 end)
         end
     end

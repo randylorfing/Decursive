@@ -99,6 +99,7 @@ local canaccessvalue        = _G.canaccessvalue or function(_) return true; end
 local issecretvalue         = _G.issecretvalue;
 local InCombatLockdown      = _G.InCombatLockdown;
 local pcall                 = _G.pcall;
+local abs                   = _G.math.abs;
 
 local function isAccessiblePublicValue(value)
     if not canaccessvalue(value) then return false; end
@@ -108,6 +109,99 @@ end
 local function unitExistsAccessible(unit)
     local ok, exists = pcall(UnitExists, unit);
     return ok and isAccessiblePublicValue(exists) and exists == true or false;
+end
+
+-- MUF ordering is intentionally a profile choice instead of being hard-wired
+-- into the roster comparator. GROUP mirrors Blizzard's party/raid roster,
+-- PRIORITY preserves Decursive's established priority-list/current-group
+-- behavior, and DANDERSFRAMES mirrors the live public DandersFrames layout.
+local MUF_ORDER_MODES = {
+    GROUP = true,
+    PRIORITY = true,
+    DANDERSFRAMES = true,
+}
+
+function D:GetMUFOrderMode()
+    local mode = self.profile and self.profile.MUFOrderMode or "GROUP";
+    return MUF_ORDER_MODES[mode] and mode or "GROUP";
+end
+
+function D:IsDandersFramesMUFOrderAvailable()
+    local DF = _G.DandersFrames;
+    return type(_G.DandersFrames_GetFrameForUnit) == "function"
+        and type(DF) == "table"
+        and type(DF.RegisterCallback) == "function";
+end
+
+function D:GetEffectiveMUFOrderMode()
+    local mode = self:GetMUFOrderMode();
+    if mode == "DANDERSFRAMES" and not self:IsDandersFramesMUFOrderAvailable() then
+        return "GROUP";
+    end
+    return mode;
+end
+
+function D:RefreshMUFOrder(reason)
+    self.Groups_datas_are_invalid = true;
+
+    if not self.DcrFullyInitialized or not self.MicroUnitF then
+        return false;
+    end
+
+    if InCombatLockdown and InCombatLockdown() then
+        if self.AddDelayedFunctionCall then
+            self:AddDelayedFunctionCall(
+                "Dcr_RefreshMUFOrder",
+                self.RefreshMUFOrder,
+                self,
+                reason
+            );
+        end
+        return false;
+    end
+
+    if self.MicroUnitF.ResetAllPositions then
+        self.MicroUnitF:ResetAllPositions();
+        self:Debug("MUF order refresh requested", reason or "unspecified");
+        return true;
+    end
+    return false;
+end
+
+function D:OnDandersFramesSorted(event, sortType)
+    if self:GetMUFOrderMode() ~= "DANDERSFRAMES" then return; end
+    if sortType ~= "party" and sortType ~= "raid" then return; end
+    return self:RefreshMUFOrder("DandersFrames " .. sortType .. " order changed");
+end
+
+function D:EnsureDandersFramesMUFOrderCallback()
+    local DF = _G.DandersFrames;
+    if not self:IsDandersFramesMUFOrderAvailable() then return false; end
+    if self._DandersFramesMUFOrderCallbackOwner == DF then return true; end
+
+    local callback = function(event, sortType)
+        D:OnDandersFramesSorted(event, sortType);
+    end
+    local ok = pcall(DF.RegisterCallback, self, "OnFramesSorted", callback);
+    if not ok then return false; end
+
+    self._DandersFramesMUFOrderCallbackOwner = DF;
+    self._DandersFramesMUFOrderCallback = callback;
+    return true;
+end
+
+function D:SetMUFOrderMode(mode)
+    if not MUF_ORDER_MODES[mode] or not self.profile then return false; end
+    self.profile.MUFOrderMode = mode;
+
+    if mode == "DANDERSFRAMES" then
+        if not self:EnsureDandersFramesMUFOrderCallback() then
+            self:Print("DandersFrames ordering is unavailable; using group / roster order until DandersFrames is loaded.");
+        end
+    end
+
+    self:RefreshMUFOrder("ordering mode changed to " .. mode);
+    return true;
 end
 -------------------------------------------------------------------------------
 
@@ -565,7 +659,133 @@ do
     end
 
     local UnitInfo = {};
+    local DandersOrder = {};
+    local ActiveOrderMode = "GROUP";
     local CurrentGroup = 0; -- the group we are in
+
+    local function safeExternalValue(func, ...)
+        if type(func) ~= "function" then return nil; end
+        local ok, value = pcall(func, ...);
+        if not ok or not isAccessiblePublicValue(value) then return nil; end
+        return value;
+    end
+
+    local function addDandersHeaderSlots(frameSlots, header, childCount, nextSlot)
+        if not header or type(header.GetAttribute) ~= "function" then return nextSlot; end
+        for i = 1, childCount do
+            local child = safeExternalValue(header.GetAttribute, header, "child" .. i);
+            if child and frameSlots[child] == nil then
+                frameSlots[child] = nextSlot;
+                nextSlot = nextSlot + 1;
+            end
+        end
+        return nextSlot;
+    end
+
+    -- Build a rank table once per roster commit. DandersFrames deliberately
+    -- reassigns units to secure header children when it sorts; its public frame
+    -- lookup therefore exposes the final live arrangement without Decursive
+    -- reading DandersFrames' private database or implementation tables.
+    local function buildDandersFrameOrder()
+        DandersOrder = {};
+        if TestMode or not D:IsDandersFramesMUFOrderAvailable() then return false; end
+        D:EnsureDandersFramesMUFOrderCallback();
+
+        local frameSlots = {};
+        local nextSlot = 1;
+
+        if Raidnum > 0 then
+            local grouped = safeExternalValue(_G.DandersFrames_IsRaidGrouped);
+            if grouped then
+                local headers = safeExternalValue(_G.DandersFrames_GetRaidGroupHeaders);
+                if type(headers) == "table" then
+                    for group = 1, 8 do
+                        nextSlot = addDandersHeaderSlots(frameSlots, headers[group], 5, nextSlot);
+                    end
+                end
+            else
+                local header = safeExternalValue(_G.DandersFrames_GetFlatRaidHeader);
+                nextSlot = addDandersHeaderSlots(frameSlots, header, MAX_RAID_MEMBERS, nextSlot);
+            end
+        else
+            local header = safeExternalValue(_G.DandersFrames_GetPartyHeader);
+            nextSlot = addDandersHeaderSlots(frameSlots, header, 5, nextSlot);
+        end
+
+        local configFunction = Raidnum > 0
+            and _G.DandersFrames_GetRaidConfig
+            or _G.DandersFrames_GetPartyConfig;
+        local config = safeExternalValue(configFunction);
+        local horizontal = type(config) == "table" and config.growDirection == "HORIZONTAL";
+        local positioned = {};
+
+        for _, unit in ipairs(SortingTable) do
+            local info = UnitInfo[unit];
+            if info and not info.isPet then
+                local lookupUnit = unit;
+                -- Decursive intentionally uses the canonical "player" token for
+                -- itself. In a raid DandersFrames' visible frame uses raidN, so
+                -- query that equivalent public token instead of its hidden party
+                -- player frame.
+                if Raidnum > 0 and unit == "player" and info.RosterID and info.RosterID > 0 then
+                    lookupUnit = "raid" .. info.RosterID;
+                end
+
+                local frame = safeExternalValue(_G.DandersFrames_GetFrameForUnit, lookupUnit);
+                if frame then
+                    local left = safeExternalValue(frame.GetLeft, frame);
+                    local top = safeExternalValue(frame.GetTop, frame);
+                    local width = safeExternalValue(frame.GetWidth, frame);
+                    local height = safeExternalValue(frame.GetHeight, frame);
+                    positioned[#positioned + 1] = {
+                        unit = unit,
+                        left = type(left) == "number" and left or nil,
+                        top = type(top) == "number" and top or nil,
+                        width = type(width) == "number" and width or 1,
+                        height = type(height) == "number" and height or 1,
+                        slot = frameSlots[frame],
+                        roster = info.RosterID,
+                    };
+                end
+            end
+        end
+
+        table.sort(positioned, function(a, b)
+            local aPositioned = a.left ~= nil and a.top ~= nil;
+            local bPositioned = b.left ~= nil and b.top ~= nil;
+            if aPositioned ~= bPositioned then return aPositioned; end
+
+            if aPositioned then
+                if horizontal then
+                    local rowTolerance = math.max(1, math.min(a.height, b.height) * .5);
+                    if abs(a.top - b.top) > rowTolerance then return a.top > b.top; end
+                    if a.left ~= b.left then return a.left < b.left; end
+                else
+                    local columnTolerance = math.max(1, math.min(a.width, b.width) * .5);
+                    if abs(a.left - b.left) > columnTolerance then return a.left < b.left; end
+                    if a.top ~= b.top then return a.top > b.top; end
+                end
+            end
+
+            if a.slot ~= b.slot then
+                if a.slot == nil then return false; end
+                if b.slot == nil then return true; end
+                return a.slot < b.slot;
+            end
+            if a.roster ~= b.roster then
+                if a.roster == nil then return false; end
+                if b.roster == nil then return true; end
+                return a.roster < b.roster;
+            end
+            return a.unit < b.unit;
+        end);
+
+        for rank, entry in ipairs(positioned) do
+            DandersOrder[entry.unit] = rank;
+        end
+        return #positioned > 0;
+    end
+
     local function isUnitBeforeUnit(ua, ub)
         -- pet
         -- humans are > to pets in WoW...
@@ -575,33 +795,48 @@ do
             return uaVSub;
         end
 
-        -- Priority list
+        UIa = UnitInfo[ua]; UIb = UnitInfo[ub];
+
+        if ActiveOrderMode == "GROUP" then
+            uaVSub = a_isBefore_b(UIa.RosterID, UIb.RosterID);
+            if uaVSub ~= nil then return uaVSub; end
+        elseif ActiveOrderMode == "DANDERSFRAMES" then
+            uaVSub = a_isBefore_b(DandersOrder[ua], DandersOrder[ub]);
+            if uaVSub ~= nil then return uaVSub; end
+
+            uaVSub = a_isBefore_b(UIa.RosterID, UIb.RosterID);
+            if uaVSub ~= nil then return uaVSub; end
+        end
+
+        -- Priority mode preserves the established priority list and current-
+        -- subgroup rotation exactly as it behaved before order modes existed.
         -- note that there is no notion of precedence between groups, class and
         -- roles and unfortunately specific GUIDs. As soon as a unit is part of
         -- several criteria the criteria with the lowest position will take
         -- precedence over the other, including GUID.
-        UIa = UnitInfo[ua]; UIb = UnitInfo[ub];
-        uaVSub = a_isBefore_b(getMinOf4(IPL[UIa.class], IPL[UIa.group], IPL[UIa.GUID], IPL[UIa.role]), getMinOf4(IPL[UIb.class], IPL[UIb.group], IPL[UIb.GUID], IPL[UIb.role]));
+        if ActiveOrderMode == "PRIORITY" then
+            uaVSub = a_isBefore_b(getMinOf4(IPL[UIa.class], IPL[UIa.group], IPL[UIa.GUID], IPL[UIa.role]), getMinOf4(IPL[UIb.class], IPL[UIb.group], IPL[UIb.GUID], IPL[UIb.role]));
 
-        --[==[
-        if ua == "player" or ub == "player" then
-            D:Debug("xx", ua, D:tAsString(UIa), ub, D:tAsString(UIb), uaVSub, "GUID comp:", IPL[UIa.GUID], IPL[UIb.GUID])
-        end
-        ]==]
+            --[==[
+            if ua == "player" or ub == "player" then
+                D:Debug("xx", ua, D:tAsString(UIa), ub, D:tAsString(UIb), uaVSub, "GUID comp:", IPL[UIa.GUID], IPL[UIb.GUID])
+            end
+            ]==]
 
-        if uaVSub ~= nil then
-            return uaVSub;
-        end
+            if uaVSub ~= nil then
+                return uaVSub;
+            end
 
-        -- default group
-        uaVSub = a_isBefore_b(UnitInfo[ua].group and (UnitInfo[ua].group + 8 - CurrentGroup) % 8 or nil, UnitInfo[ub].group and (UnitInfo[ub].group + 8 - CurrentGroup) % 8 or nil);
+            -- default group
+            uaVSub = a_isBefore_b(UIa.group and (UIa.group + 8 - CurrentGroup) % 8 or nil, UIb.group and (UIb.group + 8 - CurrentGroup) % 8 or nil);
 
-        if uaVSub ~= nil then
-            return uaVSub;
+            if uaVSub ~= nil then
+                return uaVSub;
+            end
         end
 
          -- default id
-        uaVSub = a_isBefore_b(UnitInfo[ua].RaidID, UnitInfo[ub].RaidID);
+        uaVSub = a_isBefore_b(UIa.RaidID, UIb.RaidID);
 
         if uaVSub ~= nil then
             return uaVSub;
@@ -624,7 +859,7 @@ do
 
     end
 
-    local function addUnit(unit, id, GUID, group, isPet)
+    local function addUnit(unit, id, GUID, group, isPet, rosterID)
 
         if Status.Unit_Array_GUIDToUnit[GUID] then
             return;
@@ -649,6 +884,7 @@ do
             ["GUID"]   = GUID;
             ["group"]  = group;
             ["RaidID"] = id;
+            ["RosterID"] = rosterID or id;
             ["isPet"]  = isPet;
             ["role"]   = not isPet and _UnitGroupRolesAssigned(unit) or "NONE";
         }
@@ -795,6 +1031,7 @@ do
             local caheID = 1; -- make an ordered table
             local excluded = 0;
             local playerPrio = 900;
+            local playerRosterID = 0;
 
             -- Cache the raid roster info eliminating useless info and already listed members
             for i = 1, MAX_RAID_MEMBERS do
@@ -832,6 +1069,7 @@ do
                 -- find our group (a whole iteration is required, raid info are not ordered) -- wrong, the player is always the last now but never trust Blizzard...
                 if CurrentGroup == 0 and GUID == myGUID then -- anyway they do the same thing in PlayerFrame.lua...
                     CurrentGroup = rGroup;
+                    playerRosterID = i;
                 end
 
                 if caheID + excluded > Raidnum then -- we found all the units
@@ -846,7 +1084,7 @@ do
 
             -- Add the player to the main list if needed
 
-            addUnit("player", 0, myGUID, CurrentGroup)
+            addUnit("player", 0, myGUID, CurrentGroup, nil, playerRosterID)
 
             -- Now we have a cache without the units we want to skip
             local TempID;
@@ -890,6 +1128,12 @@ do
             pGUID = UnitToGUID["focus"]
             -- the unit is not registered somewhere else yet
             addUnit("focus", 41, pGUID, nil);
+        end
+
+        ActiveOrderMode = self:GetEffectiveMUFOrderMode();
+        DandersOrder = {};
+        if ActiveOrderMode == "DANDERSFRAMES" and not buildDandersFrameOrder() then
+            ActiveOrderMode = "GROUP";
         end
 
         Status.Unit_Array = SortingTable
