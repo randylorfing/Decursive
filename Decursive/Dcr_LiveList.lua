@@ -105,8 +105,19 @@ local str_upper         = _G.string.upper;
 local GetRaidTargetIndex= _G.GetRaidTargetIndex;
 local t_wipe            = _G.table.wipe;
 local canaccessvalue    = _G.canaccessvalue or function(_) return true; end
+local issecretvalue     = _G.issecretvalue;
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false; end
+    return not issecretvalue or not issecretvalue(value);
+end
+local function accessibleCall(func, ...)
+    if type(func) ~= "function" then return nil; end
+    local ok, value = pcall(func, ...);
+    if not ok or not isAccessiblePublicValue(value) then return nil; end
+    return value;
+end
 local function cancompare(a,b)
-    return canaccessvalue(a) and canaccessvalue(b);
+    return isAccessiblePublicValue(a) and isAccessiblePublicValue(b);
  end
 
 
@@ -291,11 +302,16 @@ function LiveList.prototype:init(Container,ID) -- {{{
 end -- }}}
 
 function LiveList.prototype:SetDebuff(UnitID, Debuff, IsCharmed) -- {{{
+    -- The legacy Live List has no protected-aura-safe data model in 12.1.
+    -- Refuse even a stale/synthetic callback before it can query or display
+    -- aura identity. Blizzard-managed MUFs are the supported detector.
+    if DC.TWELVEONE then return false; end
+
     self.UnitID             = UnitID;
     self.UnitName           = D:PetUnitName(UnitID, true);
     self.Debuff             = Debuff;
     self.IsCharmed          = IsCharmed;
-    self.RaidTargetIndex    = GetRaidTargetIndex(UnitID);
+    self.RaidTargetIndex    = accessibleCall(GetRaidTargetIndex, UnitID);
 
     if not cancompare(self.Alpha, D.profile.LiveListAlpha) or D.profile.LiveListAlpha ~= self.Alpha then
         self.Frame:SetAlpha(D.profile.LiveListAlpha);
@@ -319,7 +335,11 @@ function LiveList.prototype:SetDebuff(UnitID, Debuff, IsCharmed) -- {{{
     if not cancompare(self.PrevDebuffApplicaton, Debuff.Applications) or self.PrevDebuffApplicaton ~= Debuff.Applications then
         self.PrevDebuffApplicaton = Debuff.Applications
         local appDisplayString
-        if Debuff.secretMode then
+        if DC.TWELVEONE then
+            -- The Live List is disabled on 12.1, but keep this lower-level row
+            -- renderer fail-closed too in case a test/stale callback reaches it.
+            appDisplayString = ""
+        elseif Debuff.secretMode then
             appDisplayString = Debuff.auraInstanceID and C_UnitAuras.GetAuraApplicationDisplayCount(UnitID, Debuff.auraInstanceID, 1) or ""
         else
             appDisplayString = Debuff.Applications > 1 and Debuff.Applications or ""
@@ -329,7 +349,8 @@ function LiveList.prototype:SetDebuff(UnitID, Debuff, IsCharmed) -- {{{
 
     -- Unit Name
     if not cancompare(self.PrevUnitName, self.UnitName) or self.PrevUnitName ~= self.UnitName then
-        self.UnitClass = (select(2, UnitClass(UnitID)));
+        local classOK, _, classToken = pcall(UnitClass, UnitID);
+        self.UnitClass = classOK and isAccessiblePublicValue(classToken) and classToken or nil;
         self.UnitNameFontString:SetText(self.UnitName);
         if self.UnitClass then
             self.UnitNameFontString:SetTextColor(unpack(DC.ClassesColors[self.UnitClass])); -- got one report where unpack got a nil... probably a damaged classescolors table...
@@ -372,7 +393,19 @@ end -- }}}
 function LiveList:GetDebuff(UnitID) -- {{{
     --  (note that this function is only called for the mouseover and target if the MUFs are active)
 
-    if (UnitID == "target" or UnitID == "mouseover") and (not UnitIsFriend(UnitID, "player") or not UnitExists(UnitID)) then
+    if DC.TWELVEONE then
+        local cached = D.ManagedDebuffUnitCache[UnitID];
+        if cached and cached[1] then t_wipe(cached); end
+        if D.UnitDebuffed[UnitID] then
+            D.UnitDebuffed[UnitID] = false;
+            D.ForLLDebuffedUnitsNum = math.max(0, D.ForLLDebuffedUnitsNum - 1);
+        end
+        return false;
+    end
+
+    local unitIsFriend = accessibleCall(UnitIsFriend, UnitID, "player");
+    local unitExists = accessibleCall(UnitExists, UnitID);
+    if (UnitID == "target" or UnitID == "mouseover") and (unitIsFriend ~= true or unitExists ~= true) then
         if D.ManagedDebuffUnitCache[UnitID] and D.ManagedDebuffUnitCache[UnitID][1] then
             t_wipe(D.ManagedDebuffUnitCache[UnitID]); -- clear target/mouseover debufs, else it would stay on
             if D.UnitDebuffed[UnitID] then
@@ -422,6 +455,7 @@ function LiveList:DisplayProtectedModeMessage() -- {{{
 end -- }}}
 
 function LiveList:DelayedGetDebuff(UnitID, o_auraUpdateInfo) -- {{{
+    if DC.TWELVEONE then return false; end
     if not D:DelayedCallExixts("Dcr_GetDebuff"..UnitID) then
         D.DebuffUpdateRequest = D.DebuffUpdateRequest + 1;
         D:Debug("LiveList: GetDebuff scheduled for, ", UnitID);
@@ -439,7 +473,7 @@ function LiveList:Update_Display() -- {{{
     end
     
     -- 12.1 SAFE: Check if we're in protected aura context
-    if DC.TWELVEONE and D.Compat121 and not D.Compat121.CanUseLegacyScanning() then
+    if DC.TWELVEONE then
         -- In protected context, the Live List cannot safely read detailed aura data.
         self:DisplayProtectedModeMessage();
         return;
@@ -464,7 +498,7 @@ function LiveList:Update_Display() -- {{{
     local targetGUID = D.Status.TargetExists and UnitGUID("target")
 
     -- First the Target
-    if canaccessvalue(targetGUID) and targetGUID and not D.Status.Unit_Array_GUIDToUnit[targetGUID] and self:GetDebuff("target") then -- TargetExists implies that the unit is a friend
+    if isAccessiblePublicValue(targetGUID) and targetGUID and not D.Status.Unit_Array_GUIDToUnit[targetGUID] and self:GetDebuff("target") then -- TargetExists implies that the unit is a friend
         Index = Index + 1;
         self:DisplayItem(Index, "target");
         --D:Debug("frenetic target update");
@@ -480,7 +514,7 @@ function LiveList:Update_Display() -- {{{
 
     -- Then the MouseOver
     local mouseoverGUID = UnitGUID("mouseover")
-    if not D.Status.MouseOveringMUF and D.UnitDebuffed["mouseover"] and canaccessvalue(mouseoverGUID) and mouseoverGUID and not D.Status.Unit_Array_GUIDToUnit[mouseoverGUID] and self:GetDebuff("mouseover") then -- this won't catch new debuff if all debuffs disappeard while overing the unit...
+    if not D.Status.MouseOveringMUF and D.UnitDebuffed["mouseover"] and isAccessiblePublicValue(mouseoverGUID) and mouseoverGUID and not D.Status.Unit_Array_GUIDToUnit[mouseoverGUID] and self:GetDebuff("mouseover") then -- this won't catch new debuff if all debuffs disappeard while overing the unit...
         Index = Index + 1;
         self:DisplayItem(Index, "mouseover");
         --D:Debug("frenetic mouseover update");
@@ -626,6 +660,7 @@ end -- }}}
 
 -- this displays the tooltips of the live-list
 function LiveList:DebuffTemplate_OnEnter(frame) --{{{
+    if DC.TWELVEONE then return; end
     if D.profile.AfflictionTooltips and frame.Object.UnitID then
         DcrDisplay_Tooltip:SetOwner(frame, "ANCHOR_CURSOR");
         DcrDisplay_Tooltip:SetUnitDebuff(frame.Object.UnitID,frame.Object.Debuff.index); -- Reported to trigger a "script ran too long" error on 2016-09-13...

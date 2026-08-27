@@ -103,6 +103,14 @@ function ZD:EnsureOptionsLoaded()
         return true
     end
 
+    -- Loading or changing the enable state of an insecure LoadOnDemand addon
+    -- is not a safe combat-time operation. Guard before both API boundaries;
+    -- wrapping EnableAddOn in pcall would not suppress ADDON_ACTION_BLOCKED.
+    if InCombatLockdown and InCombatLockdown() then
+        printErr("Settings cannot be loaded for the first time during combat. Try again after combat ends.")
+        return false
+    end
+
     local why = UnavailableReason()
     if why then
         printErr(("Settings are unavailable: %s is %s."):format(OPTIONS_ADDON, why))

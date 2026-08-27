@@ -226,7 +226,7 @@ function ZD:RegisterBlizzardSettingsPanel()
     end)
 
     local note = makeLabel(panel,
-        "This Blizzard Settings entry is a launcher and live status view. All configuration remains in the single resizable v11 interface so features are not split across two settings systems.",
+        "This Blizzard Settings entry is a launcher and live status view. All configuration remains in the single resizable v13 command center so features are not split across two settings systems.",
         false, 34, -474, 600)
     setTextColor(note, 0.62, 0.67, 0.74)
 

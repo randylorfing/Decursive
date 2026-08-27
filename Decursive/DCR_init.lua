@@ -933,7 +933,7 @@ local function InitVariables_Once() -- {{{
     -- A table UnitID=>IsDebuffed (boolean)
     D.UnitDebuffed = {};
 
-    D.Revision = "@project-abbreviated-hash@"; -- not used here but some other add-on may request it from outside
+    D.Revision = "a61713f"; -- not used here but some other add-on may request it from outside
     D.date = "@project-date-iso@";
     D.version = "@project-version@";
 
@@ -994,6 +994,15 @@ local next              = _G.next;
 local InCombatLockdown  = _G.InCombatLockdown;
 local UnitClass         = _G.UnitClass;
 local time              = _G.time;
+local canaccessvalue    = _G.canaccessvalue or function(_) return true; end;
+local issecretvalue     = _G.issecretvalue;
+
+local function playerKnowsSpell(spellID)
+    if not IsPlayerSpell then return false; end
+    local ok, known = pcall(IsPlayerSpell, spellID);
+    return ok and canaccessvalue(known)
+        and (not issecretvalue or not issecretvalue(known)) and known == true;
+end
 
 function D:AddDebugText(a1, ...)
     T._AddDebugText(a1, ...);
@@ -1032,7 +1041,11 @@ function D:VersionWarnings(forceDisplay) -- {{{
         self.db.global.TocExpiredDetection = false;
     end
 
-    if (("@project-version@"):lower()):find("beta") or ("@project-version@"):find("RC") or ("@project-version@"):find("Candidate") or alpha then
+    local packagedVersionLower = ("@project-version@"):lower();
+    if packagedVersionLower:find("beta", 1, true)
+        or packagedVersionLower:find("rc", 1, true)
+        or packagedVersionLower:find("candidate", 1, true)
+        or alpha then
 
         D.RunningADevVersion = true;
 
@@ -1055,11 +1068,9 @@ function D:VersionWarnings(forceDisplay) -- {{{
 
         end
 
-        -- display a warning if this is a developpment version (avoid insults from people who don't know what they're doing)
-        if self.db.global.NonRelease ~= "@project-version@" then
-            self.db.global.NonRelease = "@project-version@";
-            T._ShowNotice ("|cff00ff00Decursive version: " .. D.version .. "|r\n\n" .. "|cFFFFAA66" .. (("@project-version@"):find("RC") and L["ER_VERSION_NOTICE"] or L["DEV_VERSION_ALERT"]) .. "|r");
-        end
+        -- v13 keeps non-stable version classification for diagnostics,
+        -- expiration checks and group version exchange, but deliberately does
+        -- not interrupt login with the legacy beta/RC notice window.
     end
 
     --[==[
@@ -1103,7 +1114,7 @@ function D:VersionWarnings(forceDisplay) -- {{{
         if D.db.global.NewerVersionDetected > D.VersionTimeStamp and D.db.global.NewerVersionName ~= D.version then -- it's still newer than this one
             if time() - D.db.global.NewerVersionAlert > 3600 * 24 * 4 then -- it's been more than 4 days since the new version alert was shown
                 if not D.db.global.NewVersionsBugMeNot then -- the user did not disable new version alerts
-                    T._ShowNotice ("|cff55ff55Decursive version: 11.0.10|r\n\n" .. "|cFF55FFFF" .. (L["NEW_VERSION_ALERT"]):format(D.db.global.NewerVersionName or "none", date("%Y-%m-%d", D.db.global.NewerVersionDetected)) .. "|r");
+                    T._ShowNotice ("|cff55ff55Decursive version: " .. D.version .. "|r\n\n" .. "|cFF55FFFF" .. (L["NEW_VERSION_ALERT"]):format(D.db.global.NewerVersionName or "none", date("%Y-%m-%d", D.db.global.NewerVersionDetected)) .. "|r");
                     D.db.global.NewerVersionAlert = time();
                 end
             end
@@ -1145,19 +1156,15 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
         end
     end);
 
-    -- Zhaohu v11 single-UI commands: every settings alias opens the modern window.
-    self:RegisterChatCommand("decursive"    ,function()
+    -- Every public settings alias opens the v13 command center.
+    local function OpenZhaohuSettings()
         local modern = T.ZhaohuModern;
         if modern and modern.ToggleUI then modern:ToggleUI() else D:Println("Zhaohu's Decursive settings are still initializing.") end
-    end);
-    self:RegisterChatCommand("dcr"          ,function()
-        local modern = T.ZhaohuModern;
-        if modern and modern.ToggleUI then modern:ToggleUI() else D:Println("Zhaohu's Decursive settings are still initializing.") end
-    end);
-    self:RegisterChatCommand("zd"           ,function()
-        local modern = T.ZhaohuModern;
-        if modern and modern.ToggleUI then modern:ToggleUI() else D:Println("Zhaohu's Decursive settings are still initializing.") end
-    end);
+    end
+    self:RegisterChatCommand("decursive"    ,OpenZhaohuSettings);
+    self:RegisterChatCommand("dcr"          ,OpenZhaohuSettings);
+    self:RegisterChatCommand("zd"           ,OpenZhaohuSettings);
+    self:RegisterChatCommand("zdecursive"   ,OpenZhaohuSettings);
     self:RegisterChatCommand("dcrpradd"     ,function() D:AddTargetToPriorityList()                 end, false  );
     self:RegisterChatCommand("dcrprclear"   ,function() D:ClearPriorityList()                       end, false  );
     self:RegisterChatCommand("dcrprshow"    ,function() D:ShowHidePriorityListUI()                  end, false  );
@@ -1550,6 +1557,20 @@ function D:SetConfiguration() -- {{{
     D:ShowHideButtons(true);
     D:AutoHideShowMUFs();
 
+    -- SetConfiguration recreates D.Status and clears the authoritative roster.
+    -- It runs not only at initial login but also after profile copy/reset/swap.
+    -- Once player identity is available, always replay the bounded roster/MUF
+    -- convergence so a later configuration pass cannot erase a successful
+    -- PLAYER_ENTERING_WORLD recovery and leave only /reload able to restore it.
+    if DC.MyGUID and DC.MyGUID ~= "NONE" then
+        if D.RefreshDecursiveAfterRoster then
+            D:RefreshDecursiveAfterRoster("CONFIGURATION_COMPLETE");
+        elseif D.MicroUnitF and D.MicroUnitF.Delayed_MFsDisplay_Update then
+            D.Groups_datas_are_invalid = true;
+            D.MicroUnitF:Delayed_MFsDisplay_Update();
+        end
+    end
+
 
     D.MicroUnitF:Delayed_Force_FullUpdate(); -- schedule all attributes of exixting MUF to update
 
@@ -1573,7 +1594,13 @@ function D:OnDisable() -- When the addon is disabled by Ace -- {{{
 
     D:SetIcon(T._AddonPath .. "iconOFF.tga");
 
-    if (D.profile and D.profile.ShowDebuffsFrame) then
+    -- MFContainer owns secure action buttons. Hiding it while combat-locked is
+    -- a protected-frame mutation and pcall would not make it safe. Disabling
+    -- still stops Decursive's event/timer work; leave the visual container in
+    -- its current state until the UI is reloaded or the addon is re-enabled.
+    if (D.profile and D.profile.ShowDebuffsFrame)
+        and not (InCombatLockdown and InCombatLockdown())
+    then
         D.MFContainer:Hide();
     end
 
@@ -2301,6 +2328,11 @@ do
     local BlizzardIsAnnoyingComment = "# Ask Blizzard to re-add support for macrotext attribute dropped in wow 11 if you do not want to see this macro...\n"
 
     local function updateMacroByName(macroName, icon, macroText, notEditable) -- {{{
+        -- Keep the protected mutation guard at the actual API boundary too.
+        -- UpdateMacro already defers, but this prevents a future/direct caller
+        -- from reaching EditMacro/CreateMacro while combat lockdown is active.
+        if InCombatLockdown and InCombatLockdown() then return false; end
+
         if not D.Status.createdMacros then
             D.Status.createdMacros = {};
         end
@@ -2376,7 +2408,7 @@ do
         end
         local lines = skipStopCasting and "" or "/stopcasting\n"
         for _, brezSpellID in ipairs(DC.BattleRezSpellIDs or {}) do
-            if IsPlayerSpell and IsPlayerSpell(brezSpellID) then
+            if playerKnowsSpell(brezSpellID) then
                 lines = lines .. ("/cast [@%s,dead] spell:%d\n"):format(unit, brezSpellID)
                 break
             end

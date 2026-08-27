@@ -96,7 +96,19 @@ local setmetatable          = _G.setmetatable;
 local rawget                = _G.rawget;
 local GetTime               = _G.GetTime;
 local canaccessvalue        = _G.canaccessvalue or function(_) return true; end
+local issecretvalue         = _G.issecretvalue;
 local InCombatLockdown      = _G.InCombatLockdown;
+local pcall                 = _G.pcall;
+
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false; end
+    return not issecretvalue or not issecretvalue(value);
+end
+
+local function unitExistsAccessible(unit)
+    local ok, exists = pcall(UnitExists, unit);
+    return ok and isAccessiblePublicValue(exists) and exists == true or false;
+end
 -------------------------------------------------------------------------------
 
 -- GROUP STATUS UPDATE, these functions update the UNIT table to scan
@@ -219,10 +231,10 @@ local function restoreStablePartyRoster()
 end
 
 local function observedPartyMembersForRecovery()
-    local count = UnitExists("player") and 1 or 0
+    local count = unitExistsAccessible("player") and 1 or 0
     for i = 1, 4 do
         local unit = "party" .. i
-        if UnitExists(unit) then
+        if unitExistsAccessible(unit) then
             count = count + 1
         end
     end
@@ -310,8 +322,7 @@ do
     -- define some mock function to make testing easier
     local function _UnitExists (unit)
         if not TestMode then
-            if UnitExists(unit) then return true end
-            return false;
+            return unitExistsAccessible(unit);
         elseif #SortingTable < D.Status.TestLayoutUNum then
             return true;
         else
@@ -321,25 +332,27 @@ do
 
     local FakeClasses = {};
     local function _UnitClass(unit)
-        if not TestMode then
-            return UnitClass(unit);
+        local ok, localizedClass, classToken = pcall(UnitClass, unit);
+        if ok then
+            if not isAccessiblePublicValue(localizedClass) then localizedClass = nil; end
+            if not isAccessiblePublicValue(classToken) then classToken = nil; end
         else
-            if UnitClass(unit) then
-                return UnitClass(unit);
-            end
-
-            local randomClass = FakeClasses[unit] or DC.ClassNumToUName[random(11,23)];
-            FakeClasses[unit] = randomClass;
-            return randomClass, randomClass;
+            localizedClass, classToken = nil, nil;
         end
+        if not TestMode then return localizedClass, classToken; end
+        if classToken then return localizedClass, classToken; end
+
+        local randomClass = FakeClasses[unit] or DC.ClassNumToUName[random(11,23)];
+        FakeClasses[unit] = randomClass;
+        return randomClass, randomClass;
     end
 
     local function _UnitGUID (unit)
-        if not TestMode then
-            return UnitGUID(unit);
-        elseif #SortingTable < D.Status.TestLayoutUNum then
-            return UnitGUID(unit) or "fakeGUID"..unit.."-"..#SortingTable;
-        end
+        local ok, guid = pcall(UnitGUID, unit);
+        if not ok or not isAccessiblePublicValue(guid) then guid = nil; end
+        if not TestMode then return guid; end
+        if guid then return guid; end
+        if #SortingTable < D.Status.TestLayoutUNum then return "fakeGUID"..unit.."-"..#SortingTable; end
     end
 
     local function _GetNumRaidMembers()
@@ -355,36 +368,39 @@ do
     local FakeGroups = {};
     local FakeGroupsAttribution = {};
     local function _GetRaidRosterInfo(i)
-        if not TestMode then
-            return GetRaidRosterInfo(i);
+        local ok, name, _rank, group, _level, _localizedClass, classToken = pcall(GetRaidRosterInfo, i);
+        if ok then
+            if not isAccessiblePublicValue(name) then name = nil; end
+            if not isAccessiblePublicValue(group) then group = nil; end
+            if not isAccessiblePublicValue(classToken) then classToken = nil; end
         else
-            if GetRaidRosterInfo(i) then
-                return GetRaidRosterInfo(i);
-            end
-
-            local unit = "raid"..i;
-
-            local randomClass = FakeClasses[unit] or DC.ClassNumToUName[random(11,23)];
-            FakeClasses[unit] = randomClass;
-            local randomGroup;
-
-            if FakeGroupsAttribution[unit] then
-                randomGroup = FakeGroupsAttribution[unit];
-            else
-                repeat
-                    randomGroup = random (1,8);
-                    if not FakeGroups[randomGroup] then
-                        FakeGroups[randomGroup] = 1;
-                    elseif FakeGroups[randomGroup] ~= 5 then
-                        FakeGroups[randomGroup] = FakeGroups[randomGroup] + 1;
-                    end
-                until FakeGroups[randomGroup] == 5;
-
-                FakeGroupsAttribution[unit] = randomGroup;
-            end
-
-            return "fakeName"..i, nil, randomGroup, nil, nil, randomClass;
+            name, group, classToken = nil, nil, nil;
         end
+        if not TestMode then return name, nil, group, nil, nil, classToken; end
+        if name then return name, nil, group, nil, nil, classToken; end
+
+        local unit = "raid"..i;
+
+        local randomClass = FakeClasses[unit] or DC.ClassNumToUName[random(11,23)];
+        FakeClasses[unit] = randomClass;
+        local randomGroup;
+
+        if FakeGroupsAttribution[unit] then
+            randomGroup = FakeGroupsAttribution[unit];
+        else
+            repeat
+                randomGroup = random (1,8);
+                if not FakeGroups[randomGroup] then
+                    FakeGroups[randomGroup] = 1;
+                elseif FakeGroups[randomGroup] ~= 5 then
+                    FakeGroups[randomGroup] = FakeGroups[randomGroup] + 1;
+                end
+            until FakeGroups[randomGroup] == 5;
+
+            FakeGroupsAttribution[unit] = randomGroup;
+        end
+
+        return "fakeName"..i, nil, randomGroup, nil, nil, randomClass;
     end
 
     local FakeRoles = {}; local roles = {"HEALER", "TANK", "DAMAGER", "NONE"};
@@ -395,7 +411,14 @@ do
         -- end
 
         if not TestMode then
-            return UnitGroupRolesAssigned(unit);
+            local ok, role = pcall(UnitGroupRolesAssigned, unit);
+            if not ok or not isAccessiblePublicValue(role) or type(role) ~= "string" then
+                return "NONE";
+            end
+            if role ~= "HEALER" and role ~= "TANK" and role ~= "DAMAGER" then
+                return "NONE";
+            end
+            return role;
         elseif not FakeRoles[unit] then
             FakeRoles[unit] = roles[random(1,4)];
         end
@@ -404,13 +427,13 @@ do
     end
 
     local UnitToGUID_mt = { __index = function(self, unit)
-        local GUID = _UnitGUID(unit) or false;
-
-        local guidAccessible = canaccessvalue(GUID)
+        local GUID = _UnitGUID(unit);
+        local guidAccessible = isAccessiblePublicValue(GUID);
+        if not guidAccessible or not GUID then GUID = unit; end
 
 
 		-- this GUID cache was there to map CLEU to unit ids... so it's not really useful in Midnight (I need to check this though)
-        self[unit] = guidAccessible and GUID or unit;
+        self[unit] = GUID;
         GUIDToUnit[self[unit]] = unit;
 
         return self[unit];
@@ -620,7 +643,7 @@ do
         -- guards it the same way Decursive.lua's UnitCurableDebuffs does for
         -- the same class of unit token.
         local classOk, _, classToken = pcall(_UnitClass, unit);
-        local safeClassToken = (classOk and canaccessvalue(classToken)) and classToken or DC.CLASS_WARRIOR;
+        local safeClassToken = (classOk and isAccessiblePublicValue(classToken)) and classToken or DC.CLASS_WARRIOR;
         UnitInfo[unit] = {
             ["class"]  = DC.ClassUNameToNum[safeClassToken]; -- issue #46: sometimes nil is returned on pets right after joining a group
             ["GUID"]   = GUID;
@@ -748,7 +771,7 @@ do
 
                     -- Same secret-class-token guard as addUnit() above.
                     local partyClassOk, _, partyClassToken = pcall(_UnitClass, unit);
-                    local safePartyClassToken = (partyClassOk and canaccessvalue(partyClassToken)) and partyClassToken or nil;
+                    local safePartyClassToken = (partyClassOk and isAccessiblePublicValue(partyClassToken)) and partyClassToken or nil;
                     if not IsInSkipList(pGUID, nil, DC.ClassUNameToNum[safePartyClassToken], _UnitGroupRolesAssigned(unit)) then
 
                         addUnit(unit, i, pGUID, 1);
@@ -777,12 +800,19 @@ do
             for i = 1, MAX_RAID_MEMBERS do
                 rName, _, rGroup, _, _, rClass = _GetRaidRosterInfo(i);
                 unit = "raid"..i;
+                local exists = _UnitExists(unit);
+                if exists and not rName then rName = unit; end
+                if type(rGroup) ~= "number" or rGroup < 1 or rGroup > 8 then rGroup = 1; end
+                if type(rClass) ~= "string" or not DC.ClassUNameToNum[rClass] then
+                    local _, fallbackClass = _UnitClass(unit);
+                    rClass = fallbackClass or DC.CLASS_WARRIOR;
+                end
                 GUID =  UnitToGUID[unit];
 
                 -- add all except member to skip
                 if not IsInSkipList(GUID, rGroup, DC.ClassUNameToNum[rClass], _UnitGroupRolesAssigned(unit)) then
 
-                    if (rName) then -- (at log-in GetRaidRosterInfo() returns garbage)
+                    if exists and rName then -- (at log-in GetRaidRosterInfo() returns garbage)
 
                         if (not RaidRosterCache[caheID]) then
                             RaidRosterCache[caheID] = {};
@@ -851,7 +881,12 @@ do
         end
 
         -- There is a focus and its not hostile in the first place
-        if UnitExists("focus") and (not UnitCanAttack("focus", "player") or UnitIsFriend("focus", "player")) then
+        local focusExists = _UnitExists("focus");
+        local attackOK, focusCanAttack = pcall(UnitCanAttack, "focus", "player");
+        if not attackOK or not isAccessiblePublicValue(focusCanAttack) then focusCanAttack = nil; end
+        local friendOK, focusIsFriend = pcall(UnitIsFriend, "focus", "player");
+        if not friendOK or not isAccessiblePublicValue(focusIsFriend) then focusIsFriend = nil; end
+        if focusExists and (focusCanAttack == false or focusIsFriend == true) then
             pGUID = UnitToGUID["focus"]
             -- the unit is not registered somewhere else yet
             addUnit("focus", 41, pGUID, nil);
@@ -870,6 +905,16 @@ do
         UnitToGUID = {};
         GUIDToUnit = {};
         D.Status.GroupUpdatedOn = D:NiceTime(); -- It's used in UNIT_AURA event handler to trigger a rescan if the array is found inacurate
+
+        -- The committed Unit_Array is the authoritative roster boundary for
+        -- native protected-aura sounds. Reconcile here instead of depending on
+        -- a separate delayed GROUP_ROSTER_UPDATE timer that can lose the race
+        -- with follower-dungeon restrictions. The sound adapter itself owns
+        -- the combat/restriction guard and preserves existing handles when the
+        -- mutation boundary is closed.
+        if DC.TWELVEONE and D.DcrFullyInitialized and type(D.RefreshProtectedAuraSounds) == "function" then
+            D:RefreshProtectedAuraSounds("unit roster committed");
+        end
 
         self:Debug ("|cFFFF44FF-->|r Update complete!", Status.UnitNum);
 

@@ -544,9 +544,26 @@ function D:GetDefaultsSettings()
     } -- }}}
 end
 
+local function ApplyMUFHandleMouseState()
+    -- The drag handle belongs to the container that owns Decursive's secure
+    -- MUF action buttons. EnableMouse therefore follows the same combat
+    -- mutation boundary as MUF visibility, position and scale.
+    if InCombatLockdown and InCombatLockdown() then
+        if D.AddDelayedFunctionCall then
+            D:AddDelayedFunctionCall("Dcr_ApplyMUFHandleMouseState", ApplyMUFHandleMouseState);
+        end
+        return false;
+    end
+    if not D.MFContainerHandle then return false; end
+    local hidden = D.profile and D.profile.HideMUFsHandle == true;
+    D.MFContainerHandle:EnableMouse(not hidden);
+    D:Print(hidden and "MUFs handle disabled" or "MUFs handle enabled");
+    return true;
+end
+
 local OptionsPostSetActions = { -- {{{
     ["debug"] = function(v)  D.debug = v end,
-    ["HideMUFsHandle"] = function(v) D.MFContainerHandle:EnableMouse(not v); D:Print(v and "MUFs handle disabled" or "MUFs handle enabled"); end,
+    ["HideMUFsHandle"] = ApplyMUFHandleMouseState,
     ["AfflictionTooltips"] = function(v) for id,lvitem in ipairs(D.LiveList.ExistingPerID) do lvitem.Frame:EnableMouse(v); end end,
     ["Amount_Of_Afflicted"] = function(v) D.LiveList:RestAllPosition(); end,
     ["ScanTime"] = function(v) D:ScheduleRepeatedCall("Dcr_LLupdate", D.LiveList.Update_Display, v, D.LiveList); D:Debug("LV scan delay changed:", v); end,
@@ -957,22 +974,38 @@ function D:SetCureOrder (ToChange)
 
 end
 
-function D:ShowHideDebuffsFrame ()
+-- Apply an explicit MUF enabled state. The old implementation toggled the
+-- profile and then inferred the intended action from Frame:IsVisible(). During
+-- a cold client launch UIParent can be temporarily non-visible even when the
+-- MUF container itself is shown, which can make the saved flag and frame state
+-- disagree. An explicit setter makes startup, auto-hide and manual settings
+-- converge on the same state.
+function D:SetDebuffsFrameEnabled(enabled)
 
-    if InCombatLockdown() or not D.DcrFullyInitialized or D.Status.TestLayout then
-        return
+    enabled = enabled and true or false;
+
+    if InCombatLockdown() then
+        D:AddDelayedFunctionCall(
+            "Dcr_SetDebuffsFrameEnabled", self.SetDebuffsFrameEnabled,
+            self, enabled);
+        return false;
     end
 
-    D.profile.ShowDebuffsFrame = not D.profile.ShowDebuffsFrame;
+    if not D.DcrFullyInitialized or D.Status.TestLayout then
+        return false;
+    end
 
-    if (D.MFContainer:IsVisible()) then
+    D.profile.ShowDebuffsFrame = enabled;
+
+    if enabled then
+        if not D.MFContainer:IsShown() then
+            D.MicroUnitF:Show();
+        end
+    elseif D.MFContainer:IsShown() then
         D.MFContainer:Hide();
-        D.profile.ShowDebuffsFrame = false;
-    else
-        D.MicroUnitF:Show();
     end
 
-    if (not D.profile.ShowDebuffsFrame) then
+    if not enabled then
         D:CancelDelayedCall("Dcr_MUFupdate");
         D:CancelDelayedCall("Dcr_ScanEverybody");
         if D.profile.HideLiveList then
@@ -986,16 +1019,28 @@ function D:ShowHideDebuffsFrame ()
             self:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.db.global.MFScanEverybodyTimer, D);
         end
 
+        D.Groups_datas_are_invalid = true;
+        if D.RefreshDecursiveAfterRoster then
+            D:RefreshDecursiveAfterRoster("MUF display enabled");
+        elseif D.MicroUnitF and D.MicroUnitF.Delayed_MFsDisplay_Update then
+            D.MicroUnitF:Delayed_MFsDisplay_Update();
+        end
         D.MicroUnitF:Force_FullUpdate();
     end
 
     -- set Icon
-    if not D.Status.HasSpell or D.profile.HideLiveList and not D.profile.ShowDebuffsFrame then
+    if not D.Status.HasSpell or D.profile.HideLiveList and not enabled then
         D:SetIcon(DC.IconOFF);
     else
         D:SetIcon(DC.IconON);
     end
 
+    return true;
+end
+
+function D:ShowHideDebuffsFrame ()
+    if not D.profile then return false; end
+    return D:SetDebuffsFrameEnabled(not D.profile.ShowDebuffsFrame);
 end
 
 function D:ShowHideTextAnchor() --{{{
@@ -2275,6 +2320,16 @@ local SaveBindings = _G.SaveBindings or _G.AttemptToSaveBindings; -- was renamed
 
 function D:SetMacroKey ( key )
 
+    -- Binding mutation is protected. Keep this guard at the mutation boundary
+    -- as well as in UpdateMacro so direct option/UI callers cannot reach
+    -- SetBinding or SetBindingMacro during combat.
+    if InCombatLockdown and InCombatLockdown() then
+        if D.AddDelayedFunctionCall and D.UpdateMacro then
+            D:AddDelayedFunctionCall("UpdateMacro", D.UpdateMacro, D);
+        end
+        return false;
+    end
+
     -- if the key is already correctly mapped, return here.
     --if (key and key == D.db.global.MacroBind and GetBindingAction(key) == D.CONF.MACROCOMMAND) then
     if D.profile.DisableMacroCreation or key and key == D.db.global.MacroBind and D:tcheckforval({GetBindingKey(D.CONF.MACROCOMMAND)}, key) then -- change for 2.3 where GetBindingAction() is no longer working
@@ -2346,8 +2401,12 @@ function D:AutoHideShowMUFs ()
         return false;
     end
 
+    local desiredEnabled;
     if D.profile.AutoHideMUFs == 1 then
-        return false;
+        -- Auto-hide disabled: repair any cold-start mismatch between the saved
+        -- preference and the actual secure parent without changing the user's
+        -- preference.
+        desiredEnabled = D.profile.ShowDebuffsFrame and true or false;
     else
         local hideBecauseInSolo          = D.profile.AutoHideMUFs == 2 and GetNumRaidMembers() == 0 and GetNumPartyMembers() == 0
         local hideBecauseInSoloOrParty   = D.profile.AutoHideMUFs == 3 and GetNumRaidMembers() == 0
@@ -2358,22 +2417,16 @@ function D:AutoHideShowMUFs ()
         -- local InGroup = (GetNumRaidMembers() ~= 0 or (D.profile.AutoHideMUFs ~= 3 and GetNumPartyMembers() ~= 0) );
         D:Debug("AutoHideShowMUFs:", shouldHide, hideBecauseInSolo, hideBecauseInSoloOrParty, hideBecauseInRaids);
 
-        if shouldHide then
-            -- if the frame is displayed
-            if D.profile.ShowDebuffsFrame then
-                -- hide it
-                D:ShowHideDebuffsFrame ();
-            end
-        else
-            -- if the frame is not displayed
-            if not D.profile.ShowDebuffsFrame then
-                -- show it
-                D:ShowHideDebuffsFrame ();
-            end
-        end
-
-        return true;
+        desiredEnabled = not shouldHide;
     end
+
+    local containerShown = D.MFContainer and D.MFContainer:IsShown() or false;
+    if (D.profile.ShowDebuffsFrame and true or false) ~= desiredEnabled
+        or containerShown ~= desiredEnabled then
+        return D:SetDebuffsFrameEnabled(desiredEnabled);
+    end
+
+    return true;
 end
 
 function D:QuickAccess (CallingObject, button) -- {{{

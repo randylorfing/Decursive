@@ -3122,7 +3122,7 @@ end
 
 function ZD:BuildSounds(parent)
     local p = pageFrame(parent)
-    self:PageTitle(p, "Sound Notifications", "Play an alert when a Decursive MUF changes from clean to an actionable red/blue afflicted state.")
+    self:PageTitle(p, "Sound Notifications", "Play an alert when Blizzard adds a registered exact-ID dispellable aura to an armed MUF unit.")
 
     local SOUND_FILES = {
         AFFLICTION = DC.AfflictionSound,
@@ -3177,7 +3177,7 @@ function ZD:BuildSounds(parent)
             if D.profile then D.profile.PlaySound = v and true or false end
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("sound enable changed") end
         end,
-        "Registers the selected sound with Blizzard for protected DispelDB and learned aura IDs assigned to Decursive MUFs.")
+        "Registers the selected sound with Blizzard for protected DispelDB and manual/explicit public aura IDs assigned to Decursive MUFs.")
 
     p.soundChoice = cycleButton(alerts, "Dispel alert sound", -112, soundValues,
         function() return (D.profile and D.profile.SoundNotificationPreset) or "FEMALE_DISPEL" end,
@@ -3214,7 +3214,7 @@ function ZD:BuildSounds(parent)
 
     local behavior = section(p, "Native Aura Trigger", -316, 178)
     local rule = label(behavior,
-        "12.1 engine: public DispelDB/learned IDs -> Blizzard AddAuraSound.\nBlizzard owns protected detection and playback; Decursive reads no aura details.",
+        "12.1 engine: public DispelDB/manual IDs -> Blizzard AddAuraSound (Added).\nContinuing stacks stay silent. Blizzard owns protected detection and playback; Decursive reads no aura details.",
         12, C.text, "TOPLEFT", 18, -42)
     rule:SetPoint("RIGHT", -18, 0)
     rule:SetJustifyH("LEFT")
@@ -3234,10 +3234,38 @@ function ZD:BuildSounds(parent)
         if p.soundChoice and p.soundChoice.control and p.soundChoice.control.Refresh then p.soundChoice.control:Refresh() end
         if p.channelChoice and p.channelChoice.control and p.channelChoice.control.Refresh then p.channelChoice.control:Refresh() end
         if p.failureSound and p.failureSound.control and p.failureSound.control.Refresh then p.failureSound.control:Refresh() end
-        local active = D.Is121MUFStateSoundEngineAvailable and D:Is121MUFStateSoundEngineAvailable()
-        if active then
-            p.triggerState:SetText("Trigger engine: Active - Blizzard native aura sound")
-            p.triggerState:SetTextColor(unpack(C.accent))
+        local available = D.Is121MUFStateSoundEngineAvailable and D:Is121MUFStateSoundEngineAvailable()
+        local exact, desired, deferred, snapshot = 0, 0, false, nil
+        if D.GetProtectedAuraSoundRegistrationStatus then
+            local units, lastError
+            exact, desired, deferred, units, lastError, snapshot = D:GetProtectedAuraSoundRegistrationStatus()
+        end
+        snapshot = snapshot or { exact=exact, desired=desired, activeTotal=exact, stale=0, deferred=deferred }
+        local counts = ("%d/%d exact; %d active total; %d stale"):format(
+            snapshot.exact or 0, snapshot.desired or 0, snapshot.activeTotal or 0, snapshot.stale or 0)
+        if snapshot.retryExhausted then
+            p.triggerState:SetText(("Trigger engine: Degraded - %s; cleanup retry exhausted (%d/%d)"):format(
+                counts, snapshot.retryAttempts or 0, snapshot.retryMax or 3))
+            p.triggerState:SetTextColor(unpack(C.danger))
+        elseif snapshot.retryPending or snapshot.deferred then
+            local pending = snapshot.retryPending
+                and ("cleanup retry %d/%d pending"):format(snapshot.retryAttempts or 0, snapshot.retryMax or 3)
+                or "registry update deferred"
+            p.triggerState:SetText(("Trigger engine: Pending - %s; %s"):format(counts, pending))
+            p.triggerState:SetTextColor(unpack(C.warning))
+        elseif snapshot.degraded then
+            p.triggerState:SetText(("Trigger engine: Degraded - %s; add/remove failures %d/%d"):format(
+                counts, snapshot.addFailed or 0, snapshot.removeFailed or 0))
+            p.triggerState:SetTextColor(unpack(C.danger))
+        elseif available and snapshot.enabled == false and (snapshot.activeTotal or 0) == 0 then
+            p.triggerState:SetText("Trigger engine: Disabled - live native alerts are off")
+            p.triggerState:SetTextColor(unpack(C.muted))
+        elseif available and desired > 0 and exact == desired then
+            p.triggerState:SetText("Trigger engine: Active - " .. counts)
+            p.triggerState:SetTextColor(unpack(C.success))
+        elseif available then
+            p.triggerState:SetText("Trigger engine: Available - waiting for native registrations")
+            p.triggerState:SetTextColor(unpack(C.muted))
         else
             p.triggerState:SetText("Trigger engine: Waiting for MUFs / initialization")
             p.triggerState:SetTextColor(unpack(C.muted))
@@ -3377,4 +3405,3 @@ function ZD:ToggleUI()
     local f = self:CreateUI()
     if f:IsShown() then f:Hide() else f:Show() end
 end
-

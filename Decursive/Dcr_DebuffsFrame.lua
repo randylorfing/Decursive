@@ -87,6 +87,22 @@ local InCombatLockdown  = _G.InCombatLockdown;
 local GetRaidTargetIndex= _G.GetRaidTargetIndex;
 local CreateFrame       = _G.CreateFrame;
 local canaccessvalue    = _G.canaccessvalue or function(_) return true; end
+local issecretvalue     = _G.issecretvalue;
+local pcall             = _G.pcall;
+
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false; end
+    return not issecretvalue or not issecretvalue(value);
+end
+
+local function accessibleCall(func, ...)
+    if type(func) ~= "function" then return nil; end
+    local ok, value = pcall(func, ...);
+    if not ok or not isAccessiblePublicValue(value) then
+        return nil;
+    end
+    return value;
+end
 
 -- NS def
 D.MicroUnitF = {};
@@ -162,12 +178,17 @@ local AvailableModifier = { -- {{{
 -- MicroUnitF STATIC methods {{{
 
 function MicroUnitF:Show()
+    if InCombatLockdown and InCombatLockdown() then
+        D:AddDelayedFunctionCall("MicroUnitFShow", self.Show, self);
+        return false;
+    end
     -- change handle position here depending on reverse display option or in INIT?
     D.MFContainer:SetScale(D.profile.DebuffsFrameElemScale);
     self:Place (); -- not strickly necessary but avoid glitches when switching between profiles where the scale is different...
     D.MFContainer:Show();
     D.profile.ShowDebuffsFrame = true;
     self:ResetAllPositions();
+    return true;
 end
 
 -- Updates the color table
@@ -253,6 +274,16 @@ function MicroUnitF:ApplyContextMUFScale()
         return false
     end
     self.Frame = container
+
+    -- Roster/zone recovery intentionally rechecks the active context several
+    -- times while Blizzard's group snapshot settles. Avoid re-placing the
+    -- secure MUF container on every pass when the final pixel scale is already
+    -- applied; a later PARTY/RAID context change still produces a different
+    -- target scale and takes the normal SetScale/Place path below.
+    if container.GetScale and container:GetScale() == scale then
+        return true
+    end
+
     -- Preserve upstream Decursive's sizing behavior: SetScale() scales the
     -- MUF container and immediately calls Place() to keep the group on-screen.
     -- The MUF anchors themselves do not need to be rebuilt just to resize the
@@ -578,7 +609,15 @@ function MicroUnitF:MFsDisplay_Update () -- {{{
 
                 MF.Shown = true;
                 self.UnitShown = self.UnitShown + 1;
-                MF.ToPlace = true;
+                -- MFsDisplay_Update is already combat-guarded. Anchor and show
+                -- the secure child at the actual display boundary instead of
+                -- relying on a later roaming updater tick to notice ToPlace.
+                -- That later tick can be absent after a cold-start auto-hide
+                -- transition even though roster recovery completed correctly.
+                MF.Frame:ClearAllPoints();
+                MF.Frame:SetPoint(unpack(self:GetMUFAnchor(i)));
+                MF.ToPlace = i;
+                MF.Frame:Show();
                 Updated = Updated + 1;
 
                 D:ScheduleDelayedCall("Dcr_Update"..MF.CurrUnit, MF.UpdateWithCS, D.db.global.DebuffsFrameRefreshRate * (0.9 + Updated / D.db.global.DebuffsFramePerUPdate), MF);
@@ -892,11 +931,17 @@ end
 -- set the scaling of the MUFs container according to the user settings
 function MicroUnitF:SetScale (NewScale) -- {{{
 
+    if InCombatLockdown and InCombatLockdown() then
+        D:AddDelayedFunctionCall("MicroUnitFSetScale", self.SetScale, self, NewScale);
+        return false;
+    end
+
     -- Setting the new scale
     self.Frame:SetScale(NewScale);
     -- Place the frame adapting its position to the news cale
     self:Place ();
 
+    return true;
 end -- }}}
 -- }}}
 
@@ -955,9 +1000,10 @@ do
     local function ShowMUFToolTip(unit, status, debuffs)
         tip:SetOwner(D.MFContainer, "ANCHOR_NONE")
 
-        local index = GetRaidTargetIndex(unit)
+        local index = accessibleCall(GetRaidTargetIndex, unit)
 
-        local icon = index and string.format("|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%d:0|t ", index) or ""
+        local icon = type(index) == "number"
+            and string.format("|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%d:0|t ", index) or ""
 
         -- 12.1 SAFE: Use safe wrapper for unit class
         local _, className
@@ -975,7 +1021,10 @@ do
         tip:AddLine(status) -- MUF Status
 
         -- add one line per debuff with the debuff name and it's application count if > 1
-        if debuffs[1] then
+        -- Midnight's live aura identity is rendered by Blizzard's native
+        -- AuraButton tooltip. Even a stale legacy row must never cause this
+        -- addon-owned tooltip to query an aura instance ID in 12.1.
+        if not DC.TWELVEONE and debuffs[1] then
             for _, Debuff in ipairs(debuffs) do
                 local s_color = Debuff.s_color
 
@@ -1019,9 +1068,9 @@ do
         local Unit = MF.CurrUnit; -- shortcut
         local TooltipText = "";
 
-        local unitguid = UnitGUID(Unit);
+        local unitguid = accessibleCall(UnitGUID, Unit);
 
-        if canaccessvalue(unitguid) and (unitguid ~= D.Status.Unit_Array_UnitToGUID[Unit] or Unit ~= D.Status.Unit_Array_GUIDToUnit[unitguid]) then
+        if unitguid and (unitguid ~= D.Status.Unit_Array_UnitToGUID[Unit] or Unit ~= D.Status.Unit_Array_GUIDToUnit[unitguid]) then
 
             if unitguid then
                 D.Status.Unit_Array_UnitToGUID[Unit] = unitguid;
@@ -1045,7 +1094,7 @@ do
             for i, Debuff in ipairs(MF.Debuffs) do
                 if Debuff.Type then
                     -- Create a warning if an Unstable Affliction like spell is detected
-                    if canaccessvalue(Debuff.Name) and DC.IS_HARMFULL_DEBUFF[Debuff.Name] then
+                    if isAccessiblePublicValue(Debuff.Name) and DC.IS_HARMFULL_DEBUFF[Debuff.Name] then
                         D:Println("|cFFFF0000 ==> %s !!|r (%s)", Debuff.Name, D:MakePlayerName((D:PetUnitName(      Unit, true    ))));
                         D:SafePlaySoundFile(DC.DeadlyDebuffAlert);
                     end
@@ -1470,6 +1519,9 @@ do
     local tmp;
     -- this updates the sttributes of a MUF's frame object
     function MicroUnitF.prototype:SetUnstableAttribute(attribute, value)
+        -- SecureActionButton attributes are protected in combat. Keep the
+        -- boundary safe even if a future caller bypasses UpdateAttributes().
+        if InCombatLockdown and InCombatLockdown() then return false; end
         self.Frame:SetAttribute(attribute, value);
         self.usedAttributes[attribute] = self.LastAttribUpdate;
         --[==[
@@ -1478,6 +1530,7 @@ do
     end
 
     function MicroUnitF.prototype:CleanDefuncUnstableAttributes()
+        if InCombatLockdown and InCombatLockdown() then return false; end
         for attribute, lastupdate in pairs(self.usedAttributes) do
             if lastupdate ~= self.LastAttribUpdate then
                 self.Frame:SetAttribute(attribute, nil);
@@ -1688,7 +1741,10 @@ do
         -- D:Debug("in set color", Unit, Status.CenterTextDisplay) TODO: -- optimize when this function is called, with UNIT_AURA, we no longer need to call it several times/s...
 
         -- if unit not available, if a unit cease to exist (this happen often for pets)
-        if not UnitExists(Unit) then
+        local unitExists = accessibleCall(UnitExists, Unit);
+        local unitVisible = accessibleCall(UnitIsVisible, Unit);
+        local unitLevel = accessibleCall(UnitLevel, Unit);
+        if unitExists == false then
             if PreviousStatus ~= ABSENT then
                 self.Color = MF_colors[ABSENT];
                 self.UnitStatus = ABSENT;
@@ -1699,7 +1755,7 @@ do
             end
 
             -- UnitIsVisible() behavior is not 100% reliable so we also use UnitLevel() that will return -1 when the Unit is too far...
-        elseif not UnitIsVisible(Unit) or UnitLevel(Unit) < 1 then
+        elseif unitVisible == false or (type(unitLevel) == "number" and unitLevel < 1) then
             if PreviousStatus ~= FAR then
                 self.Color = MF_colors[FAR];
                 self.UnitStatus = FAR;
@@ -1753,6 +1809,7 @@ do
                 if Status.CuringSpells[DebuffType] then -- so this will fail on MN as we cannot know the type and thus the spell except for the charm type but this will work for classes that have only one dubuff cleansing ability
                     SpellID = Status.FoundSpells[Status.CuringSpells[DebuffType]][2];
                     RangeStatus = SpellID > 0 and IsSpellInRange(Status.CuringSpells[DebuffType], Unit) or D:isItemUsable(-1 * SpellID) and IsItemInRange(-1 * SpellID, Unit);
+                    if not isAccessiblePublicValue(RangeStatus) then RangeStatus = nil; end
                 else
                     RangeStatus = false;
                 end
@@ -1775,7 +1832,7 @@ do
 
                 -- update the CenterText
 
-                local centerAccess = canaccessvalue(self.CenterText)
+                local centerAccess = isAccessiblePublicValue(self.CenterText)
 
                 --if profile.DebuffsFrameChrono and self.Debuffs[1].ExpirationTime then
                 if profile.CenterTextDisplay ~= '4_NONE' then
@@ -1784,18 +1841,23 @@ do
                         self.PrevCenterText = self.CenterText;
                     end
 
-                    if Status.CenterTextDisplay ~= '3_STACKS' and debuff_1.ExpirationTime and canaccessvalue(debuff_1.ExpirationTime) then
+                    local expirationTime = debuff_1.ExpirationTime;
+                    local duration = debuff_1.Duration;
+                    if Status.CenterTextDisplay ~= '3_STACKS'
+                        and isAccessiblePublicValue(expirationTime) and isAccessiblePublicValue(duration)
+                        and type(expirationTime) == "number" and type(duration) == "number"
+                    then
 
                         if Status.CenterTextDisplay == '2_TELAPSED' then
-                            self.CenterText = floor(debuff_1.Duration - (debuff_1.ExpirationTime - Time));
+                            self.CenterText = floor(duration - (expirationTime - Time));
 
                             if self.CenterText ~= self.PrevCenterText then -- do not unecessarily compute the final displayed string
                                 --D:Debug('center text update');
                                 self.CenterFontString:SetText( ((self.CenterText < 60) and self.CenterText or (floor(self.CenterText / 60) .. "\'") ));
                             end
-                        elseif debuff_1.ExpirationTime > 0 then
+                        elseif expirationTime > 0 then
 
-                            self.CenterText = floor(debuff_1.ExpirationTime - Time);
+                            self.CenterText = floor(expirationTime - Time);
 
                             if self.CenterText ~= self.PrevCenterText then
                                 self.CenterFontString:SetText( ((self.CenterText < 60) and (self.CenterText + 1) or (floor(self.CenterText / 60 + 1) .. "\'") ));
@@ -1805,10 +1867,10 @@ do
                             self.CenterFontString:SetText("");
                         end
 
-                    elseif debuff_1.Applications then
+                    elseif isAccessiblePublicValue(debuff_1.Applications) and debuff_1.Applications ~= nil then
 
                         self.CenterText = debuff_1.Applications;
-                        local appAccess = canaccessvalue(self.CenterText)
+                        local appAccess = isAccessiblePublicValue(self.CenterText)
 
                         -- 12.1 SAFE: Use safe wrapper for aura application count
                         local safeAppCount = debuff_1.s_color and debuff_1.auraInstanceID and
@@ -1826,11 +1888,11 @@ do
 
                 end
 
-                local index = GetRaidTargetIndex(Unit)
+                local index = accessibleCall(GetRaidTargetIndex, Unit)
                 self.RaidTargetIcon = index
 
-                if not canaccessvalue(index) or self.PrevRaidTargetIndex ~= self.RaidTargetIcon then
-                    local icon = index and string.format("|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%d:11:11|t ", index) or ""
+                if self.PrevRaidTargetIndex ~= self.RaidTargetIcon then
+                    local icon = type(index) == "number" and string.format("|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%d:11:11|t ", index) or ""
                     self.RaidIconTexture:SetText(icon);
                     self.PrevRaidTargetIndex = index;
                 end
@@ -1972,7 +2034,7 @@ do
     function MicroUnitF.prototype:SetClassBorder() -- {{{
         --D:Debug("SetClassBorder called ", D.Status.Unit_Array_UnitToGUID[self.CurrUnit] , self.UnitGUID);
         ReturnValue = false;
-        if (D.profile.DebuffsFrameElemBorderShow and (D.Status.Unit_Array_UnitToGUID[self.CurrUnit] ~= self.UnitGUID or (not self.UnitClass and UnitExists(self.CurrUnit)))) then
+        if (D.profile.DebuffsFrameElemBorderShow and (D.Status.Unit_Array_UnitToGUID[self.CurrUnit] ~= self.UnitGUID or (not self.UnitClass and accessibleCall(UnitExists, self.CurrUnit) == true))) then
 
             -- Get the GUID of this unit
             self.UnitGUID = D.Status.Unit_Array_UnitToGUID[self.CurrUnit];

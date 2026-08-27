@@ -65,10 +65,15 @@ end
 -- values for identity-restricted units; combat alone is not a reason to drop
 -- otherwise-readable class information. Preserve each accessible return value.
 local canaccessvalue = _G.canaccessvalue or function(_) return true end
+local issecretvalue = _G.issecretvalue
+
+local function IsSecret(value)
+    return issecretvalue and issecretvalue(value) and true or false
+end
 
 local function AccessibleOrNil(value)
-    if value == nil then return nil end
-    return canaccessvalue(value) and value or nil
+    if not canaccessvalue(value) or IsSecret(value) then return nil end
+    return value
 end
 
 function D:GetUnitClassSafe(unitToken)
@@ -92,14 +97,14 @@ end
 function D:IsUnitCharmedSafe(unitToken)
     if not unitToken then return false end
     local ok, value = pcall(UnitIsCharmed, unitToken)
-    if not ok or not canaccessvalue(value) then return false end
+    if not ok or not canaccessvalue(value) or IsSecret(value) then return false end
     return value and true or false
 end
 
 function D:IsUnitPossessedSafe(unitToken)
     if not unitToken then return false end
     local ok, value = pcall(UnitIsPossessed, unitToken)
-    if not ok or not canaccessvalue(value) then return false end
+    if not ok or not canaccessvalue(value) or IsSecret(value) then return false end
     return value and true or false
 end
 
@@ -109,12 +114,14 @@ end
 
 -- Safe wrapper for getting aura application count
 function D:GetAuraApplicationCountSafe(unit, auraInstanceID)
-    if not unit or not auraInstanceID then
-        return nil
-    end
-    
     if IsProtectedContext() then
         if D.Debug then D:Debug("Cannot read aura count in protected context") end
+        return nil
+    end
+
+    if not unit or not canaccessvalue(auraInstanceID) or IsSecret(auraInstanceID)
+        or auraInstanceID == nil
+    then
         return nil
     end
     
@@ -129,11 +136,13 @@ end
 
 -- Get dispel type color safely
 function D:GetDispelTypeColorSafe(unit, auraInstanceID)
-    if not unit or not auraInstanceID then
+    if IsProtectedContext() then
         return nil
     end
-    
-    if IsProtectedContext() then
+
+    if not unit or not canaccessvalue(auraInstanceID) or IsSecret(auraInstanceID)
+        or auraInstanceID == nil
+    then
         return nil
     end
     
@@ -155,8 +164,12 @@ function D:GetEnvironmentProfile()
         return "LEGACY"
     end
     
-    local _, _, _, _, instanceType = GetInstanceInfo()
-    local isChallengeMode = C_ChallengeMode and C_ChallengeMode.IsChallengeModeActive()
+    local _, instanceType = IsInInstance()
+    local isChallengeMode = false
+    if C_ChallengeMode and C_ChallengeMode.IsChallengeModeActive then
+        local ok, value = pcall(C_ChallengeMode.IsChallengeModeActive)
+        isChallengeMode = ok and AccessibleOrNil(value) == true
+    end
     
     if isChallengeMode then
         return "MYTHIC_PLUS"
@@ -191,21 +204,21 @@ end
 -- Never branch on sealed values. Prefer Blizzard boolean-aware texture APIs
 -- when available; otherwise skip secret colors rather than reading them.
 
-local issecretvalue = _G.issecretvalue
-local function IsSecret(value)
-    return issecretvalue and issecretvalue(value) and true or false
-end
-
 --- Apply an RGB(A) color to a texture without inspecting secret components.
 --- If any channel is secret, prefer SetVertexColorFromBoolean when a boolean
 --- carrier is supplied; otherwise leave the texture unchanged.
 function D:SetTextureColorSafe(texture, r, g, b, a, secretBool, trueColor, falseColor)
     if not texture then return false end
-    if secretBool ~= nil and texture.SetVertexColorFromBoolean and trueColor and falseColor then
+    local secretBooleanCarrier = IsSecret(secretBool)
+    if texture.SetVertexColorFromBoolean and trueColor and falseColor
+        and (secretBooleanCarrier or (canaccessvalue(secretBool) and secretBool ~= nil))
+    then
         texture:SetVertexColorFromBoolean(secretBool, trueColor, falseColor)
         return true
     end
-    if IsSecret(r) or IsSecret(g) or IsSecret(b) or (a ~= nil and IsSecret(a)) then
+    if not canaccessvalue(r) or not canaccessvalue(g) or not canaccessvalue(b)
+        or not canaccessvalue(a) or IsSecret(r) or IsSecret(g) or IsSecret(b) or IsSecret(a)
+    then
         return false
     end
     if texture.SetVertexColor then
@@ -217,7 +230,7 @@ end
 
 --- Format a number for UI only when accessible; otherwise return fallback.
 function D:FormatNumberSafe(value, fmt, fallback)
-    if value == nil or IsSecret(value) or not canaccessvalue(value) then
+    if not canaccessvalue(value) or IsSecret(value) or value == nil then
         return fallback or ""
     end
     if type(value) ~= "number" then return fallback or "" end

@@ -33,11 +33,11 @@
 -- design decision, not a bug: any secure-click addon is tainted, and secret
 -- auras cannot be read by tainted code, full stop.
 --
--- What's never protected: the enemy's own cast. UNIT_SPELLCAST_START on a
--- boss/target unit is plain public data, and Dcr_12_1_Encounters.lua already
--- proves this works reliably all session (the interrupt alerts). So instead
--- of reading the debuff, this module watches the CAUSE: when a nearby enemy
--- casts a spell that's in the dispel/encounter database, it remembers
+-- When Blizzard exposes a public enemy-cast spell ID, this module can retain
+-- it as a best-effort inference. Unit/cast identity can also become secret in
+-- 12.1, so every value is access-checked and inaccessible casts are ignored.
+-- Instead of reading the debuff, this module watches the CAUSE: when a nearby
+-- enemy casts a known public spell, it remembers
 -- "NPC X just cast Y" with a timestamp. When you hover a MUF with an active
 -- affliction shortly after, that's shown as a best guess -- an inference,
 -- not a read. Ambiguous when two different afflicting casts land close
@@ -53,8 +53,31 @@ local WATCHED_UNITS = {
 }
 local RECENT_WINDOW = 12 -- seconds; how long a cast stays a plausible guess
 local MAX_RECENT = 20
+local canaccessvalue = _G.canaccessvalue or function(_) return true end
+local issecretvalue = _G.issecretvalue
+local InCombatLockdown = _G.InCombatLockdown
+
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false end
+    return not issecretvalue or not issecretvalue(value)
+end
 
 local recentCasts = {} -- array of { spellId, name, npc, dungeon, cureType, t }
+
+local function accessibleBoolean(func, ...)
+    if type(func) ~= "function" then return nil end
+    local ok, value = pcall(func, ...)
+    if not ok or not isAccessiblePublicValue(value) then return nil end
+    return value and true or false
+end
+
+local function accessibleUnitName(unit, fallback)
+    local ok, name = pcall(UnitName, unit)
+    if ok and isAccessiblePublicValue(name) and type(name) == "string" and name ~= "" then
+        return name
+    end
+    return fallback or "?"
+end
 
 local function pruneRecentCasts()
     local now = GetTime()
@@ -69,6 +92,7 @@ local function pruneRecentCasts()
 end
 
 local function lookupAfflictingSpell(spellId)
+    if not isAccessiblePublicValue(spellId) or type(spellId) ~= "number" then return nil end
     local dispelEntry = D.GetDispelDBEntry and D:GetDispelDBEntry(spellId)
     if dispelEntry and dispelEntry.target == "friendly" then
         return dispelEntry.name, dispelEntry.content, dispelEntry.cureType
@@ -82,12 +106,13 @@ local function lookupAfflictingSpell(spellId)
 end
 
 local function recordCast(unit, spellId)
+    if not isAccessiblePublicValue(spellId) or type(spellId) ~= "number" then return end
     local name, dungeon, cureType = lookupAfflictingSpell(spellId)
     if not name then return end
 
     pruneRecentCasts()
     table.insert(recentCasts, 1, {
-        spellId = spellId, name = name, npc = UnitName(unit) or "?",
+        spellId = spellId, name = name, npc = accessibleUnitName(unit, unit),
         dungeon = dungeon, cureType = cureType, t = GetTime(),
     })
     if #recentCasts > MAX_RECENT then table.remove(recentCasts) end
@@ -102,12 +127,14 @@ end
 local watcher = CreateFrame("Frame")
 
 local function isWatchedCastUnit(unit)
-    if type(unit) ~= "string" then return false end
+    if not isAccessiblePublicValue(unit) or type(unit) ~= "string" then return false end
     if WATCHED_UNITS[unit] then
-        return not UnitCanAttack or UnitCanAttack("player", unit)
+        if not UnitCanAttack then return true end
+        return accessibleBoolean(UnitCanAttack, "player", unit) == true
     end
     if unit:match("^nameplate%d+$") then
-        return not UnitCanAttack or UnitCanAttack("player", unit)
+        if not UnitCanAttack then return true end
+        return accessibleBoolean(UnitCanAttack, "player", unit) == true
     end
     return false
 end
@@ -121,16 +148,17 @@ watcher:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 -- UNIT_SPELLCAST_SUCCEEDED's own event payload already carries spellId
 -- (unit, castGUID, spellId), covering instant-cast afflictions that never
 -- show a cast bar. UNIT_SPELLCAST_START reads the spellId off the cast
--- bar via UnitCastingInfo instead, matching Dcr_12_1_Encounters.lua.
+-- bar via UnitCastingInfo instead. Both paths retain data only when Blizzard
+-- exposes a public numeric spell ID.
 watcher:SetScript("OnEvent", function(_, event, unit, _, spellId)
     if not isWatchedCastUnit(unit) then return end
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
-        if spellId then recordCast(unit, spellId) end
+        recordCast(unit, spellId)
         return
     end
-    if not UnitExists(unit) then return end
-    local _, _, _, _, _, _, _, _, castSpellId = UnitCastingInfo(unit)
-    if castSpellId then recordCast(unit, castSpellId) end
+    if accessibleBoolean(UnitExists, unit) ~= true then return end
+    local ok, _, _, _, _, _, _, _, _, castSpellId = pcall(UnitCastingInfo, unit)
+    if ok then recordCast(unit, castSpellId) end
 end)
 
 function D:GetRecentAfflictingCasts()
@@ -173,24 +201,45 @@ local function isIdentityTooltipAllowed()
     return inDungeonOrRaid()
 end
 
-local function setIdentityTooltipInteractive(MF, enabled)
-    local slot = MF and MF.DcrIdentitySlot
-    if not slot then return end
-    pcall(function()
-        if slot.EnableMouse then slot:EnableMouse(enabled and true or false) end
-        if slot.SetMouseClickEnabled then slot:SetMouseClickEnabled(false) end
-        if slot.SetPropagateMouseClicks then slot:SetPropagateMouseClicks(true) end
-        if slot.SetPassThroughButtons then
-            slot:SetPassThroughButtons("LeftButton", "RightButton", "MiddleButton", "Button4", "Button5")
-        end
-        if slot.SetMouseMotionEnabled then slot:SetMouseMotionEnabled(enabled and true or false) end
-    end)
+-- AuraContainers update themselves from UNIT_AURA. Decursive only creates,
+-- configures, enables, disables, or retargets this optional tooltip carrier
+-- outside combat. pcall catches API/version failures; it does not make a
+-- restricted call safe and cannot suppress ADDON_ACTION_BLOCKED.
+local identityTooltipRefreshPending = false
+
+-- The secure MUF parent is locked in combat. Aura secrecy by itself is not a
+-- container-lifecycle lock: Blizzard keeps AuraContainer construction and its
+-- initializeFrame callback available, then seals the AuraButton afterward.
+local function isContainerLifecycleLocked()
+    return InCombatLockdown and InCombatLockdown() or false
+end
+
+local function isAuraDisplayRestricted()
+    if isContainerLifecycleLocked() then return true end
+    return D.HasActiveAddonRestriction and D:HasActiveAddonRestriction() or false
+end
+
+local function deferIdentityTooltipRefresh()
+    identityTooltipRefreshPending = true
+    return false
+end
+
+local function canAccessIdentityContainer(container)
+    if not container then return false end
+    if container.CanBeAccessedInContext then
+        local ok, accessible = pcall(container.CanBeAccessedInContext, container)
+        return ok and isAccessiblePublicValue(accessible) and accessible == true
+    end
+    return not isAuraDisplayRestricted()
 end
 
 local function disableIdentityTooltipSlot(MF)
     if not MF then return end
-    setIdentityTooltipInteractive(MF, false)
+    if isContainerLifecycleLocked() then return deferIdentityTooltipRefresh() end
     local container = MF.DcrIdentityContainer
+    if container and not canAccessIdentityContainer(container) then
+        return deferIdentityTooltipRefresh()
+    end
     if container then
         if container.SetEnabled then pcall(container.SetEnabled, container, false) end
         if container.Hide then pcall(container.Hide, container) end
@@ -202,11 +251,19 @@ end
 -- inside Blizzard's initializeFrame callback -- same proven pattern as
 -- Dcr_12_1.lua priority/verification carriers.
 local function ensureIdentityTooltipSlot(MF)
+    if not MF or not MF.Frame then return nil end
+    if isContainerLifecycleLocked() then
+        deferIdentityTooltipRefresh()
+        return MF.DcrIdentitySlot
+    end
     if MF.DcrIdentitySlot then
         if isIdentityTooltipAllowed() then
-            setIdentityTooltipInteractive(MF, true)
             local container = MF.DcrIdentityContainer
             if container then
+                if not canAccessIdentityContainer(container) then
+                    deferIdentityTooltipRefresh()
+                    return MF.DcrIdentitySlot
+                end
                 if container.SetEnabled then pcall(container.SetEnabled, container, true) end
                 if container.Show then pcall(container.Show, container) end
             end
@@ -215,11 +272,10 @@ local function ensureIdentityTooltipSlot(MF)
         end
         return MF.DcrIdentitySlot
     end
-    if not MF or not MF.Frame then return nil end
     if not isIdentityTooltipAllowed() then return nil end
 
     local _, instanceType = IsInInstance()
-    local unitName = MF.CurrUnit and (UnitName(MF.CurrUnit) or MF.CurrUnit) or "?"
+    local unitName = MF.CurrUnit and accessibleUnitName(MF.CurrUnit, MF.CurrUnit) or "?"
     local anchor = MF.Frame
 
     local containerOk, container = pcall(CreateFrame, "AuraContainer", nil, MF.Frame, "CustomAuraContainerTemplate")
@@ -264,6 +320,13 @@ local function ensureIdentityTooltipSlot(MF)
     -- Baked in at slot-creation time -- /reload to apply after toggling.
     local filter = (D.profile and D.profile.DcrIdentityShowAllDebuffs)
         and "HARMFUL" or "HARMFUL|RAID_PLAYER_DISPELLABLE"
+    local unit = MF.CurrUnit
+    -- Match the tested detector/gate lifecycle used by the main 12.1 module:
+    -- SetUnit -> AddAuraSlot -> SetEnabled last. This also lets Blizzard run
+    -- initializeFrame against the final public unit token.
+    if container.SetUnit and unit then
+        pcall(container.SetUnit, container, unit)
+    end
     local addOk, slot = pcall(container.AddAuraSlot, container,
         "zhaohu-identity-tooltip", filter, options)
     if not addOk or not slot then
@@ -274,27 +337,21 @@ local function ensureIdentityTooltipSlot(MF)
     MF.DcrIdentityContainer = container
     MF.DcrIdentitySlot = slot
 
-    local unit = MF.CurrUnit
-    if container.SetUnit and unit then
-        pcall(container.SetUnit, container, unit)
-    end
     if container.SetEnabled then pcall(container.SetEnabled, container, true) end
     if container.Show then pcall(container.Show, container) end
-    if container.UpdateAllAuras then pcall(container.UpdateAllAuras, container) end
 
     if D.AlertDiag then D:AlertDiag("IdentitySlot OK %s [%s]", unitName, tostring(instanceType)) end
     return slot
 end
 
 local function refreshIdentityTooltipUnit(MF)
+    if isContainerLifecycleLocked() then return deferIdentityTooltipRefresh() end
     if not isIdentityTooltipAllowed() then return end
     if not MF or not MF.DcrIdentityContainer or not MF.CurrUnit then return end
     local container = MF.DcrIdentityContainer
+    if not canAccessIdentityContainer(container) then return deferIdentityTooltipRefresh() end
     if container.SetUnit then
         pcall(container.SetUnit, container, MF.CurrUnit)
-    end
-    if container.UpdateAllAuras then
-        pcall(container.UpdateAllAuras, container)
     end
 end
 
@@ -304,13 +361,18 @@ end
 local function showMUFNameLabel(MF, unit, tip)
     if not tip or not MF or not MF.Frame or not unit then return end
     local GetRaidTargetIndex = _G.GetRaidTargetIndex
-    local index = GetRaidTargetIndex and GetRaidTargetIndex(unit)
+    local index
+    if GetRaidTargetIndex then
+        local ok, value = pcall(GetRaidTargetIndex, unit)
+        if ok and isAccessiblePublicValue(value) and type(value) == "number" then index = value end
+    end
     local icon = index and string.format("|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_%d:0|t ", index) or ""
     local _, className
     if D.GetUnitClassSafe then
         _, className = D:GetUnitClassSafe(unit)
     else
-        _, className = UnitClass(unit)
+        local ok, _, value = pcall(UnitClass, unit)
+        if ok and isAccessiblePublicValue(value) then className = value end
     end
     local coloredUnitName = D:ColorTextNA(
         (D:PetUnitName(unit, true)),
@@ -319,7 +381,7 @@ local function showMUFNameLabel(MF, unit, tip)
     tip:ClearLines()
     tip:AddLine(string.format("%s %s", icon, coloredUnitName))
     tip:ClearAllPoints()
-    if UnitAffectingCombat(unit) then
+    if accessibleBoolean(UnitAffectingCombat, unit) == true then
         tip:SetPoint("TOP", MF.Frame, "BOTTOM", 0, -4)
     else
         tip:SetPoint("BOTTOM", MF.Frame, "TOP", 0, 4)
@@ -329,14 +391,17 @@ end
 
 local function enableIdentityTooltipSlot(MF)
     if not MF or not MF.DcrIdentityContainer then return end
+    if isContainerLifecycleLocked() then return deferIdentityTooltipRefresh() end
     local container = MF.DcrIdentityContainer
+    if not canAccessIdentityContainer(container) then return deferIdentityTooltipRefresh() end
     if container.SetEnabled then pcall(container.SetEnabled, container, true) end
     if container.Show then pcall(container.Show, container) end
-    setIdentityTooltipInteractive(MF, true)
     refreshIdentityTooltipUnit(MF)
 end
 
 local function refreshIdentityTooltipSlots()
+    if isContainerLifecycleLocked() then return deferIdentityTooltipRefresh() end
+    identityTooltipRefreshPending = false
     if not D.MicroUnitF or not D.MicroUnitF.UnitToMUF then return end
     local want = isIdentityTooltipAllowed()
     for _, MF in pairs(D.MicroUnitF.UnitToMUF) do
@@ -378,11 +443,17 @@ local retryFrame = CreateFrame("Frame")
 retryFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 retryFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 retryFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+pcall(retryFrame.RegisterEvent, retryFrame, "ADDON_RESTRICTION_STATE_CHANGED")
 retryFrame:SetScript("OnEvent", function(_, event)
-    if event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
+    if event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA"
+        or event == "ADDON_RESTRICTION_STATE_CHANGED"
+    then
         C_Timer.After(event == "PLAYER_ENTERING_WORLD" and 1.0 or 0.20, refreshIdentityTooltipSlots)
         return
     end
+    -- Reconcile queued lifecycle work only after combat. The managed carrier
+    -- keeps receiving UNIT_AURA on its own while no reconfiguration is needed.
+    if not identityTooltipRefreshPending then return end
     refreshIdentityTooltipSlots()
 end)
 

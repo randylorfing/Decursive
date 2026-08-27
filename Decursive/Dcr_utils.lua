@@ -95,14 +95,22 @@ local GetSpellId        = _G.C_Spell and _G.C_Spell.GetSpellInfo and function(sp
 local GetItemInfo       = _G.C_Item and _G.C_Item.GetItemInfo or _G.GetItemInfo;
 local pcall             = _G.pcall;
 local canaccessvalue    = _G.canaccessvalue or function(_) return true; end
+local issecretvalue     = _G.issecretvalue;
 local CreateColor       = _G.CreateColor
 local C_SpellBook       = _G.C_SpellBook
 
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false; end
+    return not issecretvalue or not issecretvalue(value);
+end
+
 -- replacement for the default function as it is bugged in WoW5 (it returns nil for some spells such as resto shamans' 'Purify Spirit')
 D.IsSpellInRange = function (spellName, unit)
-    local range = IsSpellInRange(spellName, unit);
+    local ok, range = pcall(IsSpellInRange, spellName, unit);
 
-    if range ~= nil then
+    if not ok or not isAccessiblePublicValue(range) then
+        return nil;
+    elseif range ~= nil then
         return range;
     else
         --[==[
@@ -111,8 +119,18 @@ D.IsSpellInRange = function (spellName, unit)
         if unit == 'player' or unit == 'pet' then
             return 1;
         else
-            local uir = UnitInRange(unit)
-            return canaccessvalue(uir) and uir and 1 or 0;
+            local rangeOK, uir, checked = pcall(UnitInRange, unit)
+            if not rangeOK or not isAccessiblePublicValue(uir)
+                or not isAccessiblePublicValue(checked) then
+                return nil;
+            end
+            -- UnitInRange can provide no answer (or report that it did not
+            -- perform a range check). Unknown must stay unknown; collapsing
+            -- nil/unchecked to 0 paints an innocent MUF as out of range.
+            if checked ~= true and checked ~= 1 then return nil; end
+            if uir == true or uir == 1 then return 1; end
+            if uir == false or uir == 0 then return 0; end
+            return nil;
         end
     end
 
@@ -143,7 +161,7 @@ end
 function D:PetUnitName (Unit, Check) -- {{{
     local Name = (self:UnitName(Unit));
 
-    if not Name or canaccessvalue(Name) and Name == DC.UNKNOWN  then
+    if not Name or Name == DC.UNKNOWN  then
         Name = DC.UNKNOWN .. "-" .. Unit;
         D:Debug("PetUnitName(): Name of %s is unknown", Unit);
     end
@@ -157,12 +175,19 @@ function D:PetUnitName (Unit, Check) -- {{{
 end -- }}}
 
 function D:UnitName(Unit)
-    local name, server = UnitName(Unit);
-        if ( server and canaccessvalue(server) and server ~= "" ) then
-            return name.."-"..server;
-        else
-            return name;
-        end
+    local ok, name, server = pcall(UnitName, Unit);
+    if not ok or not canaccessvalue(name)
+        or (issecretvalue and issecretvalue(name)) or type(name) ~= "string"
+    then
+        return nil;
+    end
+    if canaccessvalue(server) and not (issecretvalue and issecretvalue(server))
+        and type(server) == "string" and server ~= ""
+    then
+        return name.."-"..server;
+    else
+        return name;
+    end
 end
 
 local function isFormattedString(string)
@@ -314,7 +339,7 @@ do
 
     -- use provided f if not secret or use whenSecret instead
     function asStringWith(v, f, whenSecret)
-        if not canaccessvalue or canaccessvalue(v) then
+        if isAccessiblePublicValue(v) then
             return f(v)
         else
             return whenSecret
@@ -322,6 +347,7 @@ do
     end
 
     function D:tAsString(t, indent) -- debugging function
+        if not isAccessiblePublicValue(t) then return "*secret*" end
         if type(t) ~= 'table' then
             return tostring(t)
         end

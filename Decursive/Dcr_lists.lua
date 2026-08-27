@@ -78,6 +78,31 @@ local GetRaidRosterInfo = _G.GetRaidRosterInfo;
 local IsShiftKeyDown    = _G.IsShiftKeyDown;
 local IsControlKeyDown  = _G.IsControlKeyDown;
 local canaccessvalue    = _G.canaccessvalue or function(_) return true; end
+local issecretvalue     = _G.issecretvalue;
+local pcall             = _G.pcall;
+
+local function IsAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false end
+    return not issecretvalue or not issecretvalue(value)
+end
+
+local function AccessibleBoolean(func, ...)
+    if type(func) ~= "function" then return nil end
+    local ok, value = pcall(func, ...)
+    if not ok or not IsAccessiblePublicValue(value) then return nil end
+    return value and true or false
+end
+
+local function GetAccessibleUnitClassToken(unit)
+    if not unit then return nil end
+    if D.GetUnitClassSafe then
+        local _, classToken = D:GetUnitClassSafe(unit)
+        return classToken
+    end
+    local ok, _, classToken = pcall(UnitClass, unit)
+    if not ok or not IsAccessiblePublicValue(classToken) then return nil end
+    return classToken
+end
 
 -- Dcr_ListFrameTemplate specific internal functions {{{
 function D.ListFrameTemplate_OnLoad(frame)
@@ -345,8 +370,9 @@ local function AddElementToList(element, checkIfExist, list, listGUIDtoName, lis
         return false;
     end
 
-    if not checkIfExist or UnitExists(element) then
-        if type(element) == "number" or UnitIsPlayer(element) then
+    local exists = not checkIfExist or AccessibleBoolean(UnitExists, element) == true;
+    if exists then
+        if type(element) == "number" or AccessibleBoolean(UnitIsPlayer, element) == true then
             D:Debug("adding %s", element);
 
             local isNotPlayerCase = element ~= "player";
@@ -355,8 +381,13 @@ local function AddElementToList(element, checkIfExist, list, listGUIDtoName, lis
             if type(element) == "number" then
                 GUIDorNum = element;
             else
-                GUIDorNum = isNotPlayerCase and UnitGUID(element) or element;
-                if not GUIDorNum or not canaccessvalue(GUIDorNum) then
+                if isNotPlayerCase then
+                    local ok, value = pcall(UnitGUID, element);
+                    GUIDorNum = ok and IsAccessiblePublicValue(value) and value or nil;
+                else
+                    GUIDorNum = element;
+                end
+                if not IsAccessiblePublicValue(GUIDorNum) or not GUIDorNum then
                     return false;
                 end
             end
@@ -368,7 +399,7 @@ local function AddElementToList(element, checkIfExist, list, listGUIDtoName, lis
             table.insert(list, GUIDorNum);
 
             if type(element) == "string" then
-                listClass[GUIDorNum]      = isNotPlayerCase and select(2, UnitClass(element)) or nil;
+                listClass[GUIDorNum]      = isNotPlayerCase and GetAccessibleUnitClassToken(element) or nil;
                 listGUIDtoName[GUIDorNum] = isNotPlayerCase and D:UnitName(element) or "player"; -- used to prevent multi addition
             elseif element > 10 then
                 listClass[element]        = DC.ClassNumToUName[element];
@@ -379,7 +410,8 @@ local function AddElementToList(element, checkIfExist, list, listGUIDtoName, lis
 
             return true;
         else
-            D:Debug("Unit is not a player:", element, checkIfExist, UnitExists(element));
+            D:Debug("Unit is not a player:", element, checkIfExist,
+                AccessibleBoolean(UnitExists, element));
 
             if not element then
                 error("D:AddElementToList: bad argument #1 'element' must be!",2);
@@ -506,24 +538,24 @@ function D:PopulateButtonPress(frame) --{{{
         D:Debug("Populate called for %s", frame.ClassType);
         -- for the class type stuff... we do party
 
-        local _, pclass = UnitClass("player");
+        local pclass = GetAccessibleUnitClassToken("player");
         if (pclass == UppedClass) then
             PopulateFrame:addFunction("player");
         end
 
-        _, pclass = UnitClass("party1");
+        pclass = GetAccessibleUnitClassToken("party1");
         if (pclass == UppedClass) then
             PopulateFrame:addFunction("party1");
         end
-        _, pclass = UnitClass("party2");
+        pclass = GetAccessibleUnitClassToken("party2");
         if (pclass == UppedClass) then
             PopulateFrame:addFunction("party2");
         end
-        _, pclass = UnitClass("party3");
+        pclass = GetAccessibleUnitClassToken("party3");
         if (pclass == UppedClass) then
             PopulateFrame:addFunction("party3");
         end
-        _, pclass = UnitClass("party4");
+        pclass = GetAccessibleUnitClassToken("party4");
         if (pclass == UppedClass) then
             PopulateFrame:addFunction("party4");
         end
@@ -535,7 +567,7 @@ function D:PopulateButtonPress(frame) --{{{
     if (IsShiftKeyDown() and frame.ClassType) then
         D:Debug("Finding raid units with a macthing class");
         for index, unit in ipairs(D.Status.Unit_Array) do
-            _, pclass = UnitClass(unit);
+            pclass = GetAccessibleUnitClassToken(unit);
 
             if (pclass == UppedClass) then
                 D:Debug("found %s", pclass);
@@ -553,7 +585,9 @@ function D:PopulateButtonPress(frame) --{{{
     if (IsShiftKeyDown() and frame.GroupNumber and max > 0) then
         D:Debug("Finding raid units with a matching group number");
         for i = 1, max do
-            _, _, pgroup, _, _, pclass = GetRaidRosterInfo(i);
+            local ok, _name, _rank, group, _level, _localizedClass, classToken = pcall(GetRaidRosterInfo, i);
+            if ok and IsAccessiblePublicValue(group) and type(group) == "number" then pgroup = group; else pgroup = nil; end
+            if ok and IsAccessiblePublicValue(classToken) and type(classToken) == "string" then pclass = classToken; else pclass = nil; end
 
             if (pgroup == frame.GroupNumber) then
                 D:Debug("found %s in group %d", pclass, max);

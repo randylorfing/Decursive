@@ -54,7 +54,29 @@ local GetBuildInfo = _G.GetBuildInfo
 local GetTime = _G.GetTime
 local IsInInstance = _G.IsInInstance
 
-local PATCH_VERSION = "v@project-version@"
+local PATCH_VERSION = "@project-version@"
+
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false end
+    return not issecretvalue or not issecretvalue(value)
+end
+
+-- AuraContainer topology is not the same restriction boundary as aura data.
+-- Blizzard deliberately permits container/button construction while aura data
+-- is secret (initializeFrame runs before the AuraButton is sealed).  The MUF
+-- parent is a secure action frame, however, so its child topology/retargeting
+-- remains deferred during ordinary combat lockdown.
+local function nativeConfigurationBlocked()
+    return InCombatLockdown and InCombatLockdown() or false
+end
+
+-- Post-initialization access to an AuraButton or a registered child is a
+-- separate boundary.  Use this conservative fallback only when the object
+-- cannot answer CanBeAccessedInContext() for itself.
+local function nativeAuraDisplayMutationBlocked()
+    if nativeConfigurationBlocked() then return true end
+    return D.HasActiveAddonRestriction and D:HasActiveAddonRestriction() or false
+end
 
 local function safe(label, fn, ...)
     local ok, a, b, c = pcall(fn, ...)
@@ -309,7 +331,7 @@ local function detectAutomaticEnvironment()
             if instanceType == "party" then
                 if C_ChallengeMode and C_ChallengeMode.GetActiveChallengeMapID then
                     local ok, mapID = pcall(C_ChallengeMode.GetActiveChallengeMapID)
-                    if ok and type(mapID) == "number" and mapID > 0 then
+                    if ok and isAccessiblePublicValue(mapID) and type(mapID) == "number" and mapID > 0 then
                         return "MYTHIC_PLUS"
                     end
                 end
@@ -513,7 +535,6 @@ function D:Set121PvPProtectedAuraMode(mode)
     end
 end
 
-local managedAuraButtons = setmetatable({}, { __mode = "k" })
 local cooldownMUFs = setmetatable({}, { __mode = "k" })
 local rangeMUFs = setmetatable({}, { __mode = "k" })
 local lineOfSightMUFs = setmetatable({}, { __mode = "k" })
@@ -557,27 +578,12 @@ function D:Refresh121MUFStateSoundUnit(_unit, _suppressAlert)
 end
 
 function D:Refresh121MUFStateSoundBaseline()
-    if self.Is121MUFVisibilitySoundDriverEnabled and self:Is121MUFVisibilitySoundDriverEnabled() then return end
-    if type(self.RefreshProtectedAuraSounds) ~= "function" then return end
-    -- Deferred one frame: resetTrackedDispelSpell() (this function's only
-    -- caller) runs synchronously inside the UNIT_SPELLCAST_SUCCEEDED handler,
-    -- immediately after the player's own dispel cast lands via the secure
-    -- click-cast macro -- a context that can still carry taint into the same
-    -- execution frame. C_UnitAuras.AddAuraSound requires a genuinely
-    -- untainted caller; two independent user reports of ADDON_ACTION_BLOCKED
-    -- here (one in PvP arena, one in Mythic+ -- both high-frequency
-    -- dispel-click content, never reported from lower-intensity raid
-    -- testing) match that taint-adjacency pattern rather than a
-    -- content-type-specific restriction. Letting the click's frame fully
-    -- unwind before this runs is the fix; pcall cannot suppress
-    -- ADDON_ACTION_BLOCKED since it isn't a catchable Lua error.
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0, function()
-            if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("MUF baseline refresh") end
-        end)
-    else
-        self:RefreshProtectedAuraSounds("MUF baseline refresh")
-    end
+    -- Native aura-sound registrations are independent of the current aura
+    -- state and do not need to be rebuilt after each cure. Re-registering from
+    -- the secure click/spellcast path can trigger ADDON_ACTION_BLOCKED even
+    -- through pcall. Roster/spec/settings changes request their own refresh;
+    -- combat-time requests are centrally deferred to PLAYER_REGEN_ENABLED.
+    return nil
 end
 
 -- UNIT_AURA is intentionally a no-op for sound on 12.1. The Blizzard aura-sound
@@ -593,10 +599,24 @@ auraSoundRegistryEventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 auraSoundRegistryEventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 auraSoundRegistryEventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 auraSoundRegistryEventFrame:RegisterEvent("PLAYER_ROLES_ASSIGNED")
+auraSoundRegistryEventFrame:RegisterEvent("SPELLS_CHANGED")
+auraSoundRegistryEventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
+auraSoundRegistryEventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 auraSoundRegistryEventFrame:SetScript("OnEvent", function(_, event)
     if not D.DcrFullyInitialized or type(D.RefreshProtectedAuraSounds) ~= "function" then return end
+    -- VuhDo's reliable lifecycle synchronizes a unit as soon as its roster
+    -- event frame is registered. Do the equivalent reconciliation immediately
+    -- on the public roster edge; the guarded call becomes a no-op/deferred
+    -- request if Blizzard has already activated a restriction. A later pass
+    -- reconciles the authoritative Decursive ordering.
+    if event == "GROUP_ROSTER_UPDATE" then
+        D:RefreshProtectedAuraSounds(event .. " immediate")
+    end
     if C_Timer and C_Timer.After then
-        C_Timer.After(event == "PLAYER_ENTERING_WORLD" and 1.0 or 0.20, function()
+        local delay = event == "PLAYER_ENTERING_WORLD" and 1.0
+            or (event == "SPELLS_CHANGED" or event == "PLAYER_TALENT_UPDATE" or event == "TRAIT_CONFIG_UPDATED") and 0.50
+            or 0.20
+        C_Timer.After(delay, function()
             if D.DcrFullyInitialized then D:RefreshProtectedAuraSounds(event) end
         end)
     else
@@ -607,11 +627,9 @@ end)
 -- Blizzard-managed dispellable aura indicator
 -- ---------------------------------------------------------------------------
 
-local initializedManagedAuraButtons = setmetatable({}, { __mode = "k" })
-
 -- Priority colors are owned by Decursive's existing MUF color table.  The
--- managed-aura layer uses these only to build Blizzard ColorCurves; addon Lua
--- never reads an aura's protected dispel type.
+-- managed-aura layer chooses them from Decursive's public cure-priority setup;
+-- addon Lua never reads an aura's protected dispel type.
 local function getPriorityColor(priority)
     local c = D.profile and D.profile.MF_colors and D.profile.MF_colors[priority]
     if type(c) == "table" then
@@ -620,57 +638,6 @@ local function getPriorityColor(priority)
     if priority == 1 then return .8, 0, 0, 1 end
     if priority == 2 then return .25, .45, 1, 1 end
     return .7, .25, 1, 1
-end
-
--- Blizzard 12.1 supports secret-safe dispel visualization through
--- CustomAuraButton:AddDispelTypeTexture().  The engine evaluates the protected
--- aura dispel type privately.  The visual model here is based on simultaneous
--- dispellable aura *slots*, not fixed priority layers:
---   first dispellable aura  -> inner square, colored for that aura's configured priority
---   second dispellable aura -> one pulsing border, colored for that aura's configured priority
---
--- A lone Priority #2/#3 affliction still owns the inner square. The border is
--- reserved only for the rare case where a second simultaneous dispellable aura exists.
-local managedAnyPriorityCurve
-local managedAnyPriorityCurveReady = false
-
-local function newColor(r, g, b, a)
-    if _G.CreateColor then return _G.CreateColor(r, g, b, a) end
-    return nil
-end
-
-local function ensureManagedAnyPriorityCurve()
-    if managedAnyPriorityCurveReady then return true end
-    if not _G.C_CurveUtil or not _G.C_CurveUtil.CreateColorCurve or not _G.Enum or not _G.Enum.LuaCurveType then
-        return false
-    end
-    managedAnyPriorityCurve = _G.C_CurveUtil.CreateColorCurve()
-    managedAnyPriorityCurve:SetType(_G.Enum.LuaCurveType.Step)
-    managedAnyPriorityCurveReady = true
-    return true
-end
-
-local function updateManagedAnyPriorityCurve()
-    if not ensureManagedAnyPriorityCurve() then return false end
-    managedAnyPriorityCurve:ClearPoints()
-    managedAnyPriorityCurve:AddPoint(0, newColor(0, 0, 0, 0))
-
-    local status = D.Status
-    local friendlyTypes = { DC.MAGIC, DC.CURSE, DC.DISEASE, DC.POISON, DC.BLEED }
-    for _, affType in ipairs(friendlyTypes) do
-        local bt = DC.DTtoBT and DC.DTtoBT[affType]
-        if bt and bt > 0 then
-            local spellName = status and status.CuringSpells and status.CuringSpells[affType]
-            local configuredPriority = spellName and status.CuringSpellsPrio and status.CuringSpellsPrio[spellName]
-            if type(configuredPriority) == "number" and configuredPriority >= 1 and configuredPriority <= 3 then
-                local r, g, b, a = getPriorityColor(configuredPriority)
-                managedAnyPriorityCurve:AddPoint(bt, newColor(r, g, b, a))
-            else
-                managedAnyPriorityCurve:AddPoint(bt, newColor(0, 0, 0, 0))
-            end
-        end
-    end
-    return true
 end
 
 local function makeManagedBorderStrip(owner, anchor, side, thickness, inset)
@@ -696,96 +663,6 @@ local function makeManagedBorderStrip(owner, anchor, side, thickness, inset)
         t:SetWidth(thickness)
     end
     return t
-end
-
-local function startManagedBorderPulse(holder, phase)
-    if not holder or not holder.CreateAnimationGroup then return end
-    local ag = holder:CreateAnimationGroup()
-    local a1 = ag:CreateAnimation("Alpha")
-    a1:SetFromAlpha(1)
-    a1:SetToAlpha(.25)
-    a1:SetDuration(.55)
-    if a1.SetSmoothing then a1:SetSmoothing("IN_OUT") end
-    if phase and a1.SetStartDelay then a1:SetStartDelay(phase) end
-    ag:SetLooping("BOUNCE")
-    ag:Play()
-end
-
-local function registerManagedAnyPriorityTexture(auraButton, texture)
-    if not updateManagedAnyPriorityCurve() then return false end
-    local styleEnum = _G.Enum and _G.Enum.CustomAuraButtonDispelTypeTextureStyle
-    local preserve = styleEnum and styleEnum.PreserveAsset
-    if preserve == nil or not auraButton.AddDispelTypeTexture then return false end
-    -- v10.35 strict 12.1 priority mapping: use only the compatibility curve
-    -- built from Decursive's currently configured friendly cure mappings.
-    -- Do not fall back to the legacy/shared dsCurve; an overly broad curve can
-    -- assign Priority #1 color to protected auras that are not actually mapped
-    -- to that priority.
-    local priorityCurve = managedAnyPriorityCurve
-    local options = {
-        style = preserve,
-        showWhenHarmful = true,
-        showWhenHelpful = false,
-        showWithoutDispelType = false,
-        customDispelColorCurve = priorityCurve,
-    }
-    return safe("AddDispelTypeTexture stacked priority", auraButton.AddDispelTypeTexture, auraButton, texture, options)
-end
-
-local function initializeManagedAuraButton(auraButton, visualSlot, visualAnchor, ownerMF)
-    if initializedManagedAuraButtons[auraButton] then return end
-    initializedManagedAuraButtons[auraButton] = true
-
-    -- initializeFrame is the one guaranteed-safe setup window before Blizzard
-    -- applies DenyTaintedAccessWhenAurasAreSecret to the managed button.
-    if auraButton.SetSize then auraButton:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20) end
-    if auraButton.EnableMouse then safe("AuraButton EnableMouse", auraButton.EnableMouse, auraButton, false) end
-    if auraButton.SetMouseClickEnabled then safe("AuraButton mouse clicks", auraButton.SetMouseClickEnabled, auraButton, false) end
-    if auraButton.SetMouseMotionEnabled then safe("AuraButton mouse motion", auraButton.SetMouseMotionEnabled, auraButton, false) end
-
-    updateManagedAnyPriorityCurve()
-    visualAnchor = visualAnchor or auraButton
-    visualSlot = visualSlot or 1
-
-    -- Slot #1 owns the center regardless of whether its protected dispel type
-    -- maps to Decursive curing priority 1, 2, or 3. Blizzard supplies the color.
-    if visualSlot == 1 then
-        local fill = auraButton:CreateTexture(nil, "ARTWORK")
-        fill:SetPoint("TOPLEFT", visualAnchor, "TOPLEFT", 0, 0)
-        fill:SetPoint("BOTTOMRIGHT", visualAnchor, "BOTTOMRIGHT", 0, 0)
-        fill:SetColorTexture(1, 1, 1, 1)
-        registerManagedAnyPriorityTexture(auraButton, fill)
-
-        -- IMPORTANT: once a Texture/Cooldown is handed to CustomAuraButton,
-        -- Blizzard marks its relevant visual aspects secret.  Do not attach our
-        -- spell-cooldown widgets to this protected aura button and never mutate
-        -- managed display objects after initialization.  The managed button owns
-        -- only the pre-click afflicted/priority color.
-        managedAuraButtons[auraButton] = { slot = 1, fill = fill, MF = ownerMF }
-        return
-    end
-
-    -- Slot #2 means a second simultaneous dispellable aura exists.  It gets the
-    -- first pulsing border in *its own* configured priority color.
-    if visualSlot == 2 then
-        local holder = CreateFrame("Frame", nil, auraButton)
-        holder:SetPoint("TOPLEFT", visualAnchor, "TOPLEFT", 0, 0)
-        holder:SetPoint("BOTTOMRIGHT", visualAnchor, "BOTTOMRIGHT", 0, 0)
-        holder:EnableMouse(false)
-        local border = {
-            makeManagedBorderStrip(holder, visualAnchor, "TOP", 2, 0),
-            makeManagedBorderStrip(holder, visualAnchor, "BOTTOM", 2, 0),
-            makeManagedBorderStrip(holder, visualAnchor, "LEFT", 2, 0),
-            makeManagedBorderStrip(holder, visualAnchor, "RIGHT", 2, 0),
-        }
-        for _, tex in ipairs(border) do registerManagedAnyPriorityTexture(auraButton, tex) end
-        if not D.profile or D.profile.CooldownPriority2Pulse121Enabled ~= false then
-            startManagedBorderPulse(holder, 0)
-        end
-        managedAuraButtons[auraButton] = { slot = 2, holder = holder, border = border }
-        return
-    end
-
 end
 
 -- ---------------------------------------------------------------------------
@@ -878,15 +755,21 @@ local function nativeRangeValueForMUF(MF)
         local ok, result = pcall(C_Spell.IsSpellInRange, spellID, unit)
         if ok then value = result end
         if issecretvalue and issecretvalue(value) then return value, true end
+        if not canaccessvalue(value) then return nil, false end
         if value == true or value == false then return value, true end
         if value == 1 then return true, true end
         if value == 0 then return false, true end
     end
 
     if UnitInRange then
-        local ok, result = pcall(UnitInRange, unit)
+        local ok, result, checked = pcall(UnitInRange, unit)
+        if not ok or not isAccessiblePublicValue(checked)
+            or (checked ~= true and checked ~= 1) then
+            return nil, false
+        end
         if ok then value = result end
         if issecretvalue and issecretvalue(value) then return value, true end
+        if not canaccessvalue(value) then return nil, false end
         if value == true or value == false then return value, true end
         if value == 1 then return true, true end
         if value == 0 then return false, true end
@@ -948,6 +831,12 @@ local function initializeMUFStatusLight(MF)
     if not MF or not MF.Frame then return end
     if not D:Is121MUFStatusLightEnabled() then return end
     if MF.Decursive121StatusLight then return end
+    if nativeConfigurationBlocked() then
+        if D.AddDelayedFunctionCall then
+            D:AddDelayedFunctionCall("Dcr121_StatusLight_" .. tostring(MF.FrameNum or MF.ID or 0), initializeMUFStatusLight, MF)
+        end
+        return false
+    end
 
     local light = CreateFrame("Frame", nil, MF.Frame)
     local size = statusLightSizeForMF(MF)
@@ -1129,7 +1018,7 @@ function D:Mark121MUFStatusFailure(unitOrMF, reason)
     MF.Decursive121VerificationGeneration = (MF.Decursive121VerificationGeneration or 0) + 1
     MF.Decursive121StatusSuccessUntil = 0
     parkVerificationHandles(MF)
-    MF.Decursive121StatusFailureReason = reason and tostring(reason) or nil
+    MF.Decursive121StatusFailureReason = isAccessiblePublicValue(reason) and reason ~= nil and tostring(reason) or nil
     MF.Decursive121StatusFailureUntil = (GetTime and GetTime() or 0) + 3.0
     refreshOneMUFStatusLight(MF)
 end
@@ -1171,6 +1060,24 @@ function D:Set121MUFStatusLightEnabled(enabled)
     enabled = enabled and true or false
     self.profile.StatusLight121Enabled = enabled
 
+    -- Status-light frames are children of secure MUFs. Settings can be changed
+    -- through slash commands or the modern panel while combat is active, so
+    -- keep the mutation boundary here even though most controls are disabled
+    -- in combat. The latest requested value wins when the delayed call runs.
+    if InCombatLockdown and InCombatLockdown() then
+        self.Pending121MUFStatusLightEnabled = enabled
+        if self.AddDelayedFunctionCall then
+            self:AddDelayedFunctionCall("Dcr_Apply121MUFStatusLightEnabled", function()
+                local pending = D.Pending121MUFStatusLightEnabled
+                D.Pending121MUFStatusLightEnabled = nil
+                if pending == nil then return true end
+                return D:Set121MUFStatusLightEnabled(pending)
+            end)
+        end
+        return false
+    end
+    self.Pending121MUFStatusLightEnabled = nil
+
     for MF in pairs(statusLightMUFs) do
         if MF.Decursive121StatusLight then
             if enabled then MF.Decursive121StatusLight:Show() else MF.Decursive121StatusLight:Hide() end
@@ -1182,6 +1089,7 @@ function D:Set121MUFStatusLightEnabled(enabled)
         self.MicroUnitF:ResetAllPositions()
     end
     refreshMUFStatusLights()
+    return true
 end
 
 function D:Get121MUFStatus(unitOrMF)
@@ -1208,6 +1116,47 @@ if C_Timer and C_Timer.NewTicker then
     mufStatusLightTicker = C_Timer.NewTicker(.10, refreshMUFStatusLights)
 end
 
+-- The original Decursive MUF is a 20x20 click frame with a 16x16 visual
+-- square centered inside its two-pixel border (pets are 16x16 with a 12x12
+-- visual square). Every addon-owned fill must use that inner rectangle. The
+-- secure click target and outer class border remain untouched.
+local MUF_INNER_INSET = 2
+local function getMUFInnerBaseSize(MF)
+    local outer = DC.MFSIZE or 20
+    local unit = MF and MF.CurrUnit
+    if type(unit) == "string" and unit:find("pet", 1, true) then
+        outer = math.max(MUF_INNER_INSET * 2 + 1, outer - 4)
+    end
+    return math.max(1, outer - MUF_INNER_INSET * 2)
+end
+
+local function getMUFInnerAnchor(MF)
+    return MF and (MF.Texture or MF.Frame) or nil
+end
+
+local function syncOwnedOverlayToMUFInner(MF, overlay)
+    if not MF or not overlay or not D.MFContainer or not D.MicroUnitF then return end
+    if nativeConfigurationBlocked() then return false end
+
+    local slot = MF.ToPlace
+    if type(slot) ~= "number" or slot < 1 then slot = MF.ID end
+    if type(slot) ~= "number" or slot < 1 then slot = MF.FrameNum end
+    if type(slot) ~= "number" or slot < 1 then return end
+    local anchor = D.MicroUnitF.GetMUFAnchor and D.MicroUnitF:GetMUFAnchor(slot)
+    if not anchor then return end
+
+    overlay:ClearAllPoints()
+    overlay:SetPoint(
+        anchor[1],
+        (anchor[2] or 0) + MUF_INNER_INSET,
+        (anchor[3] or 0) + MUF_INNER_INSET,
+        anchor[4]
+    )
+    local size = getMUFInnerBaseSize(MF)
+    overlay:SetSize(size, size)
+    return true
+end
+
 -- ---------------------------------------------------------------------------
 -- Addon-owned out-of-range range-state layer (v10.33)
 -- ---------------------------------------------------------------------------
@@ -1218,22 +1167,23 @@ end
 -- infer secret state.
 local function syncRangeOverlayToMUF(MF)
     local overlay = MF and MF.Decursive121RangeOverlay
-    if not overlay or not D.MFContainer or not D.MicroUnitF then return end
-    local slot = MF.ToPlace
-    if type(slot) ~= "number" or slot < 1 then slot = MF.ID end
-    if type(slot) ~= "number" or slot < 1 then slot = MF.FrameNum end
-    if type(slot) ~= "number" or slot < 1 then return end
-    local anchor = D.MicroUnitF.GetMUFAnchor and D.MicroUnitF:GetMUFAnchor(slot)
-    if not anchor then return end
-    overlay:ClearAllPoints()
-    overlay:SetPoint(unpack(anchor))
-    overlay:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20)
+    if not overlay then return end
+    -- MUF anchors cannot change during combat, so retain the last safe inner
+    -- square geometry instead of issuing structural writes from the ticker.
+    return syncOwnedOverlayToMUFInner(MF, overlay)
 end
 
 local function initializeRangeOverlay(MF)
     if not MF or not MF.Frame or MF.Decursive121RangeOverlay or not D.MFContainer then return end
+    if nativeConfigurationBlocked() then
+        if D.AddDelayedFunctionCall then
+            D:AddDelayedFunctionCall("Dcr121_RangeOverlay_" .. tostring(MF.FrameNum or MF.ID or 0), initializeRangeOverlay, MF)
+        end
+        return false
+    end
     local overlay = CreateFrame("Frame", nil, D.MFContainer)
-    overlay:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20)
+    local size = getMUFInnerBaseSize(MF)
+    overlay:SetSize(size, size)
     if overlay.EnableMouse then overlay:EnableMouse(false) end
     -- Keep the addon-owned range state above the Blizzard-managed priority fill.
     -- The range frame is not part of the protected AuraContainer chain.
@@ -1270,24 +1220,40 @@ local function refreshRangeOverlays()
         if overlay then
             syncRangeOverlayToMUF(MF)
             local outOfRange = false
-            local unit = MF.CurrUnit
-            if enabled and unit and unit ~= "player" then
+            -- Range overlays are parented to the shared MUF container rather
+            -- than the secure MUF itself.  Explicitly hide inactive slots so a
+            -- stale CurrUnit cannot leave a yellow ghost after a roster/zone
+            -- rebuild.
+            local shown = MF.Shown == true
+            local unit = shown and MF.CurrUnit or nil
+            if shown and enabled and unit and unit ~= "player" then
                 -- Prefer the actual friendly cure spells Decursive has configured.
                 -- This is more useful than generic UnitInRange(), particularly in PvP,
                 -- and does not inspect protected aura data. If every configured cure
                 -- spell reports the unit out of range, show the range state.
-                local testedSpell = false
+                local relevantSpellCount = 0
+                local knownSpellCount = 0
                 local anyCureInRange = false
                 local status = D.Status
                 if D.IsSpellInRange and status and status.CuringSpells and status.CuringSpellsPrio then
                     local seen = {}
-                    for _, spellName in pairs(status.CuringSpells) do
+                    for debuffType, spellName in pairs(status.CuringSpells) do
                         local prio = spellName and status.CuringSpellsPrio[spellName]
-                        if spellName and prio and prio >= 1 and prio <= 3 and not seen[spellName] then
+                        local friendlyType = debuffType == DC.MAGIC
+                            or debuffType == DC.CURSE
+                            or debuffType == DC.DISEASE
+                            or debuffType == DC.POISON
+                            or debuffType == DC.BLEED
+                        if friendlyType and spellName and prio and prio >= 1 and prio <= 3 and not seen[spellName] then
                             seen[spellName] = true
-                            local ok, value = pcall(D.IsSpellInRange, D, spellName, unit)
-                            if ok and canaccessvalue(value) then
-                                testedSpell = true
+                            relevantSpellCount = relevantSpellCount + 1
+                            -- D.IsSpellInRange is a plain function, not a colon
+                            -- method: its signature is (spellName, unit).
+                            local ok, value = pcall(D.IsSpellInRange, spellName, unit)
+                            local rangeKnown = ok and isAccessiblePublicValue(value)
+                                and (value == true or value == false or value == 1 or value == 0)
+                            if rangeKnown then
+                                knownSpellCount = knownSpellCount + 1
                                 if value == 1 or value == true then
                                     anyCureInRange = true
                                     break
@@ -1297,16 +1263,27 @@ local function refreshRangeOverlays()
                     end
                 end
 
-                if testedSpell then
-                    outOfRange = not anyCureInRange
+                if anyCureInRange then
+                    outOfRange = false
+                elseif relevantSpellCount > 0 then
+                    -- An unknown result from even one relevant cure keeps the
+                    -- aggregate state unknown. Yellow requires every distinct
+                    -- configured friendly cure to report explicit out of range.
+                    outOfRange = knownSpellCount == relevantSpellCount
                 elseif UnitInRange then
-                    -- Fallback only when no configured cure spell could be tested.
-                    local ok, value = pcall(UnitInRange, unit)
-                    if ok and canaccessvalue(value) and value == false then outOfRange = true end
+                    -- Generic fallback only when there is no relevant configured
+                    -- friendly cure spell. It too must report an explicit check.
+                    local ok, value, checked = pcall(UnitInRange, unit)
+                    local rangeKnown = ok
+                        and isAccessiblePublicValue(value)
+                        and isAccessiblePublicValue(checked)
+                        and (checked == true or checked == 1)
+                        and (value == true or value == false or value == 1 or value == 0)
+                    if rangeKnown and (value == false or value == 0) then outOfRange = true end
                 end
             end
             MF.Decursive121OutOfRange = outOfRange and true or false
-            if outOfRange then overlay:Show() else overlay:Hide() end
+            if shown and outOfRange then overlay:Show() else overlay:Hide() end
         end
     end
     refreshMUFStatusLights()
@@ -1330,22 +1307,21 @@ end
 -- The state is intentionally short-lived and never reads protected aura data.
 local function syncLineOfSightOverlayToMUF(MF)
     local overlay = MF and MF.Decursive121LineOfSightOverlay
-    if not overlay or not D.MFContainer or not D.MicroUnitF then return end
-    local slot = MF.ToPlace
-    if type(slot) ~= "number" or slot < 1 then slot = MF.ID end
-    if type(slot) ~= "number" or slot < 1 then slot = MF.FrameNum end
-    if type(slot) ~= "number" or slot < 1 then return end
-    local anchor = D.MicroUnitF.GetMUFAnchor and D.MicroUnitF:GetMUFAnchor(slot)
-    if not anchor then return end
-    overlay:ClearAllPoints()
-    overlay:SetPoint(unpack(anchor))
-    overlay:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20)
+    if not overlay then return end
+    return syncOwnedOverlayToMUFInner(MF, overlay)
 end
 
 local function initializeLineOfSightOverlay(MF)
     if not MF or not MF.Frame or MF.Decursive121LineOfSightOverlay or not D.MFContainer then return end
+    if nativeConfigurationBlocked() then
+        if D.AddDelayedFunctionCall then
+            D:AddDelayedFunctionCall("Dcr121_LineOfSightOverlay_" .. tostring(MF.FrameNum or MF.ID or 0), initializeLineOfSightOverlay, MF)
+        end
+        return false
+    end
     local overlay = CreateFrame("Frame", nil, D.MFContainer)
-    overlay:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20)
+    local size = getMUFInnerBaseSize(MF)
+    overlay:SetSize(size, size)
     if overlay.EnableMouse then overlay:EnableMouse(false) end
     if overlay.SetFrameStrata then overlay:SetFrameStrata("HIGH") end
     if overlay.SetFrameLevel and MF.Frame.GetFrameLevel then overlay:SetFrameLevel(MF.Frame:GetFrameLevel() + 120) end
@@ -1515,7 +1491,8 @@ local function initializeProviderPriorityButton(auraButton, priority, MF, anchor
         D:Register121DispelAlertAuraButton(auraButton)
     end
 
-    if auraButton.SetSize then auraButton:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20) end
+    local innerSize = getMUFInnerBaseSize(MF)
+    if auraButton.SetSize then auraButton:SetSize(innerSize, innerSize) end
     -- Positioning happens HERE, inside Blizzard's own initializeFrame callback
     -- (invoked via securecallfunction), not afterward in plain addon code.
     -- Calling ClearAllPoints/SetAllPoints on this SAME button from OUTSIDE this
@@ -1602,7 +1579,7 @@ local function initializeNativeVerificationButton(auraButton, MF, anchor)
 end
 
 local function attachNativeVerificationCarriers(MF, Unit)
-    if not MF or not MF.Frame or InCombatLockdown() then return end
+    if not MF or not MF.Frame or nativeConfigurationBlocked() then return end
     if not D:Is121MUFStatusLightEnabled() then return end
     initializeMUFStatusLight(MF)
     local light = MF.Decursive121StatusLight
@@ -1638,7 +1615,6 @@ local function attachNativeVerificationCarriers(MF, Unit)
                 -- only after SetUnit, AddAuraSlot and the slot geometry are complete.
                 if container.SetEnabled then safe("Native verification SetEnabled", container.SetEnabled, container, true) end
                 if container.Show then safe("Native verification Show", container.Show, container) end
-                if container.UpdateAllAuras then safe("Native verification initial refresh", container.UpdateAllAuras, container) end
                 MF.Decursive121VerificationNativeContainers[p] = container
                 MF.Decursive121VerificationNativeHolders[p] = holder
             end
@@ -1685,16 +1661,14 @@ function D:Begin121MUFPostCureVerification(unitOrMF, spellName)
         MF.Decursive121StatusSuccessUntil = (GetTime and GetTime() or 0) + 3.0
         refreshOneMUFStatusLight(MF)
         local holders = MF.Decursive121VerificationNativeHolders
-        local containers = MF.Decursive121VerificationNativeContainers
         if not holders then return end
         for p = 1, 3 do
             local holder = holders[p]
             if holder then holder:SetAlpha(p == priority and 1 or 0) end
-            local container = containers and containers[p]
-            if p == priority and container and container.UpdateAllAuras then
-                safe("Native cure verification refresh", container.UpdateAllAuras, container)
-            end
         end
+        -- The managed containers receive UNIT_AURA and refresh themselves.
+        -- Do not manually dirty a protected aura container from this combat
+        -- timer; pcall cannot make a restricted call safe.
     end
     local function finishVerification()
         if not MF or MF.Decursive121VerificationGeneration ~= generation then return end
@@ -1726,34 +1700,26 @@ end
 
 local function syncCooldownOverlayToMUF(MF)
     local overlay = MF and MF.Decursive121CooldownOverlay
-    if not overlay or not D.MFContainer or not D.MicroUnitF then return end
-
-    -- Do not read geometry from the secure MUF.  Recreate its normal Decursive
-    -- layout anchor from public addon state instead.  This keeps our overlay
-    -- entirely addon-owned while still following every MUF position/size.
-    local slot = MF.ToPlace
-    if type(slot) ~= "number" or slot < 1 then slot = MF.ID end
-    if type(slot) ~= "number" or slot < 1 then slot = MF.FrameNum end
-    if type(slot) ~= "number" or slot < 1 then return end
-
-    local anchor = D.MicroUnitF.GetMUFAnchor and D.MicroUnitF:GetMUFAnchor(slot)
-    if not anchor then return end
-
-    overlay:ClearAllPoints()
-    overlay:SetPoint(unpack(anchor))
-    overlay:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20)
-
+    if not overlay then return end
+    return syncOwnedOverlayToMUFInner(MF, overlay)
 end
 
 local function initializePriorityCooldownVisuals(MF)
     if not MF or not MF.Frame or MF.Decursive121CooldownOverlay then return end
     if not D.MFContainer then return end
+    if nativeConfigurationBlocked() then
+        if D.AddDelayedFunctionCall then
+            D:AddDelayedFunctionCall("Dcr121_CooldownOverlay_" .. tostring(MF.FrameNum or MF.ID or 0), initializePriorityCooldownVisuals, MF)
+        end
+        return false
+    end
 
     -- Keep all addon-controlled cooldown widgets OUTSIDE Blizzard's managed
     -- AuraButton.  Parenting them to that button causes them to become
     -- forbidden when the protected aura state changes in combat.
     local overlay = CreateFrame("Frame", nil, D.MFContainer)
-    overlay:SetSize(MF.Frame:GetWidth() or DC.MFSIZE or 20, MF.Frame:GetHeight() or DC.MFSIZE or 20)
+    local innerSize = getMUFInnerBaseSize(MF)
+    overlay:SetSize(innerSize, innerSize)
     if overlay.EnableMouse then overlay:EnableMouse(false) end
     if overlay.SetFrameLevel and MF.Frame.GetFrameLevel then
         overlay:SetFrameLevel(MF.Frame:GetFrameLevel() + 40)
@@ -1940,11 +1906,15 @@ function D:Apply121CooldownAppearance()
                 edge:SetAlpha(borderAlpha)
                 if isPreview and profile.CooldownPriority2Border121Enabled ~= false then edge:Show() else edge:Hide() end
             end
-            local top, bottom, left, right = edges[1], edges[2], edges[3], edges[4]
-            top:ClearAllPoints(); top:SetPoint("TOPLEFT", overlay, "TOPLEFT", 0, 0); top:SetPoint("TOPRIGHT", overlay, "TOPRIGHT", 0, 0); top:SetHeight(thickness)
-            bottom:ClearAllPoints(); bottom:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", 0, 0); bottom:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT", 0, 0); bottom:SetHeight(thickness)
-            left:ClearAllPoints(); left:SetPoint("TOPLEFT", overlay, "TOPLEFT", 0, 0); left:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", 0, 0); left:SetWidth(thickness)
-            right:ClearAllPoints(); right:SetPoint("TOPRIGHT", overlay, "TOPRIGHT", 0, 0); right:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT", 0, 0); right:SetWidth(thickness)
+            -- These anchors are structural and only change when the option is
+            -- edited. Preserve the last safe geometry while combat is active.
+            if not nativeConfigurationBlocked() then
+                local top, bottom, left, right = edges[1], edges[2], edges[3], edges[4]
+                top:ClearAllPoints(); top:SetPoint("TOPLEFT", overlay, "TOPLEFT", 0, 0); top:SetPoint("TOPRIGHT", overlay, "TOPRIGHT", 0, 0); top:SetHeight(thickness)
+                bottom:ClearAllPoints(); bottom:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", 0, 0); bottom:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT", 0, 0); bottom:SetHeight(thickness)
+                left:ClearAllPoints(); left:SetPoint("TOPLEFT", overlay, "TOPLEFT", 0, 0); left:SetPoint("BOTTOMLEFT", overlay, "BOTTOMLEFT", 0, 0); left:SetWidth(thickness)
+                right:ClearAllPoints(); right:SetPoint("TOPRIGHT", overlay, "TOPRIGHT", 0, 0); right:SetPoint("BOTTOMRIGHT", overlay, "BOTTOMRIGHT", 0, 0); right:SetWidth(thickness)
+            end
         end
     end
     updatePriorityBorderPulseDriver()
@@ -2043,7 +2013,9 @@ local function resolveConfiguredDispelSpellIDByPriority(priority)
 end
 
 local function isFriendlyConfiguredDispelSpellID(spellID)
-    if not spellID or not D.Status or not D.Status.CuringSpells or not D.Status.FoundSpells then
+    if not isAccessiblePublicValue(spellID) or type(spellID) ~= "number"
+        or not D.Status or not D.Status.CuringSpells or not D.Status.FoundSpells
+    then
         return false
     end
 
@@ -2060,8 +2032,17 @@ local function isFriendlyConfiguredDispelSpellID(spellID)
     return false
 end
 
+local dispelResolverRefreshPending = false
+
 local function resetTrackedDispelSpell()
-    updateManagedAnyPriorityCurve()
+    -- Rebuilding the shared ColorCurve and managed AuraSlot filters is
+    -- configuration work, not cast-result work. Keep it outside combat and
+    -- coalesce any spec/settings request until PLAYER_REGEN_ENABLED.
+    if nativeConfigurationBlocked() then
+        dispelResolverRefreshPending = true
+        return false
+    end
+    dispelResolverRefreshPending = false
     -- A spec/talent change can alter what HARMFUL|RAID considers dispellable.
     -- Re-seed silently so that capability changes do not create a false alert.
     if type(D.Refresh121MUFStateSoundBaseline) == "function" then
@@ -2076,7 +2057,7 @@ local function resetTrackedDispelSpell()
     -- Do not force-update live Blizzard-managed display AuraButtons here.
     -- Priority ColorCurves remain Blizzard-managed. Priority AuraSlot filters
     -- are configuration-only and refreshed out of combat through their public API.
-    if not InCombatLockdown() and D.MicroUnitF and D.MicroUnitF.ExistingPerUNIT then
+    if not nativeConfigurationBlocked() and D.MicroUnitF and D.MicroUnitF.ExistingPerUNIT then
         for _, MF in pairs(D.MicroUnitF.ExistingPerUNIT) do
             -- Ensure all provider-specific parity carriers that are now relevant
             -- after a spec/talent/custom-spell change exist before combat.
@@ -2099,7 +2080,7 @@ local function resetTrackedDispelSpell()
                         local p = priority
                         key = "zhaohu-native-priority-" .. tostring(p)
                         local options = {
-                            initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, MF.Frame) end,
+                            initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, getMUFInnerAnchor(MF)) end,
                             candidateFilters = { includeDispelTypes = include },
                         }
                         local ok, slotButton = safe("Native add detection priority after reconfigure", detector.AddAuraSlot, detector, key,
@@ -2109,10 +2090,10 @@ local function resetTrackedDispelSpell()
                         end
                     end
                 end
-                if detector.UpdateAllAuras then safe("Native detector refresh after reconfigure", detector.UpdateAllAuras, detector) end
             end
         end
     end
+    return true
 end
 
 local function refreshManagedAfflictedCooldownVisuals()
@@ -2151,14 +2132,18 @@ finishPriorityCooldown = function(priority, generation)
 end
 
 local function armPriorityCooldown(priority, spellID, targetMF)
-    if not spellID or not C_Spell or not C_Spell.GetSpellCooldownDuration then return false end
+    if not isAccessiblePublicValue(spellID) or type(spellID) ~= "number"
+        or not C_Spell or not C_Spell.GetSpellCooldownDuration
+    then
+        return false
+    end
 
-    local durationObject = C_Spell.GetSpellCooldownDuration(spellID, true)
-    if not durationObject then return false end
+    local durationOK, durationObject = pcall(C_Spell.GetSpellCooldownDuration, spellID, true)
+    if not durationOK or not durationObject then return false end
 
     if durationObject.GetRemainingDuration then
         local ok, remaining = pcall(durationObject.GetRemainingDuration, durationObject)
-        if ok and remaining ~= nil and not (issecretvalue and issecretvalue(remaining)) and type(remaining) == "number" and remaining <= 0.05 then
+        if ok and isAccessiblePublicValue(remaining) and type(remaining) == "number" and remaining <= 0.05 then
             return false
         end
     end
@@ -2256,8 +2241,7 @@ end
 local function getReadableRemainingDuration(durationObject)
     if not durationObject or not durationObject.GetRemainingDuration then return nil end
     local ok, remaining = pcall(durationObject.GetRemainingDuration, durationObject)
-    if not ok or remaining == nil then return nil end
-    if issecretvalue and issecretvalue(remaining) then return nil end
+    if not ok or not isAccessiblePublicValue(remaining) or remaining == nil then return nil end
     if type(remaining) ~= "number" then return nil end
     return remaining
 end
@@ -2273,10 +2257,13 @@ local function reconcilePriorityCooldown(priority)
     end
 
     if C_Spell and C_Spell.GetSpellCharges then
-        local chargeInfo = C_Spell.GetSpellCharges(spellID)
-        if chargeInfo and chargeInfo.currentCharges ~= nil then
-            local secret = issecretvalue and issecretvalue(chargeInfo.currentCharges)
-            if not secret and chargeInfo.currentCharges > 0 then
+        local ok, chargeInfo = pcall(C_Spell.GetSpellCharges, spellID)
+        local charges
+        if ok and isAccessiblePublicValue(chargeInfo) and type(chargeInfo) == "table" then
+            charges = chargeInfo.currentCharges
+        end
+        if isAccessiblePublicValue(charges) and type(charges) == "number" then
+            if charges > 0 then
                 finishPriorityCooldown(priority, cooldownGeneration[priority])
                 return
             end
@@ -2284,8 +2271,8 @@ local function reconcilePriorityCooldown(priority)
     end
 
     if not C_Spell or not C_Spell.GetSpellCooldownDuration then return end
-    local durationObject = C_Spell.GetSpellCooldownDuration(spellID, true)
-    if not durationObject then
+    local durationOK, durationObject = pcall(C_Spell.GetSpellCooldownDuration, spellID, true)
+    if not durationOK or not durationObject then
         finishPriorityCooldown(priority, cooldownGeneration[priority])
         return
     end
@@ -2349,6 +2336,7 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
         -- such as line of sight that may not reach the old CLEU result path.
         if lastClickedMUF and lastClickedPriority and (GetTime() - (lastClickedAt or 0)) <= 1.0 then
             local msg = castGUID
+            if not isAccessiblePublicValue(msg) or not isAccessiblePublicValue(unit) then return end
             local isRangeError = (SPELL_FAILED_OUT_OF_RANGE and msg == SPELL_FAILED_OUT_OF_RANGE)
                 or (ERR_OUT_OF_RANGE and msg == ERR_OUT_OF_RANGE)
             if isRangeError then
@@ -2394,7 +2382,7 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
         -- design and was previously invisible to this whole tracker. Logged
         -- here specifically to tell "silently blocked by GCD" apart from
         -- "genuinely nothing happened" when chasing the multi-click report.
-        if unit == "player" and isFriendlyConfiguredDispelSpellID(spellID)
+        if isAccessiblePublicValue(unit) and unit == "player" and isFriendlyConfiguredDispelSpellID(spellID)
             and lastClickedMUF and (GetTime() - (lastClickedAt or 0)) <= 2.0 then
             clickDiagGeneration = clickDiagGeneration + 1
             if D.AlertDiag then D:AlertDiag("CLICK outcome: FAILED_QUIET (likely GCD or similar routine block)") end
@@ -2403,7 +2391,7 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
     end
 
     if event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
-        if unit ~= "player" then return end
+        if not isAccessiblePublicValue(unit) or unit ~= "player" then return end
         if not isFriendlyConfiguredDispelSpellID(spellID) then return end
         if lastClickedMUF and (lastClickedMUF.Decursive121SuppressFailureUntil or 0) > GetTime() then
             return
@@ -2422,9 +2410,8 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
     end
 
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
-        if unit ~= "player" then return end
+        if not isAccessiblePublicValue(unit) or unit ~= "player" then return end
         if isFriendlyConfiguredDispelSpellID(spellID) then
-            resetTrackedDispelSpell()
             trackedDispelSpellID = trackedDispelSpellID or spellID
 
             local priority
@@ -2516,6 +2503,8 @@ end
 -- loading on a future Retail build.
 cooldownEvents:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 cooldownEvents:RegisterEvent("SPELLS_CHANGED")
+cooldownEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
+pcall(cooldownEvents.RegisterEvent, cooldownEvents, "ADDON_RESTRICTION_STATE_CHANGED")
 -- Role assignment commonly lands just after a player spec swap. Use it as
 -- a second nudge for the bounded follower-roster stabilization window.
 pcall(cooldownEvents.RegisterEvent, cooldownEvents, "PLAYER_ROLES_ASSIGNED")
@@ -2524,6 +2513,25 @@ pcall(cooldownEvents.RegisterEvent, cooldownEvents, "TRAIT_CONFIG_UPDATED")
 
 local originalCooldownEventScript = cooldownEvents:GetScript("OnEvent")
 cooldownEvents:SetScript("OnEvent", function(frame, event, ...)
+    if event == "ADDON_RESTRICTION_STATE_CHANGED" then
+        -- The activating event is delivered before enforcement begins and a
+        -- synchronous state query can still say Inactive. Reconcile after the
+        -- transition completes; the lifecycle guard then sees the final state.
+        local function reconcileAfterRestrictionTransition()
+            if dispelResolverRefreshPending then resetTrackedDispelSpell() end
+            refreshCooldownOverlay()
+        end
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0, reconcileAfterRestrictionTransition)
+        else
+            dispelResolverRefreshPending = true
+        end
+        return
+    end
+    if event == "PLAYER_REGEN_ENABLED" then
+        if dispelResolverRefreshPending then resetTrackedDispelSpell() end
+        return originalCooldownEventScript(frame, event, ...)
+    end
     if event == "PLAYER_ENTERING_WORLD"
         or event == "ZONE_CHANGED_NEW_AREA"
         or event == "PVP_MATCH_ACTIVE"
@@ -2571,6 +2579,12 @@ if originalReConfigure121 then
     D.ReConfigure = function(self, ...)
         local ret = originalReConfigure121(self, ...)
         scheduleDispelResolverRefresh()
+        -- CuringSpells and UnitFilteringTypes are authoritative only after the
+        -- original reconfiguration returns. Reconcile exact-ID sounds here so
+        -- talent/spec/cure-option changes cannot leave stale registrations.
+        if type(self.RefreshProtectedAuraSounds) == "function" then
+            self:RefreshProtectedAuraSounds("cure capabilities reconfigured")
+        end
         return ret
     end
 end
@@ -2583,15 +2597,18 @@ function D:Get121CooldownDispelSpell()
 end
 
 function D:Get121CompatibilityStatusText()
-    local _, className = UnitClass and UnitClass("player")
-    className = className or "Unknown"
+    local className = "Unknown"
+    if UnitClass then
+        local ok, _, value = pcall(UnitClass, "player")
+        if ok and isAccessiblePublicValue(value) and type(value) == "string" then className = value end
+    end
 
     local specName = "Unknown"
     if GetSpecialization and GetSpecializationInfo then
         local spec = GetSpecialization()
-        if spec then
-            local _, n = GetSpecializationInfo(spec)
-            if n then specName = n end
+        if isAccessiblePublicValue(spec) and type(spec) == "number" then
+            local ok, _, n = pcall(GetSpecializationInfo, spec)
+            if ok and isAccessiblePublicValue(n) and type(n) == "string" then specName = n end
         end
     end
 
@@ -2681,7 +2698,7 @@ function D:Get121MUFTestChoices()
     local list = getShownCooldownMUFs()
     for i, MF in ipairs(list) do
         local unit = MF.CurrUnit or "unit"
-        local name = MF.UnitName
+        local name = D.UnitName and D:UnitName(unit) or nil
         if name and name ~= "" then
             values[i] = "Square " .. tostring(i) .. " - " .. tostring(name)
         else
@@ -2842,9 +2859,6 @@ local function setPriorityGateActive(MF, priority, active, durationObject)
         local holder = MF.Decursive121PriorityGateHolders and MF.Decursive121PriorityGateHolders[priority]
         if holder and holder.SetAlpha then
             holder:SetAlpha(shouldActivate and 1 or 0)
-            if shouldActivate and container.UpdateAllAuras then
-                safe("Native shared cooldown refresh", container.UpdateAllAuras, container)
-            end
             applied = true
         end
         if applied then MF.Decursive121PriorityGateAppliedActive[priority] = shouldActivate end
@@ -2858,7 +2872,6 @@ local function setPriorityGateActive(MF, priority, active, durationObject)
             local showNumbers = not (D.profile and D.profile.CooldownOverlay121Numbers == false)
             if showNumbers then
                 safe("Priority cooldown text enable", binding.SetEnabled, binding, true)
-                if binding.UpdateFontString then safe("Priority cooldown text update", binding.UpdateFontString, binding) end
             else
                 safe("Priority cooldown text disable", binding.SetEnabled, binding, false)
             end
@@ -2889,6 +2902,7 @@ end
 
 attachPriorityCooldownGate = function(MF, Unit, priority)
     if not MF or not MF.Frame or not D.MFContainer then return end
+    if nativeConfigurationBlocked() then return false end
     MF.Decursive121PriorityGateContainers = MF.Decursive121PriorityGateContainers or {}
     MF.Decursive121PriorityGateHolders = MF.Decursive121PriorityGateHolders or {}
     MF.Decursive121PriorityGateFrames = MF.Decursive121PriorityGateFrames or {}
@@ -2898,7 +2912,8 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
     local function initializeGateAuraButton(auraButton, anchor)
         -- Creation window only. Nothing on this protected aura button or its
         -- child regions is mutated directly after initialization.
-        if auraButton.SetSize then auraButton:SetSize(DC.MFSIZE or 20, DC.MFSIZE or 20) end
+        local innerSize = getMUFInnerBaseSize(MF)
+        if auraButton.SetSize then auraButton:SetSize(innerSize, innerSize) end
         -- Positioning must happen inside initializeFrame rather than afterward.
         if anchor then
             if auraButton.ClearAllPoints then
@@ -2931,7 +2946,7 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
             text:SetJustifyH("CENTER")
             text:SetTextColor(1, 1, 1, 1)
             local font, _, flags = text:GetFont()
-            if font then text:SetFont(font, math.max(10, math.floor((DC.MFSIZE or 20) * .55)), flags or "OUTLINE") end
+            if font then text:SetFont(font, math.max(8, math.floor(innerSize * .55)), flags or "OUTLINE") end
 
             local binding = _G.C_DurationUtil.CreateDurationTextBinding()
             local formatter = getSharedCooldownFormatter()
@@ -2950,7 +2965,7 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
     -- the alpha of an addon-owned holder when the public cleanse spell
     -- enters/leaves cooldown.
     local holder = CreateFrame("Frame", nil, MF.Frame)
-    holder:SetAllPoints(MF.Frame)
+    holder:SetAllPoints(getMUFInnerAnchor(MF) or MF.Frame)
     if holder.EnableMouse then holder:EnableMouse(false) end
     if holder.SetFrameLevel and MF.Frame.GetFrameLevel then holder:SetFrameLevel(MF.Frame:GetFrameLevel() + 30 + priority) end
     holder:SetAlpha(0)
@@ -2986,13 +3001,12 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
     end
     MF.Decursive121PriorityGateFrames[priority] = gateFrame
     if container.SetEnabled then safe("Priority AuraContainer SetEnabled", container.SetEnabled, container, true) end
-    if container.UpdateAllAuras then safe("Priority AuraContainer initial refresh", container.UpdateAllAuras, container) end
 end
 
 refreshPriorityGateFilters = function(MF)
     if not MF or not MF.Decursive121PriorityGateContainers then return end
     for priority = 1, 3 do
-        if not InCombatLockdown() then
+        if not nativeConfigurationBlocked() then
             local nativeGate = MF.Decursive121PriorityGateContainers and MF.Decursive121PriorityGateContainers[priority]
             if nativeGate and nativeGate.SetAuraSlotCandidateFilters then
                 safe("Native refresh shared cooldown filter", nativeGate.SetAuraSlotCandidateFilters, nativeGate,
@@ -3050,18 +3064,39 @@ local function attachClickTracking(MF)
 end
 
 local function attachNativeManagedAura(MF, Unit)
+    if not MF or not MF.Frame or not D.MFContainer then return end
+    if nativeConfigurationBlocked() then
+        pendingNativeAttach[MF] = Unit or MF.CurrUnit
+        return
+    end
     if MF.ManagedAuraContainer then
+        local resolvedUnit = Unit or MF.CurrUnit
+        if MF.ManagedAuraContainer.SetUnit and resolvedUnit then
+            safe("Native detector SetUnit deferred update", MF.ManagedAuraContainer.SetUnit, MF.ManagedAuraContainer, resolvedUnit)
+        end
+        if MF.Decursive121PriorityGateContainers then
+            for priority = 1, 3 do
+                local gate = MF.Decursive121PriorityGateContainers[priority]
+                if gate and gate.SetUnit and resolvedUnit then
+                    safe("Priority AuraContainer deferred SetUnit", gate.SetUnit, gate, resolvedUnit)
+                end
+            end
+        end
+        if MF.Decursive121VerificationNativeContainers then
+            for priority = 1, 3 do
+                local verifier = MF.Decursive121VerificationNativeContainers[priority]
+                if verifier and verifier.SetUnit and resolvedUnit then
+                    safe("Native verification deferred SetUnit", verifier.SetUnit, verifier, resolvedUnit)
+                end
+            end
+        end
         attachPriorityCooldownGate(MF, Unit, 1)
         attachPriorityCooldownGate(MF, Unit, 2)
         attachPriorityCooldownGate(MF, Unit, 3)
         attachNativeVerificationCarriers(MF, Unit or MF.CurrUnit)
         attachCooldownOverlay(MF)
         attachClickTracking(MF)
-        return
-    end
-    if not D.MFContainer then return end
-    if InCombatLockdown() then
-        pendingNativeAttach[MF] = Unit or MF.CurrUnit
+        pendingNativeAttach[MF] = nil
         return
     end
 
@@ -3085,7 +3120,7 @@ local function attachNativeManagedAura(MF, Unit)
                 local p = priority
                 local key = "zhaohu-native-priority-" .. tostring(p)
                 local options = {
-                    initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, MF.Frame) end,
+                    initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, getMUFInnerAnchor(MF)) end,
                     candidateFilters = { includeDispelTypes = include },
                 }
                 local slotOK = safe("Native detector AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
@@ -3100,9 +3135,6 @@ local function attachNativeManagedAura(MF, Unit)
     -- SetEnabled LAST, after the unit, slot declarations and slot anchors exist.
     if container.SetEnabled then safe("Native detector SetEnabled", container.SetEnabled, container, true) end
     if container.Show then safe("Native detector Show", container.Show, container) end
-    -- Force one dirty-mark after initialization so an aura that was already on
-    -- the unit when the MUF was created is rendered immediately.
-    if container.UpdateAllAuras then safe("Native detector initial refresh", container.UpdateAllAuras, container) end
 
     attachPriorityCooldownGate(MF, Unit, 1)
     attachPriorityCooldownGate(MF, Unit, 2)
@@ -3119,9 +3151,17 @@ end
 
 local providerRetryFrame = CreateFrame("Frame")
 providerRetryFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-providerRetryFrame:SetScript("OnEvent", function()
-    for MF, unit in pairs(pendingNativeAttach) do
-        if MF and MF.Frame then attachNativeManagedAura(MF, MF.CurrUnit or unit) end
+pcall(providerRetryFrame.RegisterEvent, providerRetryFrame, "ADDON_RESTRICTION_STATE_CHANGED")
+providerRetryFrame:SetScript("OnEvent", function(_, event)
+    local function retryPendingNativeAttach()
+        for MF, unit in pairs(pendingNativeAttach) do
+            if MF and MF.Frame then attachNativeManagedAura(MF, MF.CurrUnit or unit) end
+        end
+    end
+    if event == "ADDON_RESTRICTION_STATE_CHANGED" and C_Timer and C_Timer.After then
+        C_Timer.After(0, retryPendingNativeAttach)
+    else
+        retryPendingNativeAttach()
     end
 end)
 
@@ -3142,22 +3182,16 @@ end
 local originalUpdateAttributes = MicroUnitF.prototype.UpdateAttributes
 MicroUnitF.prototype.UpdateAttributes = function(self, Unit, DoNotDelay)
     local ret = originalUpdateAttributes(self, Unit, DoNotDelay)
-    if not InCombatLockdown() then
-        local resolvedUnit = self.CurrUnit or Unit
+    local resolvedUnit = self.CurrUnit or Unit
+    if not nativeConfigurationBlocked() then
         D:Refresh121MUFStateSoundUnit(resolvedUnit, true)
         if self.ManagedAuraContainer and self.ManagedAuraContainer.SetUnit then
             safe("AuraContainer SetUnit update", self.ManagedAuraContainer.SetUnit, self.ManagedAuraContainer, resolvedUnit)
-            if self.ManagedAuraContainer.UpdateAllAuras then
-                safe("AuraContainer retarget refresh", self.ManagedAuraContainer.UpdateAllAuras, self.ManagedAuraContainer)
-            end
             if self.Decursive121PriorityGateContainers then
                 for priority = 1, 3 do
                     local gateContainer = self.Decursive121PriorityGateContainers[priority]
                     if gateContainer and gateContainer.SetUnit then
                         safe("Priority AuraContainer SetUnit update", gateContainer.SetUnit, gateContainer, resolvedUnit)
-                        if gateContainer.UpdateAllAuras then
-                            safe("Priority AuraContainer retarget refresh", gateContainer.UpdateAllAuras, gateContainer)
-                        end
                     end
                 end
             end
@@ -3166,9 +3200,6 @@ MicroUnitF.prototype.UpdateAttributes = function(self, Unit, DoNotDelay)
                     local verifyContainer = self.Decursive121VerificationNativeContainers[priority]
                     if verifyContainer and verifyContainer.SetUnit then
                         safe("Native verification AuraContainer SetUnit update", verifyContainer.SetUnit, verifyContainer, resolvedUnit)
-                        if verifyContainer.UpdateAllAuras then
-                            safe("Native verification AuraContainer retarget refresh", verifyContainer.UpdateAllAuras, verifyContainer)
-                        end
                     end
                 end
             end
@@ -3176,6 +3207,8 @@ MicroUnitF.prototype.UpdateAttributes = function(self, Unit, DoNotDelay)
                 D:Refresh121IdentityTooltipUnit(self)
             end
         end
+    elseif self and self.Frame then
+        pendingNativeAttach[self] = resolvedUnit
     end
     return ret
 end
@@ -3208,6 +3241,48 @@ end
 -- destroying secure frames. Once the roster is stable, the normal Decursive
 -- display/update pipeline repopulates the grid and we retarget all managed 12.1
 -- aura providers to the final unit tokens.
+T._MUFStartupDiag = T._MUFStartupDiag or {}
+local MUF_STARTUP_DIAG = T._MUFStartupDiag
+
+local function recordMUFStartupState(reason, phase)
+    local muf = D.MicroUnitF
+    local status = D.Status
+    local actualShown = 0
+    local existingCount = 0
+    if muf and type(muf.ExistingPerUNIT) == "table" then
+        for _, MF in pairs(muf.ExistingPerUNIT) do
+            existingCount = existingCount + 1
+            if MF and MF.Frame and MF.Frame.IsShown then
+                local ok, shown = pcall(MF.Frame.IsShown, MF.Frame)
+                if ok and isAccessiblePublicValue(shown) and shown == true then
+                    actualShown = actualShown + 1
+                end
+            end
+        end
+    end
+
+    local containerShown = false
+    if D.MFContainer and D.MFContainer.IsShown then
+        local ok, shown = pcall(D.MFContainer.IsShown, D.MFContainer)
+        containerShown = ok and isAccessiblePublicValue(shown) and shown == true
+    end
+
+    MUF_STARTUP_DIAG.reason = type(reason) == "string" and reason or "unknown"
+    MUF_STARTUP_DIAG.phase = phase or "unknown"
+    MUF_STARTUP_DIAG.time = GetTime and GetTime() or 0
+    MUF_STARTUP_DIAG.initialized = D.DcrFullyInitialized == true
+    MUF_STARTUP_DIAG.combat = nativeConfigurationBlocked()
+    MUF_STARTUP_DIAG.showSetting = D.profile and D.profile.ShowDebuffsFrame == true or false
+    MUF_STARTUP_DIAG.autoHideMode = D.profile and tonumber(D.profile.AutoHideMUFs) or 0
+    MUF_STARTUP_DIAG.containerShown = containerShown
+    MUF_STARTUP_DIAG.groupInvalid = D.Groups_datas_are_invalid == true
+    MUF_STARTUP_DIAG.unitNum = status and tonumber(status.UnitNum) or 0
+    MUF_STARTUP_DIAG.unitShown = muf and tonumber(muf.UnitShown) or 0
+    MUF_STARTUP_DIAG.actualShown = actualShown
+    MUF_STARTUP_DIAG.created = muf and tonumber(muf.Number) or 0
+    MUF_STARTUP_DIAG.existing = existingCount
+end
+
 local ZONE_REINIT_GENERATION = 0
 local ZONE_REINIT_DELAYS = { 0.15, 0.50, 1.00, 2.00, 4.00, 7.00 }
 
@@ -3236,8 +3311,13 @@ local function resetMUFsForZoneReinit()
 end
 
 local function rebuildMUFsAfterZone(reason, updatePasses)
-    if not D.DcrFullyInitialized then return false end
-    if InCombatLockdown() then
+    recordMUFStartupState(reason, "attempt")
+    if not D.DcrFullyInitialized then
+        recordMUFStartupState(reason, "blocked: initialization incomplete")
+        return false
+    end
+    if nativeConfigurationBlocked() then
+        recordMUFStartupState(reason, "blocked: combat lockdown")
         if D.AddDelayedFunctionCall then
             D:AddDelayedFunctionCall("Dcr_PostZoneFullReinit", rebuildMUFsAfterZone, reason, updatePasses)
         end
@@ -3246,6 +3326,19 @@ local function rebuildMUFsAfterZone(reason, updatePasses)
 
     D.Groups_datas_are_invalid = true
     if D.GetUnitArray then D:GetUnitArray() end
+
+    -- ReinitializeDecursiveAfterZone replaces GroupChanged() for full world
+    -- transitions, so it must also own GroupChanged's context-size and
+    -- auto-hide reconciliation.
+    -- At cold login Blizzard can briefly report a solo roster even when the
+    -- character is grouped; an early pass may therefore auto-hide the MUFs.
+    -- Rechecking on every bounded settling pass restores them as soon as the
+    -- real party snapshot is public instead of leaving ShowDebuffsFrame false
+    -- until /reload.
+    if D.MicroUnitF and D.MicroUnitF.ApplyContextMUFScale then
+        D.MicroUnitF:ApplyContextMUFScale()
+    end
+    if D.AutoHideShowMUFs then D:AutoHideShowMUFs() end
 
     -- Let the normal updater create any MUFs that did not exist before this zone.
     -- Running several passes here avoids waiting for the periodic updater to
@@ -3272,9 +3365,6 @@ local function rebuildMUFsAfterZone(reason, updatePasses)
                     if MF.ManagedAuraContainer.SetUnit then
                         safe("Post-zone native SetUnit", MF.ManagedAuraContainer.SetUnit, MF.ManagedAuraContainer, resolvedUnit)
                     end
-                    if MF.ManagedAuraContainer.UpdateAllAuras then
-                        safe("Post-zone native UpdateAllAuras", MF.ManagedAuraContainer.UpdateAllAuras, MF.ManagedAuraContainer)
-                    end
                 else
                     attachNativeManagedAura(MF, resolvedUnit)
                 end
@@ -3287,6 +3377,7 @@ local function rebuildMUFsAfterZone(reason, updatePasses)
     end
     if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds(reason or "post-zone full reinit") end
     if T and T._AuraSoundDiag then T._AuraSoundDiag.lastZoneReinit = reason or "post-zone full reinit" end
+    recordMUFStartupState(reason, "complete")
     return true
 end
 
@@ -3294,11 +3385,19 @@ function D:ReinitializeDecursiveAfterZone(reason)
     ZONE_REINIT_GENERATION = ZONE_REINIT_GENERATION + 1
     local generation = ZONE_REINIT_GENERATION
 
-    if not InCombatLockdown() then resetMUFsForZoneReinit() end
+    MUF_STARTUP_DIAG.generation = generation
+    MUF_STARTUP_DIAG.scheduledReason = type(reason) == "string" and reason or "zone"
+    MUF_STARTUP_DIAG.scheduledAt = GetTime and GetTime() or 0
+    MUF_STARTUP_DIAG.pass = 0
+    recordMUFStartupState(reason, "scheduled")
+
+    if not nativeConfigurationBlocked() then resetMUFsForZoneReinit() end
     self.Groups_datas_are_invalid = true
 
-    local function pass(delay)
+    local function pass(delay, passIndex)
         if generation ~= ZONE_REINIT_GENERATION or not D.DcrFullyInitialized then return end
+        MUF_STARTUP_DIAG.pass = passIndex or 0
+        MUF_STARTUP_DIAG.passDelay = delay
         D.Groups_datas_are_invalid = true
         rebuildMUFsAfterZone((reason or "zone") .. " @" .. tostring(delay))
     end
@@ -3306,10 +3405,11 @@ function D:ReinitializeDecursiveAfterZone(reason)
     if C_Timer and C_Timer.After then
         for i = 1, #ZONE_REINIT_DELAYS do
             local delay = ZONE_REINIT_DELAYS[i]
-            C_Timer.After(delay, function() pass(delay) end)
+            local passIndex = i
+            C_Timer.After(delay, function() pass(delay, passIndex) end)
         end
     else
-        pass(0)
+        pass(0, 1)
     end
     return true
 end
@@ -3472,6 +3572,19 @@ local function styleAlertFontString(text, applyColor)
     end
 end
 
+-- AuraButton children may remain forbidden while aura secrecy is active even
+-- outside ordinary combat lockdown (for example during an active challenge or
+-- encounter). Query Blizzard's access boundary before touching a registered
+-- native label; pcall alone cannot prevent ADDON_ACTION_BLOCKED.
+local function canAccessNativeAuraDisplayObject(object)
+    if not object then return false end
+    if object.CanBeAccessedInContext then
+        local ok, accessible = pcall(object.CanBeAccessedInContext, object)
+        return ok and isAccessiblePublicValue(accessible) and accessible == true
+    end
+    return not nativeAuraDisplayMutationBlocked()
+end
+
 -- A native label is a descendant of a small/scaled MUF AuraSlot but is anchored
 -- to the screen-wide alert anchor. Ignore the MUF scale, then compensate with
 -- UIParent's effective scale so a configured 58px label has the same apparent
@@ -3489,9 +3602,9 @@ function D:Apply121AlertWarningStyle()
     -- FontStrings registered with CustomAuraButton become protected display
     -- elements. Restyle them only out of combat; their timed color is owned by
     -- the native DurationTextBinding curve rather than SetTextColor().
-    if InCombatLockdown and InCombatLockdown() then
+    if nativeAuraDisplayMutationBlocked() then
         dispelAlertStylePending = true
-        return
+        return false
     end
     self:Refresh121AlertFontObject()
     local size = (D.profile and D.profile.Alert121FontSize) or DEFAULT_ALERT_FONT_SIZE
@@ -3501,12 +3614,20 @@ function D:Apply121AlertWarningStyle()
     local styleFailed = false
     for _, layer in pairs(dispelAlertLayers) do
         if layer and layer.Text then
-            local ok = pcall(styleAlertFontString, layer.Text)
-            if not ok then styleFailed = true end
+            if canAccessNativeAuraDisplayObject(layer.Text) then
+                local ok = pcall(styleAlertFontString, layer.Text)
+                if not ok then styleFailed = true end
+            else
+                styleFailed = true
+            end
         end
         if layer and layer.TimedText then
-            local ok = pcall(styleAlertFontString, layer.TimedText, false)
-            if not ok then styleFailed = true end
+            if canAccessNativeAuraDisplayObject(layer.TimedText) then
+                local ok = pcall(styleAlertFontString, layer.TimedText, false)
+                if not ok then styleFailed = true end
+            else
+                styleFailed = true
+            end
         end
     end
     if D.Refresh121DispelAlertWarning then D:Refresh121DispelAlertWarning() end
@@ -3556,6 +3677,7 @@ end
 local dispelTimedPulseIgnoreUntil = 0
 
 local function normalizeSoundPath(path)
+    if not isAccessiblePublicValue(path) then return "" end
     return tostring(path or ""):lower():gsub("/", "\\")
 end
 
@@ -3569,14 +3691,16 @@ function D:Refresh121DispelAlertSoundCache()
     T._DispelAlertSoundBase = base:lower()
     if C_FileAssets and C_FileAssets.GetFileInfo then
         local ok, info = pcall(C_FileAssets.GetFileInfo, path)
-        if ok and info and type(info.fileID) == "number" then
+        if ok and isAccessiblePublicValue(info) and type(info) == "table"
+            and isAccessiblePublicValue(info.fileID) and type(info.fileID) == "number"
+        then
             T._DispelAlertSoundFileIDs[info.fileID] = true
         end
     end
 end
 
 local function soundMatchesDispelAlert(sound)
-    if sound == nil then return false end
+    if not isAccessiblePublicValue(sound) or sound == nil then return false end
     if type(sound) == "number" then
         return T._DispelAlertSoundFileIDs and T._DispelAlertSoundFileIDs[sound] and true or false
     end
@@ -3616,7 +3740,8 @@ local function pulseTimedDispelAlert(reason)
     dispelTimedPulseIgnoreUntil = now + dur
     dispelAlertPreviewUntil = now + dur
     if D.Show121AlertWarning then D:Show121AlertWarning("DISPEL", dur) end
-    if D.AlertDiag then D:AlertDiag("DISPEL timed pulse (%s)", tostring(reason or "unknown")) end
+    local safeReason = isAccessiblePublicValue(reason) and reason ~= nil and tostring(reason) or "unknown"
+    if D.AlertDiag then D:AlertDiag("DISPEL timed pulse (%s)", safeReason) end
     return true
 end
 
@@ -3762,9 +3887,23 @@ function D:Pulse121TimedDispelAlert(reason)
 end
 
 function D:Refresh121DispelAlertWarning()
-    if InCombatLockdown and InCombatLockdown() then
+    if nativeAuraDisplayMutationBlocked() then
         dispelAlertStylePending = true
         return false
+    end
+
+    -- A challenge/encounter can keep AuraButton descendants forbidden even
+    -- after ordinary combat lockdown ends. Do not mutate the shared curve or
+    -- a registered FontString until every live native label reports that it is
+    -- accessible in the current context.
+    for btn in pairs(dispelAlertWatchButtons) do
+        local layer = btn and dispelAlertLayers[btn]
+        if layer and ((layer.Text and not canAccessNativeAuraDisplayObject(layer.Text))
+            or (layer.TimedText and not canAccessNativeAuraDisplayObject(layer.TimedText)))
+        then
+            dispelAlertStylePending = true
+            return false
+        end
     end
 
     local enabled = isDispelAlertEnabled()
@@ -3778,9 +3917,13 @@ function D:Refresh121DispelAlertWarning()
             local usePersistent = enabled and (mode == "UNTIL_CLEARED" or not layer.TimedConfigured)
             local alpha = usePersistent and 1 or 0
             if layer.PersistentAlpha ~= alpha then
-                local ok = pcall(layer.Text.SetAlpha, layer.Text, alpha)
-                if ok then layer.PersistentAlpha = alpha end
-                if not ok then refreshComplete = false end
+                if canAccessNativeAuraDisplayObject(layer.Text) then
+                    local ok = pcall(layer.Text.SetAlpha, layer.Text, alpha)
+                    if ok then layer.PersistentAlpha = alpha end
+                    if not ok then refreshComplete = false end
+                else
+                    refreshComplete = false
+                end
             end
         end
     end
@@ -3790,12 +3933,21 @@ end
 
 local dispelAlertRefreshFrame = CreateFrame("Frame")
 dispelAlertRefreshFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-dispelAlertRefreshFrame:SetScript("OnEvent", function()
+dispelAlertRefreshFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+pcall(dispelAlertRefreshFrame.RegisterEvent, dispelAlertRefreshFrame, "ADDON_RESTRICTION_STATE_CHANGED")
+dispelAlertRefreshFrame:SetScript("OnEvent", function(_, event)
     if not dispelAlertStylePending then return end
-    if D.Apply121AlertWarningStyle then
-        D:Apply121AlertWarningStyle()
-    elseif D.Refresh121DispelAlertWarning then
-        D:Refresh121DispelAlertWarning()
+    local function refreshAfterRestrictionTransition()
+        if D.Apply121AlertWarningStyle then
+            D:Apply121AlertWarningStyle()
+        elseif D.Refresh121DispelAlertWarning then
+            D:Refresh121DispelAlertWarning()
+        end
+    end
+    if event == "ADDON_RESTRICTION_STATE_CHANGED" and C_Timer and C_Timer.After then
+        C_Timer.After(0, refreshAfterRestrictionTransition)
+    else
+        refreshAfterRestrictionTransition()
     end
 end)
 
@@ -3806,7 +3958,7 @@ function D:Hide121AlertWarning()
 end
 
 function D:Show121AlertWarning(message, durationSeconds, bypassEnvironmentProfile)
-    if type(message) ~= "string" or message == "" then return false end
+    if not isAccessiblePublicValue(message) or type(message) ~= "string" or message == "" then return false end
     if not bypassEnvironmentProfile and self.Are121TextAlertsEnabled
         and not self:Are121TextAlertsEnabled() then
         return false
@@ -3816,7 +3968,7 @@ function D:Show121AlertWarning(message, durationSeconds, bypassEnvironmentProfil
     f:Show()
     f.generation = (f.generation or 0) + 1
     local generation = f.generation
-    local duration = tonumber(durationSeconds) or 2.5
+    local duration = isAccessiblePublicValue(durationSeconds) and tonumber(durationSeconds) or 2.5
     if duration < 0.5 then duration = 0.5 end
     if C_Timer and C_Timer.After then
         C_Timer.After(duration, function()
@@ -3842,7 +3994,7 @@ function D:Test121DispelAlertWarning()
     return shown
 end
 
--- Options test + public combat-log + Decursive-played sound assist.
+-- Options test + explicit public-ID + Decursive-played sound assist.
 function D:Show121DispelAlertWarning(reason, bypassIgnoreWindow)
     if not isDispelAlertEnabled() then return false end
 
@@ -3859,7 +4011,8 @@ function D:Show121DispelAlertWarning(reason, bypassIgnoreWindow)
         T._DispelNotificationIgnoreUntil = now + ignoreSeconds
     end
 
-    local alertReason = tostring(reason or "Show121DispelAlertWarning")
+    local alertReason = isAccessiblePublicValue(reason) and reason ~= nil
+        and tostring(reason) or "Show121DispelAlertWarning"
     local function presentAlert()
         if not isDispelAlertEnabled() then return end
         if getDispelAlertMode() == "TIMED" then
@@ -3969,9 +4122,20 @@ local MAX_ALERT_DIAG_LINES = 150
 
 function D:AlertDiag(fmt, ...)
     if not D.db or not D.db.global then return end
+    if not isAccessiblePublicValue(fmt) or type(fmt) ~= "string" then
+        fmt = "<restricted diagnostic>"
+    end
+    local count = select("#", ...)
+    local args = {}
+    for i = 1, count do
+        local value = select(i, ...)
+        args[i] = isAccessiblePublicValue(value) and value or "<restricted>"
+    end
+    local ok, message = pcall(string.format, fmt, unpack(args, 1, count))
+    if not ok then message = fmt .. " [format error]" end
     D.db.global.DcrAlertDiag = D.db.global.DcrAlertDiag or {}
     local log = D.db.global.DcrAlertDiag
-    table.insert(log, ("[%s] %s"):format(date("%H:%M:%S"), fmt:format(...)))
+    table.insert(log, ("[%s] %s"):format(date("%H:%M:%S"), message))
     while #log > MAX_ALERT_DIAG_LINES do
         table.remove(log, 1)
     end

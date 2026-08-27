@@ -77,8 +77,15 @@ local UnitCanAttack     = _G.UnitCanAttack;
 local UnitClass         = _G.UnitClass;
 local UnitExists        = _G.UnitExists;
 local GetNetStats       = _G.GetNetStats;
+local InCombatLockdown  = _G.InCombatLockdown;
 local canaccessvalue    = _G.canaccessvalue or function(_) return true; end
+local issecretvalue     = _G.issecretvalue;
 local _;
+
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false; end
+    return not issecretvalue or not issecretvalue(value);
+end
 
 -------------------------------------------------------------------------------
 -- The UI functions {{{
@@ -226,6 +233,16 @@ end --}}}
 -- this resets the location of the windows
 function D:ResetWindow() --{{{
 
+    -- DcrMUFsContainer owns secure unit buttons. Moving the parent is a
+    -- protected layout mutation even though the container itself is not a
+    -- SecureUnitButton. `/dcrreset` is callable at any time, so guard here.
+    if InCombatLockdown and InCombatLockdown() then
+        if self.AddDelayedFunctionCall then
+            self:AddDelayedFunctionCall("ResetWindow", self.ResetWindow, self);
+        end
+        return false;
+    end
+
     DecursiveMainBar:ClearAllPoints();
     DecursiveMainBar:SetPoint("CENTER", UIParent);
     DecursiveMainBar:Show();
@@ -249,6 +266,7 @@ function D:ResetWindow() --{{{
     DecursiveAnchor:ClearAllPoints();
     DecursiveAnchor:SetPoint("TOP", UIErrorsFrame, "BOTTOM", 0, 0);
 
+    return true;
 end --}}}
 
 
@@ -338,9 +356,8 @@ end
 -- True when spellID is a public, actionable friendly dispel alert we already
 -- register with Blizzard's AddAuraSound engine (DispelDB and/or learned IDs).
 local function isPublicDispelAlertSpellID(spellID)
+    if not isAccessiblePublicValue(spellID) then return false end
     if type(spellID) ~= "number" or spellID <= 0 then return false end
-    if not canaccessvalue(spellID) then return false end
-    if _G.issecretvalue and _G.issecretvalue(spellID) then return false end
     if D.IsLearnedProtectedAuraSoundSpellID and D:IsLearnedProtectedAuraSoundSpellID(spellID) then
         return true
     end
@@ -358,9 +375,9 @@ local function isPublicDispelAlertSpellID(spellID)
 end
 
 -- When Blizzard's AddAuraSound plays the auto notification, there is no Lua
--- callback. For public combat-log spell IDs that match our registered set,
--- show the DISPEL Alert warning on the same burst window — still no secret
--- aura reads.
+-- callback. This public-ID helper is retained for explicit/synthetic callers;
+-- the normal 12.1 combat-log event fails closed before requesting its protected
+-- payload. Native AuraContainer text remains the live warning path.
 function D:NotifyDispelAlertFromPublicAura(spellID, reason, unitToken)
     if not self.profile or not self.profile.PlaySound or self.profile.SoundProtectedAuraAlerts == false then
         return false
@@ -403,32 +420,31 @@ function D:PlaySound (UnitID, Caller) --{{{
 end --}}}
 
 -- ---------------------------------------------------------------------------
--- WoW 12.1 legacy learned protected-aura sound fallback
+-- WoW 12.1 public-ID protected-aura sound registry
 -- ---------------------------------------------------------------------------
 -- AuraContainer/AuraButton visibility is protected and cannot be queried by
 -- addon Lua. Blizzard's C_UnitAuras.AddAuraSound API can play a sound for a
 -- protected aura, but it plays directly inside Blizzard and provides no callback
 -- through which Decursive can apply a group-wide 2-second debounce.
 --
--- Retained only as a fallback when the v11.0.10 MUF-state ID filter API is unavailable:
---   1. Learn a public aura spell ID from the player's successful SPELL_DISPEL.
---   2. On a future public SPELL_AURA_APPLIED combat-log event for that learned ID,
---      route the alert through PlayDispelNotificationSound().
---   3. The first group member opens the configured lockout window; simultaneous
---      applications to other group members are suppressed.
---
--- If Blizzard makes the combat-log spell ID secret/unavailable, Decursive does
--- not play an unthrottled fallback sound. Visual protected detection remains
--- authoritative in that case.
+-- Public IDs come from the local DispelDB or explicit/manual learning. The
+-- normal 12.1 COMBAT_LOG_EVENT_UNFILTERED path is not queried by this addon;
+-- protected detection and playback remain Blizzard-owned.
 
 local function getProtectedAuraSoundContextKey()
-    local classToken = select(2, _G.UnitClass("player")) or "UNKNOWN";
+    local classToken = "UNKNOWN";
+    if _G.UnitClass then
+        local ok, _, value = pcall(_G.UnitClass, "player");
+        if ok and isAccessiblePublicValue(value) and type(value) == "string" then
+            classToken = value;
+        end
+    end
     local specID = 0;
     if _G.GetSpecialization and _G.GetSpecializationInfo then
-        local specIndex = _G.GetSpecialization();
-        if specIndex then
-            local id = _G.GetSpecializationInfo(specIndex);
-            if type(id) == "number" and canaccessvalue(id) then
+        local indexOK, specIndex = pcall(_G.GetSpecialization);
+        if indexOK and isAccessiblePublicValue(specIndex) and type(specIndex) == "number" then
+            local idOK, id = pcall(_G.GetSpecializationInfo, specIndex);
+            if idOK and isAccessiblePublicValue(id) and type(id) == "number" then
                 specID = id;
             end
         end
@@ -525,9 +541,8 @@ function D:GetProtectedAuraSoundIDs()
 end
 
 function D:IsLearnedProtectedAuraSoundSpellID(spellID)
+    if not isAccessiblePublicValue(spellID) then return false; end
     if type(spellID) ~= "number" or spellID <= 0 then return false; end
-    if _G.issecretvalue and _G.issecretvalue(spellID) then return false; end
-    if not canaccessvalue(spellID) then return false; end
 
     local ids = getProtectedAuraSoundIDs();
     if not ids then return false; end
@@ -539,9 +554,8 @@ end
 
 function D:LearnProtectedAuraSoundSpellID(spellID, source)
     if not self.profile or (self.profile.SoundProtectedAuraAutoLearn == false and source ~= "manual") then return false; end
+    if not isAccessiblePublicValue(spellID) then return false; end
     if type(spellID) ~= "number" or spellID <= 0 then return false; end
-    if _G.issecretvalue and _G.issecretvalue(spellID) then return false; end
-    if not canaccessvalue(spellID) then return false; end
 
     local ids, contextKey = getProtectedAuraSoundIDs();
     if not ids then return false; end
@@ -555,12 +569,17 @@ function D:LearnProtectedAuraSoundSpellID(spellID, source)
     local spellName;
     if _G.C_Spell and type(_G.C_Spell.GetSpellName) == "function" then
         local ok, value = pcall(_G.C_Spell.GetSpellName, spellID);
-        if ok and value and canaccessvalue(value) then spellName = value; end
+        if ok and isAccessiblePublicValue(value) and type(value) == "string" and value ~= "" then spellName = value; end
     end
     T._AuraSoundDiag = T._AuraSoundDiag or {};
     T._AuraSoundDiag.lastLearned = spellID;
     T._AuraSoundDiag.lastLearnedName = spellName;
-    self:Println(("Sound Notifications: learned dispellable aura %s (%d) for %s. Blizzard aura-sound registration refreshed."):format(spellName or "spell", spellID, contextKey or "current spec"));
+    local refreshBlocked = (_G.InCombatLockdown and _G.InCombatLockdown())
+        or (self.HasActiveAddonRestriction and self:HasActiveAddonRestriction())
+    local refreshState = refreshBlocked
+        and "registration queued until combat ends"
+        or "registration refreshed";
+    self:Println(("Sound Notifications: learned dispellable aura %s (%d) for %s. Blizzard aura-sound %s."):format(spellName or "spell", spellID, contextKey or "current spec", refreshState));
     if type(self.RefreshProtectedAuraSounds) == "function" then
         self:RefreshProtectedAuraSounds("learned spell " .. tostring(spellID));
     end
@@ -575,9 +594,94 @@ end
 -- details are protected. This mirrors the architecture used by modern boss
 -- mods: register public spell identities up front and let Blizzard own the
 -- protected detection/playback path.
-local NativeAuraSoundHandles = {};
+-- Keep one authoritative record per live native registration.  The previous
+-- implementation cleared every working handle before rebuilding the registry;
+-- one transient AddAuraSound failure could therefore silence the rest of the
+-- session.  Refreshes below now reconcile a desired set and retain unchanged
+-- handles, matching the persistent per-unit lifecycle used by mature unit-frame
+-- addons.
 local NativeAuraSoundRegistrations = {};
+local NativeAuraSoundPairCounts = {};
+local NativeAuraSoundRefreshPendingReason = nil;
+local NativeAuraSoundPendingMode = nil;
+local NativeAuraSoundPendingIsRemovalRetry = false;
+local NativeAuraSoundRetryScheduled = false;
+local NativeAuraSoundRetryAttempts = 0;
+local NativeAuraSoundRetrySerial = 0;
+local NativeAuraSoundRetryReason = nil;
+local NativeAuraSoundRetryMode = nil;
+local MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES = 3;
 T._AuraSoundDiag = T._AuraSoundDiag or { registered = 0, attempted = 0, lastReason = "never", lastError = nil, lastLearned = nil };
+
+local function nativeAuraSoundMutationBlocked()
+    if _G.InCombatLockdown and _G.InCombatLockdown() then return true; end
+    return D.HasActiveAddonRestriction and D:HasActiveAddonRestriction() or false;
+end
+
+local function resetNativeAuraSoundRemovalRetry()
+    -- C_Timer.After cannot be cancelled. Advancing the serial makes any older
+    -- timer a no-op before a newer lifecycle request is allowed to own state.
+    NativeAuraSoundRetrySerial = NativeAuraSoundRetrySerial + 1;
+    NativeAuraSoundRetryScheduled = false;
+    NativeAuraSoundRetryAttempts = 0;
+    NativeAuraSoundRetryReason = nil;
+    NativeAuraSoundRetryMode = nil;
+    T._AuraSoundDiag.retryPending = false;
+    T._AuraSoundDiag.retryAttempts = 0;
+    T._AuraSoundDiag.retryExhausted = false;
+    T._AuraSoundDiag.retryUnavailable = false;
+end
+
+local function completeNativeAuraSoundRemovalRetry()
+    NativeAuraSoundRefreshPendingReason = nil;
+    NativeAuraSoundPendingMode = nil;
+    NativeAuraSoundPendingIsRemovalRetry = false;
+    resetNativeAuraSoundRemovalRetry();
+end
+
+local function scheduleNativeAuraSoundRemovalRetry(mode, reason)
+    NativeAuraSoundRetryReason = reason or "native aura sound removal retry";
+    NativeAuraSoundRetryMode = mode == "clear" and "clear" or "refresh";
+    T._AuraSoundDiag.retryPending = true;
+    T._AuraSoundDiag.retryAttempts = NativeAuraSoundRetryAttempts;
+    if NativeAuraSoundRetryAttempts >= MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES then
+        T._AuraSoundDiag.retryPending = false;
+        T._AuraSoundDiag.retryExhausted = true;
+        NativeAuraSoundRetryReason = nil;
+        NativeAuraSoundRetryMode = nil;
+        return;
+    end
+    if NativeAuraSoundRetryScheduled then return; end
+    if not _G.C_Timer or type(_G.C_Timer.After) ~= "function" then
+        T._AuraSoundDiag.retryPending = false;
+        T._AuraSoundDiag.retryExhausted = true;
+        T._AuraSoundDiag.retryUnavailable = true;
+        NativeAuraSoundRetryReason = nil;
+        NativeAuraSoundRetryMode = nil;
+        return;
+    end
+
+    NativeAuraSoundRetryAttempts = NativeAuraSoundRetryAttempts + 1;
+    T._AuraSoundDiag.retryAttempts = NativeAuraSoundRetryAttempts;
+    NativeAuraSoundRetryScheduled = true;
+    NativeAuraSoundRetrySerial = NativeAuraSoundRetrySerial + 1;
+    local retrySerial = NativeAuraSoundRetrySerial;
+    local delay = 0.5 * NativeAuraSoundRetryAttempts;
+    _G.C_Timer.After(delay, function()
+        if retrySerial ~= NativeAuraSoundRetrySerial then return; end
+        NativeAuraSoundRetryScheduled = false;
+        if not NativeAuraSoundRetryReason then return; end
+        local retryMode = NativeAuraSoundRetryMode;
+        local retryReason = NativeAuraSoundRetryReason;
+        NativeAuraSoundRetryReason = nil;
+        NativeAuraSoundRetryMode = nil;
+        if retryMode == "clear" then
+            D:ClearProtectedAuraSounds(("native removal retry %d: %s"):format(NativeAuraSoundRetryAttempts, tostring(retryReason)), true);
+        else
+            D:RefreshProtectedAuraSounds(("native removal retry %d: %s"):format(NativeAuraSoundRetryAttempts, tostring(retryReason)), true);
+        end
+    end);
+end
 
 function D:IsProtectedAuraSoundEngineAvailable()
     return _G.C_UnitAuras
@@ -585,58 +689,387 @@ function D:IsProtectedAuraSoundEngineAvailable()
         and type(_G.C_UnitAuras.RemoveAuraSound) == "function";
 end
 
-function D:ClearProtectedAuraSounds()
-    if self:IsProtectedAuraSoundEngineAvailable() then
-        for i = 1, #NativeAuraSoundHandles do
-            local handle = NativeAuraSoundHandles[i];
-            if type(handle) == "number" and canaccessvalue(handle) then
-                pcall(_G.C_UnitAuras.RemoveAuraSound, handle);
-            end
-        end
-    end
-    for i = #NativeAuraSoundHandles, 1, -1 do NativeAuraSoundHandles[i] = nil; end
-    for key in pairs(NativeAuraSoundRegistrations) do NativeAuraSoundRegistrations[key] = nil; end
+local function nativeAuraSoundAddAvailable()
+    return _G.C_UnitAuras and type(_G.C_UnitAuras.AddAuraSound) == "function";
 end
 
-local function protectedAuraSoundRegistrationKey(unitToken, spellID)
+local function nativeAuraSoundRemoveAvailable()
+    return _G.C_UnitAuras and type(_G.C_UnitAuras.RemoveAuraSound) == "function";
+end
+
+local function protectedAuraSoundPairKey(unitToken, spellID)
+    if not isAccessiblePublicValue(unitToken) or not isAccessiblePublicValue(spellID) then return nil; end
     if type(unitToken) ~= "string" or type(spellID) ~= "number" then return nil; end
     return unitToken .. ":" .. tostring(spellID);
 end
 
-function D:IsProtectedAuraSoundRegistered(spellID, unitToken)
-    local key = protectedAuraSoundRegistrationKey(unitToken, spellID);
-    return key and NativeAuraSoundRegistrations[key] == true or false;
+local function protectedAuraSoundRegistrationKey(unitToken, spellID, trigger, soundFile, channel)
+    local pairKey = protectedAuraSoundPairKey(unitToken, spellID);
+    if not pairKey
+        or not isAccessiblePublicValue(trigger)
+        or not isAccessiblePublicValue(soundFile)
+        or not isAccessiblePublicValue(channel)
+    then
+        return nil;
+    end
+    if type(trigger) ~= "number" or type(soundFile) ~= "string" or type(channel) ~= "string" then return nil; end
+    return table.concat({ pairKey, tostring(trigger), soundFile, channel }, "\31"), pairKey;
 end
 
-local function addUniqueUnitToken(out, seen, unit)
-    if type(unit) ~= "string" or seen[unit] then return; end
+local function countNativeAuraSoundRegistrations()
+    local count = 0;
+    for _ in pairs(NativeAuraSoundRegistrations) do count = count + 1; end
+    return count;
+end
+
+local function updateNativeAuraSoundDiagnosticHealth()
+    local diag = T._AuraSoundDiag or {};
+    local exact = tonumber(diag.exactMatches) or 0;
+    local desired = tonumber(diag.desired or diag.attempted) or 0;
+    local activeTotal = countNativeAuraSoundRegistrations();
+    diag.registered = activeTotal;
+    diag.stale = math.max(0, activeTotal - exact);
+    diag.degraded = exact ~= desired
+        or diag.stale > 0
+        or (tonumber(diag.addFailed) or 0) > 0
+        or (tonumber(diag.removeFailed) or 0) > 0
+        or diag.retryPending == true
+        or diag.retryExhausted == true;
+end
+
+function D:GetProtectedAuraSoundRegistrationStatus()
+    local diag = T._AuraSoundDiag or {};
+    updateNativeAuraSoundDiagnosticHealth();
+    local snapshot = {
+        exact = tonumber(diag.exactMatches) or 0,
+        desired = tonumber(diag.desired or diag.attempted) or 0,
+        activeTotal = tonumber(diag.registered) or 0,
+        stale = tonumber(diag.stale) or 0,
+        replacementFallbacks = tonumber(diag.replacementFallbacks) or 0,
+        addFailed = tonumber(diag.addFailed) or 0,
+        removeFailed = tonumber(diag.removeFailed) or 0,
+        deferred = diag.deferred == true,
+        pendingMode = diag.pendingMode,
+        retryPending = diag.retryPending == true,
+        retryAttempts = tonumber(diag.retryAttempts) or 0,
+        retryMax = MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES,
+        retryExhausted = diag.retryExhausted == true,
+        retryUnavailable = diag.retryUnavailable == true,
+        degraded = diag.degraded == true,
+        enabled = D.profile and D.profile.PlaySound == true and D.profile.SoundProtectedAuraAlerts ~= false or false,
+        unitTokens = diag.unitTokens,
+        lastError = diag.lastError,
+        groupMode = diag.groupMode,
+        instanceName = diag.instanceName,
+        instanceType = diag.instanceType,
+        instanceID = diag.instanceID,
+        raidScoped = diag.raidScoped == true,
+    };
+    -- Preserve the established positional shape for option panels while making
+    -- its first count truthful: exact current keys, not total live handles.
+    return snapshot.exact, snapshot.desired, snapshot.deferred,
+        snapshot.unitTokens, snapshot.lastError, snapshot;
+end
+
+local function forgetNativeAuraSoundRegistration(key)
+    local record = NativeAuraSoundRegistrations[key];
+    if not record then return; end
+    NativeAuraSoundRegistrations[key] = nil;
+    local pairKey = record.pairKey;
+    if pairKey and NativeAuraSoundPairCounts[pairKey] then
+        local remaining = NativeAuraSoundPairCounts[pairKey] - 1;
+        NativeAuraSoundPairCounts[pairKey] = remaining > 0 and remaining or nil;
+    end
+end
+
+local function rememberNativeAuraSoundRegistration(key, record)
+    NativeAuraSoundRegistrations[key] = record;
+    NativeAuraSoundPairCounts[record.pairKey] = (NativeAuraSoundPairCounts[record.pairKey] or 0) + 1;
+end
+
+function D:ClearProtectedAuraSounds(reason, isRemovalRetry)
+    reason = isAccessiblePublicValue(reason) and reason ~= nil and tostring(reason) or "native aura sounds cleared";
+    -- pcall cannot suppress ADDON_ACTION_BLOCKED.  The guard is the permission
+    -- boundary; pcall below catches only ordinary Lua/API failures after that
+    -- boundary has already been established.
+    if nativeAuraSoundMutationBlocked() then
+        -- A new external request supersedes any older timed cleanup even while
+        -- the mutation boundary is closed. Otherwise an old clear retry could
+        -- win the race after restriction ends and erase a newer refresh.
+        if not isRemovalRetry then resetNativeAuraSoundRemovalRetry(); end
+        -- A timer retry must not overwrite a newer external lifecycle request
+        -- that is already waiting on this same restriction boundary.
+        if not isRemovalRetry or not NativeAuraSoundRefreshPendingReason then
+            NativeAuraSoundRefreshPendingReason = reason;
+            NativeAuraSoundPendingMode = "clear";
+            NativeAuraSoundPendingIsRemovalRetry = isRemovalRetry == true;
+        end
+        T._AuraSoundDiag.deferred = true;
+        T._AuraSoundDiag.pendingMode = NativeAuraSoundPendingMode;
+        T._AuraSoundDiag.lastRequestReason = NativeAuraSoundRefreshPendingReason;
+        return false;
+    end
+    if not isRemovalRetry then resetNativeAuraSoundRemovalRetry(); end
+
+    local removed, removeFailed = 0, 0;
+    local lastError = nil;
+    if nativeAuraSoundRemoveAvailable() then
+        local keys = {};
+        for key in pairs(NativeAuraSoundRegistrations) do keys[#keys + 1] = key; end
+        for i = 1, #keys do
+            local key = keys[i];
+            local record = NativeAuraSoundRegistrations[key];
+            local handle = record and record.handle;
+            if not isAccessiblePublicValue(handle) or type(handle) ~= "number" then
+                forgetNativeAuraSoundRegistration(key);
+            else
+                local ok, err = pcall(_G.C_UnitAuras.RemoveAuraSound, handle);
+                if ok then
+                    forgetNativeAuraSoundRegistration(key);
+                    removed = removed + 1;
+                else
+                    removeFailed = removeFailed + 1;
+                    lastError = isAccessiblePublicValue(err) and tostring(err) or "RemoveAuraSound failed";
+                end
+            end
+        end
+    else
+        removeFailed = countNativeAuraSoundRegistrations();
+        if removeFailed > 0 then
+            lastError = "RemoveAuraSound API unavailable; live handles retained";
+        end
+    end
+
+    local activePerUnit, activeSpellIDs, activeUnits = {}, {}, {};
+    for _, record in pairs(NativeAuraSoundRegistrations) do
+        if record and record.unitToken then
+            if not activePerUnit[record.unitToken] then activeUnits[#activeUnits + 1] = record.unitToken; end
+            activePerUnit[record.unitToken] = (activePerUnit[record.unitToken] or 0) + 1;
+            if record.spellID then activeSpellIDs[record.spellID] = true; end
+        end
+    end
+    table.sort(activeUnits);
+    local activeSpellCount = 0;
+    for _ in pairs(activeSpellIDs) do activeSpellCount = activeSpellCount + 1; end
+    T._AuraSoundDiag.registered = countNativeAuraSoundRegistrations();
+    T._AuraSoundDiag.attempted = 0;
+    T._AuraSoundDiag.desired = 0;
+    T._AuraSoundDiag.exactMatches = 0;
+    T._AuraSoundDiag.stale = T._AuraSoundDiag.registered;
+    T._AuraSoundDiag.unitCount = 0;
+    T._AuraSoundDiag.activeUnitCount = #activeUnits;
+    T._AuraSoundDiag.spellCount = 0;
+    T._AuraSoundDiag.activeSpellCount = activeSpellCount;
+    T._AuraSoundDiag.unitTokens = "";
+    T._AuraSoundDiag.activeUnitTokens = table.concat(activeUnits, ",");
+    T._AuraSoundDiag.removed = removed;
+    T._AuraSoundDiag.removeFailed = removeFailed;
+    T._AuraSoundDiag.retained = 0;
+    T._AuraSoundDiag.addAttempted = 0;
+    T._AuraSoundDiag.added = 0;
+    T._AuraSoundDiag.addFailed = 0;
+    T._AuraSoundDiag.replacementFallbacks = 0;
+    T._AuraSoundDiag.activePerUnit = activePerUnit;
+    T._AuraSoundDiag.exactPerUnit = {};
+    T._AuraSoundDiag.stalePerUnit = activePerUnit;
+    T._AuraSoundDiag.desiredPerUnit = {};
+    T._AuraSoundDiag.lastError = lastError;
+    T._AuraSoundDiag.lastErrorOperation = removeFailed > 0 and "remove" or nil;
+    T._AuraSoundDiag.deferred = false;
+    T._AuraSoundDiag.pendingMode = nil;
+    T._AuraSoundDiag.lastReason = reason;
+    T._AuraSoundDiag.lastRequestReason = reason;
+    if removeFailed > 0 then
+        scheduleNativeAuraSoundRemovalRetry("clear", reason);
+    else
+        T._AuraSoundDiag.lastSuccessfulReason = T._AuraSoundDiag.lastReason;
+        completeNativeAuraSoundRemovalRetry();
+    end
+    updateNativeAuraSoundDiagnosticHealth();
+    return removeFailed == 0;
+end
+
+function D:IsProtectedAuraSoundRegistered(spellID, unitToken)
+    local pairKey = protectedAuraSoundPairKey(unitToken, spellID);
+    return pairKey and (NativeAuraSoundPairCounts[pairKey] or 0) > 0 or false;
+end
+
+local function addUniqueUnitToken(out, seen, unit, reserveWhenMissing)
+    -- Unit_Array can be rebuilt from identity APIs whose values become secret
+    -- in restricted contexts. Never use a sealed value as a table key or API
+    -- argument merely because type() reports "string".
+    if not isAccessiblePublicValue(unit) or type(unit) ~= "string" or seen[unit] then return; end
+    if _G.UnitIsUnit then
+        for i = 1, #out do
+            local ok, same = pcall(_G.UnitIsUnit, unit, out[i]);
+            if ok and isAccessiblePublicValue(same) and same == true then return; end
+        end
+    end
     -- UnitExists is intentionally only a roster/token check here. No aura data
     -- is inspected. PLAYER is useful even when solo.
-    if unit == "player" or not _G.UnitExists or _G.UnitExists(unit) then
+    local exists = reserveWhenMissing or unit == "player";
+    if not exists and _G.UnitExists then
+        local ok, value = pcall(_G.UnitExists, unit);
+        exists = ok and isAccessiblePublicValue(value) and value == true;
+    elseif not _G.UnitExists then
+        exists = true;
+    end
+    if exists then
         seen[unit] = true;
         out[#out + 1] = unit;
     end
 end
 
-function D:GetProtectedAuraSoundUnitTokens()
+local function getProtectedAuraSoundGroupContext()
+    local context = {
+        isRaid = false,
+        groupMode = "solo",
+        instanceName = nil,
+        instanceType = nil,
+        instanceID = nil,
+    };
+    local raidKnown = false;
+    if _G.IsInRaid then
+        local ok, value = pcall(_G.IsInRaid);
+        if ok and isAccessiblePublicValue(value) and type(value) == "boolean" then
+            context.isRaid = value;
+            raidKnown = true;
+        end
+    end
+    -- If IsInRaid itself is unavailable or sealed, the presence of a public
+    -- canonical raid token is sufficient to choose the lower-cardinality raid
+    -- policy. Never fail open into party pre-arming in that uncertainty.
+    if not raidKnown and _G.UnitExists then
+        for i = 1, (_G.MAX_RAID_MEMBERS or 40) do
+            local ok, value = pcall(_G.UnitExists, "raid" .. i);
+            if ok and isAccessiblePublicValue(value) and value == true then
+                context.isRaid = true;
+                break;
+            end
+        end
+    end
+
+    if context.isRaid then
+        context.groupMode = "raid";
+    elseif _G.IsInGroup then
+        local ok, value = pcall(_G.IsInGroup);
+        if ok and isAccessiblePublicValue(value) and value == true then context.groupMode = "party"; end
+    elseif _G.UnitExists then
+        local ok, value = pcall(_G.UnitExists, "party1");
+        if ok and isAccessiblePublicValue(value) and value == true then context.groupMode = "party"; end
+    end
+
+    if _G.GetInstanceInfo then
+        local ok, name, instanceType, difficultyID, difficultyName, maxPlayers,
+            dynamicDifficulty, isDynamic, instanceID = pcall(_G.GetInstanceInfo);
+        if ok then
+            if isAccessiblePublicValue(name) and type(name) == "string" and name ~= "" then context.instanceName = name; end
+            if isAccessiblePublicValue(instanceType) and type(instanceType) == "string" and instanceType ~= "" then context.instanceType = instanceType; end
+            if isAccessiblePublicValue(instanceID) and type(instanceID) == "number" then context.instanceID = instanceID; end
+        end
+    end
+    return context;
+end
+
+local function normalizeProtectedAuraSoundContentName(value)
+    if not isAccessiblePublicValue(value) or type(value) ~= "string" then return nil; end
+    local normalized = value:lower():gsub("[%s%p]", "");
+    return normalized ~= "" and normalized or nil;
+end
+
+function D:GetProtectedAuraSoundUnitTokens(context)
+    context = type(context) == "table" and context or getProtectedAuraSoundGroupContext();
     local units, seen = {}, {};
     addUniqueUnitToken(units, seen, "player");
 
-    local assigned = self.Status and self.Status.Unit_Array;
-    if type(assigned) == "table" then
-        for i = 1, #assigned do addUniqueUnitToken(units, seen, assigned[i]); end
+    -- Follower parties can be created only after zoning, at which point the
+    -- dungeon-wide addon restriction may already forbid AddAuraSound. Reserve
+    -- the four stable party tokens while mutation is still legal so those MUFs
+    -- are armed before their units exist. Invalid/nonexistent tokens simply
+    -- produce a failed desired registration and are retried on the next safe
+    -- roster reconcile.
+    if context.isRaid then
+        -- Only canonical live raid tokens participate. Unit_Array can also
+        -- contain pets and focus, which would multiply learned IDs without
+        -- improving the MUF member coverage this registry is intended for.
+        for i = 1, (_G.MAX_RAID_MEMBERS or 40) do addUniqueUnitToken(units, seen, "raid" .. i); end
     else
-        for i = 1, 4 do addUniqueUnitToken(units, seen, "party" .. i); end
-        for i = 1, 40 do addUniqueUnitToken(units, seen, "raid" .. i); end
+        for i = 1, 4 do addUniqueUnitToken(units, seen, "party" .. i, true); end
+        local assigned = self.Status and self.Status.Unit_Array;
+        if type(assigned) == "table" then
+            for i = 1, #assigned do addUniqueUnitToken(units, seen, assigned[i]); end
+        end
     end
     return units;
 end
 
-function D:RefreshProtectedAuraSounds(reason)
-    self:ClearProtectedAuraSounds();
+local function builtInEntriesAllowedForUnit(entries, unitToken, context)
+    if type(entries) ~= "table" then return false; end
+    local activeContent = normalizeProtectedAuraSoundContentName(context and context.instanceName);
+    for i = 1, #entries do
+        local entry = entries[i];
+        local contentAllowed = true;
+        if context and context.isRaid and unitToken ~= "player" then
+            contentAllowed = activeContent ~= nil
+                and normalizeProtectedAuraSoundContentName(entry and entry.content) == activeContent;
+        end
+        if contentAllowed and type(entry) == "table" then
+            local key = entry.cureType;
+            local dcType = key and DC and DC[key];
+            local filter = dcType and D.Status and D.Status.UnitFilteringTypes and D.Status.UnitFilteringTypes[dcType];
+            local skipped = false;
+            if filter and type(D.UnitFilteringTest) == "function" then
+                local ok, value = pcall(D.UnitFilteringTest, unitToken, filter);
+                skipped = ok and isAccessiblePublicValue(value) and value == true;
+            end
+            if not skipped then return true; end
+        end
+    end
+    return false;
+end
 
-    if not self:IsProtectedAuraSoundEngineAvailable() then return 0; end
-    if not self.profile or not self.profile.PlaySound or self.profile.SoundProtectedAuraAlerts == false then return 0; end
+function D:RefreshProtectedAuraSounds(reason, isRemovalRetry)
+    reason = isAccessiblePublicValue(reason) and reason ~= nil and tostring(reason) or "unknown";
+    if nativeAuraSoundMutationBlocked() then
+        if not isRemovalRetry then resetNativeAuraSoundRemovalRetry(); end
+        if not isRemovalRetry or not NativeAuraSoundRefreshPendingReason then
+            NativeAuraSoundRefreshPendingReason = reason;
+            NativeAuraSoundPendingMode = "refresh";
+            NativeAuraSoundPendingIsRemovalRetry = isRemovalRetry == true;
+        end
+        T._AuraSoundDiag.deferred = true;
+        T._AuraSoundDiag.pendingMode = NativeAuraSoundPendingMode;
+        T._AuraSoundDiag.lastRequestReason = NativeAuraSoundRefreshPendingReason;
+        T._AuraSoundDiag.lastReason = "deferred: " .. tostring(NativeAuraSoundRefreshPendingReason);
+        -- Keep the current valid registry alive until the mutation boundary is
+        -- safe again. The native registry remains the live-combat sound path.
+        T._AuraSoundDiag.registered = countNativeAuraSoundRegistrations();
+        updateNativeAuraSoundDiagnosticHealth();
+        return T._AuraSoundDiag.registered;
+    end
+    if not isRemovalRetry then resetNativeAuraSoundRemovalRetry(); end
+
+    NativeAuraSoundRefreshPendingReason = nil;
+    NativeAuraSoundPendingMode = nil;
+    NativeAuraSoundPendingIsRemovalRetry = false;
+    T._AuraSoundDiag.deferred = false;
+    T._AuraSoundDiag.pendingMode = nil;
+
+    if not self.profile or not self.profile.PlaySound or self.profile.SoundProtectedAuraAlerts == false then
+        self:ClearProtectedAuraSounds("native aura sounds disabled", isRemovalRetry);
+        return countNativeAuraSoundRegistrations();
+    end
+    if not nativeAuraSoundAddAvailable() then
+        T._AuraSoundDiag.registered = countNativeAuraSoundRegistrations();
+        T._AuraSoundDiag.lastReason = "native AddAuraSound API unavailable";
+        T._AuraSoundDiag.lastRequestReason = reason;
+        T._AuraSoundDiag.lastError = "AddAuraSound API unavailable; live handles retained";
+        T._AuraSoundDiag.lastErrorOperation = "add";
+        T._AuraSoundDiag.deferred = false;
+        T._AuraSoundDiag.pendingMode = nil;
+        updateNativeAuraSoundDiagnosticHealth();
+        return T._AuraSoundDiag.registered;
+    end
     -- The old managed-child OnShow driver was removed because protected
     -- AuraSlots do not reliably deliver untrusted script callbacks in combat.
     -- Never suppress this registry merely because the Lua sound player exists:
@@ -644,46 +1077,114 @@ function D:RefreshProtectedAuraSounds(reason)
 
     local learnedIDs = getProtectedAuraSoundIDs();
     local spellIDs, seen = {}, {};
+    local learnedIDSet = {};
+    local builtInEntriesByID = {};
     local builtIns = getBuiltInProtectedAuraSoundIDs();
+    local builtInEntries = getBuiltInProtectedAuraSoundEntries();
+    for i = 1, #builtInEntries do
+        local entry = builtInEntries[i];
+        if type(entry.id) == "number" then
+            builtInEntriesByID[entry.id] = builtInEntriesByID[entry.id] or {};
+            builtInEntriesByID[entry.id][#builtInEntriesByID[entry.id] + 1] = entry;
+        end
+    end
+    -- Manual/learned exact IDs are the narrowest user intent, so reconcile
+    -- those first. Built-ins follow in deterministic order.
+    if type(learnedIDs) == "table" then
+        for i = 1, #learnedIDs do
+            local id = learnedIDs[i];
+            if type(id) == "number" and id > 0 then
+                learnedIDSet[id] = true;
+                if not seen[id] then seen[id] = true; spellIDs[#spellIDs + 1] = id; end
+            end
+        end
+    end
     for i = 1, #builtIns do
         local id = builtIns[i]; if not seen[id] then seen[id] = true; spellIDs[#spellIDs + 1] = id; end
     end
-    if type(learnedIDs) == "table" then
-        for i = 1, #learnedIDs do
-            local id = learnedIDs[i]; if not seen[id] then seen[id] = true; spellIDs[#spellIDs + 1] = id; end
-        end
+    if #spellIDs == 0 then
+        self:ClearProtectedAuraSounds("no eligible native aura sound IDs", isRemovalRetry);
+        return countNativeAuraSoundRegistrations();
     end
-    if #spellIDs == 0 then return 0; end
 
     local soundFile = self:GetDispelNotificationSoundFile();
     local channel = self:GetSoundNotificationChannel();
-    local units = self:GetProtectedAuraSoundUnitTokens();
+    local groupContext = getProtectedAuraSoundGroupContext();
+    local units = self:GetProtectedAuraSoundUnitTokens(groupContext);
     local trigger = (_G.Enum and _G.Enum.UnitAuraSoundTrigger and _G.Enum.UnitAuraSoundTrigger.Added) or 0;
-    local registered = 0;
-    local attempted = 0;
+    local desired = {};
+    local desiredOrder = {};
+    local desiredPerUnit = {};
+    local learnedDesiredCount, builtInRemoteDesiredCount = 0, 0;
+    local matchedContentIDs = {};
+
+    -- Spell-first ordering gives every unit equal coverage if Blizzard ever
+    -- rejects a later registration; the old unit-first Cartesian loop favored
+    -- every spell on player before attempting even one party member.
+    for i = 1, #spellIDs do
+        local spellID = spellIDs[i];
+        local entries = builtInEntriesByID[spellID];
+        local learned = learnedIDSet[spellID] == true;
+        if isAccessiblePublicValue(spellID) and type(spellID) == "number" and spellID > 0 then
+            for u = 1, #units do
+                local unit = units[u];
+                if learned or builtInEntriesAllowedForUnit(entries, unit, groupContext) then
+                    local key, pairKey = protectedAuraSoundRegistrationKey(unit, spellID, trigger, soundFile, channel);
+                    if key and not desired[key] then
+                        local record = {
+                            key = key,
+                            pairKey = pairKey,
+                            unitToken = unit,
+                            spellID = spellID,
+                            trigger = trigger,
+                            soundFileName = soundFile,
+                            outputChannel = channel,
+                        };
+                        desired[key] = record;
+                        desiredPerUnit[unit] = (desiredPerUnit[unit] or 0) + 1;
+                        desiredOrder[#desiredOrder + 1] = record;
+                        if learned then
+                            learnedDesiredCount = learnedDesiredCount + 1;
+                        elseif groupContext.isRaid and unit ~= "player" then
+                            builtInRemoteDesiredCount = builtInRemoteDesiredCount + 1;
+                            matchedContentIDs[spellID] = true;
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local activeBefore = countNativeAuraSoundRegistrations();
+    local retained, addAttempted, added, addFailed = 0, 0, 0, 0;
+    local removed, removeFailed = 0, 0;
+    local replacementFallbacks = 0;
+    local failedReplacementPairs = {};
     local lastError = nil;
 
-    for u = 1, #units do
-        local unit = units[u];
-        for i = 1, #spellIDs do
-            local spellID = spellIDs[i];
-            if type(spellID) == "number" and spellID > 0 and canaccessvalue(spellID)
-                and (not _G.issecretvalue or not _G.issecretvalue(spellID))
-            then
-                local info = {
-                    unitToken = unit,
-                    spellID = spellID,
-                    soundFileName = soundFile,
-                    outputChannel = channel,
-                };
-                attempted = attempted + 1;
-                local ok, handle = pcall(_G.C_UnitAuras.AddAuraSound, trigger, info);
-                if ok and type(handle) == "number" and canaccessvalue(handle) then
-                    NativeAuraSoundHandles[#NativeAuraSoundHandles + 1] = handle;
-                    local key = protectedAuraSoundRegistrationKey(unit, spellID);
-                    if key then NativeAuraSoundRegistrations[key] = true; end
-                    registered = registered + 1;
-                elseif not ok then
+    -- Add missing/replacement registrations first. A failure leaves every old
+    -- handle intact, including an old sound/channel binding for the same pair.
+    for i = 1, #desiredOrder do
+        local record = desiredOrder[i];
+        if NativeAuraSoundRegistrations[record.key] then
+            retained = retained + 1;
+        else
+            addAttempted = addAttempted + 1;
+            local info = {
+                unitToken = record.unitToken,
+                spellID = record.spellID,
+                soundFileName = record.soundFileName,
+                outputChannel = record.outputChannel,
+            };
+            local ok, handle = pcall(_G.C_UnitAuras.AddAuraSound, record.trigger, info);
+            if ok and isAccessiblePublicValue(handle) and type(handle) == "number" then
+                record.handle = handle;
+                rememberNativeAuraSoundRegistration(record.key, record);
+                added = added + 1;
+            else
+                addFailed = addFailed + 1;
+                failedReplacementPairs[record.pairKey] = true;
+                if not ok and isAccessiblePublicValue(handle) then
                     lastError = tostring(handle);
                 else
                     lastError = "AddAuraSound returned no usable auraSoundID";
@@ -692,28 +1193,130 @@ function D:RefreshProtectedAuraSounds(reason)
         end
     end
 
+    -- Remove registrations no longer desired only after all additions have
+    -- been attempted. If a replacement failed, retain the previous binding for
+    -- that unit/spell pair as a safe fallback.
+    local activeKeys = {};
+    for key in pairs(NativeAuraSoundRegistrations) do activeKeys[#activeKeys + 1] = key; end
+    for i = 1, #activeKeys do
+        local key = activeKeys[i];
+        local record = NativeAuraSoundRegistrations[key];
+        if record and not desired[key] and failedReplacementPairs[record.pairKey] then
+            replacementFallbacks = replacementFallbacks + 1;
+        elseif record and not desired[key] then
+            local handle = record.handle;
+            if not isAccessiblePublicValue(handle) or type(handle) ~= "number" then
+                forgetNativeAuraSoundRegistration(key);
+            else
+                local ok, err = pcall(_G.C_UnitAuras.RemoveAuraSound, handle);
+                if ok then
+                    forgetNativeAuraSoundRegistration(key);
+                    removed = removed + 1;
+                else
+                    removeFailed = removeFailed + 1;
+                    lastError = isAccessiblePublicValue(err) and tostring(err) or "RemoveAuraSound failed";
+                end
+            end
+        end
+    end
+
+    local registered = countNativeAuraSoundRegistrations();
+    local exactMatches = 0;
+    local activePerUnit, exactPerUnit, stalePerUnit, activeUnits = {}, {}, {}, {};
+    for _, record in pairs(NativeAuraSoundRegistrations) do
+        if record and record.unitToken then
+            if not activePerUnit[record.unitToken] then activeUnits[#activeUnits + 1] = record.unitToken; end
+            activePerUnit[record.unitToken] = (activePerUnit[record.unitToken] or 0) + 1;
+        end
+    end
+    table.sort(activeUnits);
+    for key, record in pairs(desired) do
+        if NativeAuraSoundRegistrations[key] then
+            exactMatches = exactMatches + 1;
+            exactPerUnit[record.unitToken] = (exactPerUnit[record.unitToken] or 0) + 1;
+        end
+    end
+    for unit, active in pairs(activePerUnit) do
+        stalePerUnit[unit] = math.max(0, active - (exactPerUnit[unit] or 0));
+    end
+    local matchedContentEntryCount = 0;
+    for _ in pairs(matchedContentIDs) do matchedContentEntryCount = matchedContentEntryCount + 1; end
+
     T._AuraSoundDiag = T._AuraSoundDiag or {};
     T._AuraSoundDiag.registered = registered;
-    T._AuraSoundDiag.attempted = attempted;
-    T._AuraSoundDiag.lastReason = reason or "unknown";
+    T._AuraSoundDiag.attempted = #desiredOrder;
+    T._AuraSoundDiag.desired = #desiredOrder;
+    T._AuraSoundDiag.exactMatches = exactMatches;
+    T._AuraSoundDiag.stale = math.max(0, registered - exactMatches);
+    T._AuraSoundDiag.activeBefore = activeBefore;
+    T._AuraSoundDiag.retained = retained;
+    T._AuraSoundDiag.addAttempted = addAttempted;
+    T._AuraSoundDiag.added = added;
+    T._AuraSoundDiag.addFailed = addFailed;
+    T._AuraSoundDiag.removed = removed;
+    T._AuraSoundDiag.removeFailed = removeFailed;
+    T._AuraSoundDiag.replacementFallbacks = replacementFallbacks;
+    T._AuraSoundDiag.lastReason = reason;
+    T._AuraSoundDiag.lastRequestReason = reason;
+    if addFailed == 0 and removeFailed == 0 then T._AuraSoundDiag.lastSuccessfulReason = reason; end
     T._AuraSoundDiag.lastError = lastError;
+    T._AuraSoundDiag.lastErrorOperation = lastError and (removeFailed > 0 and "remove" or "add") or nil;
     T._AuraSoundDiag.unitCount = #units;
     T._AuraSoundDiag.spellCount = #spellIDs;
+    T._AuraSoundDiag.unitTokens = table.concat(units, ",");
+    T._AuraSoundDiag.activeUnitTokens = table.concat(activeUnits, ",");
+    T._AuraSoundDiag.activePerUnit = activePerUnit;
+    T._AuraSoundDiag.exactPerUnit = exactPerUnit;
+    T._AuraSoundDiag.stalePerUnit = stalePerUnit;
+    T._AuraSoundDiag.desiredPerUnit = desiredPerUnit;
+    T._AuraSoundDiag.groupMode = groupContext.groupMode;
+    T._AuraSoundDiag.instanceName = groupContext.instanceName;
+    T._AuraSoundDiag.instanceType = groupContext.instanceType;
+    T._AuraSoundDiag.instanceID = groupContext.instanceID;
+    T._AuraSoundDiag.raidScoped = groupContext.isRaid == true;
+    T._AuraSoundDiag.matchedContentEntryCount = matchedContentEntryCount;
+    T._AuraSoundDiag.learnedDesiredCount = learnedDesiredCount;
+    T._AuraSoundDiag.builtInRemoteDesiredCount = builtInRemoteDesiredCount;
+
+    if removeFailed > 0 then
+        scheduleNativeAuraSoundRemovalRetry("refresh", reason);
+    else
+        completeNativeAuraSoundRemovalRetry();
+    end
+    updateNativeAuraSoundDiagnosticHealth();
 
     if self.debug then
-        self:Debug("Native aura sounds refreshed:", registered, "/", attempted, "registrations; reason:", reason or "unknown", lastError or "");
+        self:Debug("Native aura sounds reconciled:", exactMatches, "/", #desiredOrder, "exact/desired;", registered, "active total; +", added, "-", removed, "failed:", addFailed + removeFailed, "reason:", reason, lastError or "");
     end
     if self.Refresh121DispelAlertSoundCache then self:Refresh121DispelAlertSoundCache() end
     return registered;
 end
 
-function D:PrintAuraSoundDiagnostics()
+function D:FlushProtectedAuraSoundRefresh(reason)
+    if nativeAuraSoundMutationBlocked() then return false; end
+    if not NativeAuraSoundRefreshPendingReason then return false; end
+    local pendingReason = NativeAuraSoundRefreshPendingReason;
+    local pendingMode = NativeAuraSoundPendingMode;
+    local pendingIsRemovalRetry = NativeAuraSoundPendingIsRemovalRetry;
+    NativeAuraSoundRefreshPendingReason = nil;
+    NativeAuraSoundPendingMode = nil;
+    NativeAuraSoundPendingIsRemovalRetry = false;
+    if pendingMode == "clear" then
+        self:ClearProtectedAuraSounds((reason or "restriction ended") .. ": " .. tostring(pendingReason), pendingIsRemovalRetry);
+    else
+        self:RefreshProtectedAuraSounds((reason or "restriction ended") .. ": " .. tostring(pendingReason), pendingIsRemovalRetry);
+    end
+    return true;
+end
+
+function D:PrintAuraSoundDiagnostics(querySpellID, queryUnitToken)
     local ids, key = getProtectedAuraSoundIDs();
     local diag = T._AuraSoundDiag or {};
+    updateNativeAuraSoundDiagnosticHealth();
     self:Println("--- Zhaohu Sound Diagnostics [Zhaohu-Decursive] ---");
     self:Println("Build marker: Zhaohu-Decursive");
     local builtIns = getBuiltInProtectedAuraSoundIDs();
-    self:Println(("Context: %s | learned IDs: %d | built-in active: %d"):format(tostring(key or "unknown"), type(ids) == "table" and #ids or 0, #builtIns));
+    self:Println(("Spec context: %s | learned IDs: %d | eligible built-in IDs: %d"):format(tostring(key or "unknown"), type(ids) == "table" and #ids or 0, #builtIns));
     if self.GetDispelDBStats then
         local ds = self:GetDispelDBStats();
         self:Println(("Local DispelDB: %d entries | %d friendly | %d enemy/purge"):format(ds.total or 0, ds.friendly or 0, ds.hostile or 0));
@@ -730,9 +1333,60 @@ function D:PrintAuraSoundDiagnostics()
     if self.Is121MUFVisibilitySoundDriverEnabled and self:Is121MUFVisibilitySoundDriverEnabled() then
         self:Println("MUF visibility sound driver: active | global debounce: active | duplicate native registrations: disabled");
     else
-        self:Println(("Native AddAuraSound fallback: %d/%d registered | units=%s | spells=%s"):format(tonumber(diag.registered) or 0, tonumber(diag.attempted) or 0, tostring(diag.unitCount or 0), tostring(diag.spellCount or 0)));
+        self:Println(("Desired coverage: %d/%d exact | active total=%d | stale=%d | trigger=Added only"):format(
+            tonumber(diag.exactMatches) or 0,
+            tonumber(diag.desired or diag.attempted) or 0,
+            tonumber(diag.registered) or 0,
+            tonumber(diag.stale) or 0));
     end
-    self:Println(("Player SPELL_DISPEL events: %d"):format(tonumber(diag.playerDispelEvents) or 0));
+    self:Println(("Context: group=%s | instance=%s (%s, %s) | raid scoped=%s"):format(
+        tostring(diag.groupMode or "unknown"),
+        tostring(diag.instanceName or "unknown"),
+        tostring(diag.instanceType or "unknown"),
+        tostring(diag.instanceID or "unknown"),
+        diag.raidScoped and "yes" or "no"));
+    if diag.raidScoped then
+        self:Println(("Raid scope: matched content IDs=%d | learned bindings=%d | remote built-in bindings=%d"):format(
+            tonumber(diag.matchedContentEntryCount) or 0,
+            tonumber(diag.learnedDesiredCount) or 0,
+            tonumber(diag.builtInRemoteDesiredCount) or 0));
+    end
+    if diag.unitTokens and diag.unitTokens ~= "" then self:Println("Desired unit tokens: " .. tostring(diag.unitTokens)); end
+    if diag.activeUnitTokens and diag.activeUnitTokens ~= "" and diag.activeUnitTokens ~= diag.unitTokens then
+        self:Println("Active unit tokens: " .. tostring(diag.activeUnitTokens));
+    end
+    if type(diag.activePerUnit) == "table" then
+        local perUnit = {};
+        local diagnosticUnitTokens = diag.unitTokens and diag.unitTokens ~= "" and diag.unitTokens or diag.activeUnitTokens or "";
+        for unit in tostring(diagnosticUnitTokens):gmatch("[^,]+") do
+            local active = tonumber(diag.activePerUnit[unit]) or 0;
+            local exact = type(diag.exactPerUnit) == "table" and tonumber(diag.exactPerUnit[unit]) or 0;
+            local desired = type(diag.desiredPerUnit) == "table" and tonumber(diag.desiredPerUnit[unit]) or 0;
+            local stale = type(diag.stalePerUnit) == "table" and tonumber(diag.stalePerUnit[unit]) or math.max(0, active - exact);
+            perUnit[#perUnit + 1] = ("%s=%d/%d exact; %d active; %d stale"):format(unit, exact or 0, desired or 0, active, stale or 0);
+        end
+        if #perUnit > 0 then self:Println("Per-unit coverage: " .. table.concat(perUnit, " | ")); end
+    end
+    self:Println(("Last reconcile: retained=%d | add=%d/%d | remove=%d | add failures=%d | remove failures=%d"):format(
+        tonumber(diag.retained) or 0,
+        tonumber(diag.added) or 0,
+        tonumber(diag.addAttempted) or 0,
+        tonumber(diag.removed) or 0,
+        tonumber(diag.addFailed) or 0,
+        tonumber(diag.removeFailed) or 0));
+    self:Println("Replacement fallbacks retained: " .. tostring(tonumber(diag.replacementFallbacks) or 0));
+    if diag.deferred then
+        self:Println("Native registry refresh: deferred; active handles retained until combat and addon restrictions end");
+    end
+    if diag.retryPending then
+        self:Println(("Removal retry: pending %d/%d"):format(tonumber(diag.retryAttempts) or 0, MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES));
+    elseif diag.retryExhausted then
+        self:Println(("Removal retry: exhausted %d/%d%s"):format(
+            tonumber(diag.retryAttempts) or 0,
+            MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES,
+            diag.retryUnavailable and " (timer unavailable)" or ""));
+    end
+    self:Println(("Explicit public SPELL_DISPEL samples: %d"):format(tonumber(diag.playerDispelEvents) or 0));
     if (tonumber(diag.playerDispelEvents) or 0) > 0 then
         self:Println(("Last dispelled-aura field: type=%s | accessible=%s | secret=%s"):format(
             tostring(diag.lastDispelExtraType or "nil"),
@@ -744,20 +1398,101 @@ function D:PrintAuraSoundDiagnostics()
             self:Println("Public dispelled aura ID: unavailable");
         end
     end
-    self:Println("Last refresh: " .. tostring(diag.lastReason or "never"));
+    self:Println("Last request: " .. tostring(diag.lastRequestReason or diag.lastReason or "never"));
+    self:Println("Last successful reconcile: " .. tostring(diag.lastSuccessfulReason or "never"));
     if diag.lastLearned then self:Println("Last learned: " .. tostring(diag.lastLearnedName or "spell") .. " (" .. tostring(diag.lastLearned) .. ")"); end
-    if diag.lastError then self:Println("Last AddAuraSound result: " .. tostring(diag.lastError)); end
+    if diag.lastError then
+        self:Println(("Last native registry error%s: %s"):format(
+            diag.lastErrorOperation and " (" .. tostring(diag.lastErrorOperation) .. ")" or "",
+            tostring(diag.lastError)));
+    end
+    if type(querySpellID) == "number" and querySpellID > 0 then
+        local unit = type(queryUnitToken) == "string" and queryUnitToken ~= "" and queryUnitToken or "player";
+        local pairKey = protectedAuraSoundPairKey(unit, querySpellID);
+        local active = pairKey and (NativeAuraSoundPairCounts[pairKey] or 0) or 0;
+        local trigger = (_G.Enum and _G.Enum.UnitAuraSoundTrigger and _G.Enum.UnitAuraSoundTrigger.Added) or 0;
+        local exactKey = protectedAuraSoundRegistrationKey(unit, querySpellID, trigger,
+            self:GetDispelNotificationSoundFile(), self:GetSoundNotificationChannel());
+        local exact = exactKey and NativeAuraSoundRegistrations[exactKey] ~= nil;
+        self:Println(("Query: %s:%d | exact current binding=%s | active pair bindings=%d"):format(unit, querySpellID, exact and "yes" or "no", active));
+        self:Println("Note: ApplicationsIncreased is intentionally not armed; a continuing stack is not a new clean-to-afflicted transition.");
+    else
+        self:Println("Pair query: /zdsound <spellID> [unitToken]");
+    end
     self:Println("-------------------------------");
 end
 
 SLASH_ZHAOHUSOUND1 = "/zdsound";
-SlashCmdList["ZHAOHUSOUND"] = function()
-    if D and D.PrintAuraSoundDiagnostics then D:PrintAuraSoundDiagnostics(); end
+SlashCmdList["ZHAOHUSOUND"] = function(msg)
+    if not D or not D.PrintAuraSoundDiagnostics then return; end
+    local spellText, unitToken = tostring(msg or ""):match("^%s*(%d+)%s*(%S*)");
+    D:PrintAuraSoundDiagnostics(tonumber(spellText), unitToken);
 end
 
 SLASH_ZHAOHUDB1 = "/zddb";
 SlashCmdList["ZHAOHUDB"] = function()
     if D and D.PrintDispelDBDiagnostics then D:PrintDispelDBDiagnostics(); end
+end
+
+local function safeMUFDiagnosticNumber(func, ...)
+    if type(func) ~= "function" then return nil; end
+    local ok, value = pcall(func, ...);
+    if not ok or not isAccessiblePublicValue(value) or type(value) ~= "number" then return nil; end
+    return value;
+end
+
+local function safeMUFDiagnosticShown(frame)
+    if not frame or type(frame.IsShown) ~= "function" then return nil; end
+    local ok, shown = pcall(frame.IsShown, frame);
+    if not ok or not isAccessiblePublicValue(shown) then return nil; end
+    return shown == true;
+end
+
+function D:PrintMUFStartupDiagnostics()
+    local profile = self.profile or {};
+    local status = self.Status or {};
+    local muf = self.MicroUnitF or {};
+    local diag = T._MUFStartupDiag or {};
+    local party = safeMUFDiagnosticNumber(_G.GetNumSubgroupMembers or _G.GetNumPartyMembers) or -1;
+    local raid = safeMUFDiagnosticNumber(_G.GetNumGroupMembers or _G.GetNumRaidMembers) or -1;
+    local containerShown = safeMUFDiagnosticShown(self.MFContainer);
+    local handleShown = safeMUFDiagnosticShown(self.MFContainerHandle);
+    local existing = 0;
+    if type(muf.ExistingPerUNIT) == "table" then
+        for _ in pairs(muf.ExistingPerUNIT) do existing = existing + 1; end
+    end
+
+    self:Println("--- Zhaohu MUF startup diagnostics ---");
+    self:Println(("Build: %s | initialized=%s | combat=%s"):format(
+        tostring(self.version or "unknown"),
+        self.DcrFullyInitialized and "yes" or "no",
+        (InCombatLockdown and InCombatLockdown()) and "yes" or "no"));
+    self:Println(("Settings: ShowDebuffsFrame=%s | AutoHideMUFs=%s"):format(
+        profile.ShowDebuffsFrame == true and "true" or "false",
+        tostring(tonumber(profile.AutoHideMUFs) or "nil")));
+    self:Println(("Frames: container=%s | handle=%s | created=%d | marked shown=%d | existing=%d"):format(
+        containerShown == nil and "unknown" or (containerShown and "shown" or "hidden"),
+        handleShown == nil and "unknown" or (handleShown and "shown" or "hidden"),
+        tonumber(muf.Number) or 0, tonumber(muf.UnitShown) or 0, existing));
+    self:Println(("Roster: UnitNum=%d | party=%d | raid/group=%d | invalid=%s"):format(
+        tonumber(status.UnitNum) or 0, party, raid,
+        self.Groups_datas_are_invalid and "yes" or "no"));
+    self:Println(("Recovery: phase=%s | reason=%s | generation=%d | pass=%d | delay=%s"):format(
+        tostring(diag.phase or "never"), tostring(diag.reason or diag.scheduledReason or "never"),
+        tonumber(diag.generation) or 0, tonumber(diag.pass) or 0,
+        tostring(diag.passDelay or "n/a")));
+    self:Println(("Recovery snapshot: setting=%s | container=%s | UnitNum=%d | marked=%d | actually shown=%d"):format(
+        diag.showSetting and "true" or "false",
+        diag.containerShown and "shown" or "hidden",
+        tonumber(diag.unitNum) or 0, tonumber(diag.unitShown) or 0,
+        tonumber(diag.actualShown) or 0));
+    self:Println("If MUFs are missing, run /zdmuf before /reload and send these lines.");
+    self:Println("--------------------------------------");
+end
+
+SLASH_ZHAOHUMUF1 = "/zdmuf";
+SlashCmdList["ZHAOHUMUF"] = function()
+    if D and D.PrintMUFStartupDiagnostics then D:PrintMUFStartupDiagnostics(); end
 end
 
 
@@ -841,8 +1576,14 @@ do
    local DebuffHistHashTable = {};
 
    function D:Debuff_History_Add( DebuffName, DebuffType, spellID)
-       if not canaccessvalue(DebuffName) then  -- do not store secret value
+       if not isAccessiblePublicValue(DebuffName) or type(DebuffName) ~= "string" then  -- do not store secret value
           return;
+       end
+       if not isAccessiblePublicValue(DebuffType) or type(DebuffType) ~= "string" then
+           DebuffType = nil;
+       end
+       if not isAccessiblePublicValue(spellID) or type(spellID) ~= "number" then
+           spellID = nil;
        end
        if not DebuffHistHashTable[DebuffName] then
 
@@ -1000,6 +1741,14 @@ do
     -- This function does more than just reporting Debuffs. it also detects charmed units
 
     function D:GetUnitDebuffAll (Unit) --{{{
+        -- Midnight 12.1 makes aura identity protected. This legacy scanner is
+        -- retained for older clients only; fail closed before any unit/aura
+        -- query so delayed callbacks cannot revive it during a restricted
+        -- transition.
+        if DC.TWELVEONE then
+            return DC.EMPTY_TABLE, false;
+        end
+
         -- create a Debuff table for this unit if there is not already one
         if not DebuffUnitCache[Unit] then
             DebuffUnitCache[Unit] = {};
@@ -1202,6 +1951,20 @@ do
             return DC.EMPTY_TABLE, false;
         end
 
+        -- The 12.1 runtime uses Blizzard-managed AuraContainers as its sole
+        -- affliction detector. Do not enter the retained legacy scan/filter
+        -- pipeline even if an old timer, Live List request, or direct caller
+        -- reaches this function.
+        if DC.TWELVEONE then
+            if D.UnitDebuffed[Unit] then
+                D.UnitDebuffed[Unit] = false;
+                D.ForLLDebuffedUnitsNum = math.max(0, D.ForLLDebuffedUnitsNum - 1);
+            end
+            local cached = ManagedDebuffUnitCache[Unit];
+            if cached and cached[1] then t_wipe(cached); end
+            return DC.EMPTY_TABLE, false;
+        end
+
         CureOrder = D:GetCureOrderTable();
 
         if not ManagedDebuffUnitCache[Unit] then
@@ -1248,7 +2011,13 @@ do
             end
 
             if self.Status.Combat or nameAccessible and self.profile.DebuffAlwaysSkipList[Debuff.Name] then
-                local _, EnUClass = UnitClass(Unit);
+                local EnUClass;
+                if self.GetUnitClassSafe then
+                    _, EnUClass = self:GetUnitClassSafe(Unit);
+                else
+                    local ok, _, value = pcall(UnitClass, Unit);
+                    if ok and isAccessiblePublicValue(value) then EnUClass = value; end
+                end
                 if self.profile.skipByClass[EnUClass] then
                     if  nameAccessible and self.profile.skipByClass[EnUClass][Debuff.Name] then
                         -- these are just ones you don't care about by class while in combat
@@ -1469,6 +2238,11 @@ do
 
     -- this function returns true if one of the debuff(s) passed to it is found on the specified unit
     function D:CheckUnitForBuffs(unit, BuffNamesToCheck) --{{{
+
+        -- Stealth/buff inference is part of the retained legacy aura scanner.
+        -- It is not needed by the Blizzard-managed 12.1 detector and must not
+        -- inspect spell-name aura results while aura restrictions are active.
+        if DC.TWELVEONE then return false; end
 
         if type(BuffNamesToCheck) == "string" then
 

@@ -482,7 +482,7 @@ local function GetStaticOptions ()
                 args = {
                     intro = {
                         type = "description",
-                        name = "For WoW 12.1 protected auras, Decursive registers public DispelDB and learned spell IDs for the units assigned to its MUFs. Blizzard detects the protected application and plays the selected sound natively. Decursive never reads managed-button visibility or protected aura details.",
+                        name = "For WoW 12.1 protected auras, Decursive registers public DispelDB and manual/explicit public spell IDs for the units assigned to its MUFs. Blizzard detects the protected application and plays the selected sound natively. Decursive never reads managed-button visibility or protected aura details.",
                         order = 1,
                     },
                     PlaySound = {
@@ -606,8 +606,32 @@ local function GetStaticOptions ()
                         type = "description",
                         name = function()
                             local available = D.Is121MUFStateSoundEngineAvailable and D:Is121MUFStateSoundEngineAvailable();
-                            if available then
-                                return "Trigger engine: |cff55ff55Active — Blizzard AddAuraSound|r\nTracks: assigned Decursive MUFs\nInput: public DispelDB and learned spell IDs\nBehavior: Blizzard detects and plays registered protected aura sounds without exposing aura state to addon Lua.";
+                            local exact, desired, deferred, units, snapshot = 0, 0, false, nil, nil;
+                            if D.GetProtectedAuraSoundRegistrationStatus then
+                                local lastError;
+                                exact, desired, deferred, units, lastError, snapshot = D:GetProtectedAuraSoundRegistrationStatus();
+                            end
+                            snapshot = snapshot or { exact=exact, desired=desired, activeTotal=exact, stale=0, deferred=deferred };
+                            local counts = ("%d/%d exact/desired | %d active total | %d stale"):format(
+                                snapshot.exact or 0, snapshot.desired or 0, snapshot.activeTotal or 0, snapshot.stale or 0);
+                            if snapshot.retryExhausted then
+                                return ("Trigger engine: |cffff5555Degraded — removal retry exhausted (%d/%d)|r\nBindings: %s\nFailures: add %d | remove %d\nUnits: %s\nTrigger: Added only (continuing stacks stay silent)"):format(
+                                    snapshot.retryAttempts or 0, snapshot.retryMax or 3, counts,
+                                    snapshot.addFailed or 0, snapshot.removeFailed or 0, units or "pending");
+                            elseif snapshot.retryPending or snapshot.deferred then
+                                local pending = snapshot.retryPending
+                                    and ("removal retry %d/%d pending"):format(snapshot.retryAttempts or 0, snapshot.retryMax or 3)
+                                    or "update deferred; active handles retained";
+                                return ("Trigger engine: |cffffaa00Pending — %s|r\nBindings: %s\nUnits: %s\nTrigger: Added only (continuing stacks stay silent)"):format(pending, counts, units or "pending");
+                            elseif snapshot.degraded then
+                                return ("Trigger engine: |cffff5555Degraded — native registry mismatch|r\nBindings: %s\nFailures: add %d | remove %d\nUnits: %s\nTrigger: Added only (continuing stacks stay silent)"):format(
+                                    counts, snapshot.addFailed or 0, snapshot.removeFailed or 0, units or "pending");
+                            elseif available and snapshot.enabled == false and (snapshot.activeTotal or 0) == 0 then
+                                return "Trigger engine: |cff9aa7b8Disabled — live native alerts are off|r\nThe selected Test Sound remains available.";
+                            elseif available and desired > 0 and exact == desired then
+                                return ("Trigger engine: |cff55ff55Active — Blizzard AddAuraSound|r\nBindings: %s\nUnits: %s\nTrigger: Added only (continuing stacks stay silent)\nInput: public DispelDB and manual/explicit public spell IDs."):format(counts, units or "pending");
+                            elseif available then
+                                return "Trigger engine: |cffffaa00Available — waiting for native registrations|r\nThe selected Test Sound remains addon-owned and can still play.";
                             end
                             return "Trigger engine: |cffffaa00Unavailable on this client|r\nThe selected sound can still be tested, but protected live-aura sound requires Blizzard's AddAuraSound API.";
                         end,
@@ -622,7 +646,7 @@ local function GetStaticOptions ()
                     SoundProtectedAuraAlerts = {
                         type = "toggle",
                         name = "Enable Blizzard native aura sounds",
-                        desc = "Register DispelDB and learned spell IDs with Blizzard so matching protected auras play the selected live-combat sound.",
+                        desc = "Register DispelDB and manual/explicit public spell IDs with Blizzard so matching protected auras play the selected live-combat sound.",
                         get = function() return D.profile.SoundProtectedAuraAlerts ~= false end,
                         set = function(info, value)
                             D.profile.SoundProtectedAuraAlerts = value and true or false;
@@ -637,7 +661,10 @@ local function GetStaticOptions ()
                         name = "Learn Spell IDs from successful dispels",
                         desc = "When you successfully dispel an aura and the combat log exposes its public Spell ID, remember it for the current class/spec and immediately register it with Blizzard. The first-ever occurrence can be silent; later occurrences use Blizzard-native sound detection.",
                         disabled = function() return not D.profile.PlaySound or not D.profile.SoundProtectedAuraAlerts end,
-                        hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
+                        hidden = function()
+                            return DC.TWELVEONE
+                                or (D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled())
+                        end,
                         order = 220,
                     },
                     protectedStatus = {
@@ -657,13 +684,17 @@ local function GetStaticOptions ()
                                     local spellName;
                                     if _G.C_Spell and type(_G.C_Spell.GetSpellName) == "function" then
                                         local ok, value = pcall(_G.C_Spell.GetSpellName, id);
-                                        if ok and value and (not _G.canaccessvalue or _G.canaccessvalue(value)) then spellName = value; end
+                                        if ok and (not _G.canaccessvalue or _G.canaccessvalue(value))
+                                            and type(value) == "string" and value ~= ""
+                                        then
+                                            spellName = value;
+                                        end
                                     end
                                     recent[#recent + 1] = ("%d — %s"):format(id, spellName or "Unknown spell");
                                 end
                             end
-                            local recentText = #recent > 0 and ("\nRecent learned IDs:\n" .. table.concat(recent, "\n")) or "";
-                            return ("Native engine: Blizzard AddAuraSound\nCurrent learning context: %s\nLearned protected aura spell IDs: %d%s\n\nBuilt-in DispelDB IDs and learned public IDs are registered for assigned MUF units. If an aura is not in either pool and WoW hides its Spell ID, that occurrence remains visual-only until its public ID can be learned or added."):format(contextKey, count, recentText);
+                            local recentText = #recent > 0 and ("\nRecent stored IDs:\n" .. table.concat(recent, "\n")) or "";
+                            return ("Native engine: Blizzard AddAuraSound\nCurrent class/spec context: %s\nStored manual/explicit public IDs: %d%s\n\nBuilt-in DispelDB and stored public IDs are registered for assigned MUF units. Normal 12.1 combat-log dispatch does not expose protected aura identity for automatic learning; an unknown secret aura remains visual-only until a verified public ID is added."):format(contextKey, count, recentText);
                         end,
                         hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
                         order = 230,
@@ -687,15 +718,15 @@ local function GetStaticOptions ()
                     },
                     clearProtectedSpellIDs = {
                         type = "execute",
-                        name = "Clear learned aura IDs",
-                        desc = "Remove all automatically/manually learned protected aura spell IDs for the current class/spec.",
+                        name = "Clear stored aura IDs",
+                        desc = "Remove all stored manual/explicit protected aura spell IDs for the current class/spec.",
                         func = function()
                             local ids = D.GetProtectedAuraSoundIDs and D:GetProtectedAuraSoundIDs();
                             if type(ids) == "table" then
                                 for i = #ids, 1, -1 do table.remove(ids, i); end
                             end
                             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("learned IDs cleared") end
-                            D:Println("Sound Notifications: learned protected aura spell IDs cleared for the current class/spec.");
+                            D:Println("Sound Notifications: stored protected aura spell IDs cleared for the current class/spec.");
                         end,
                         disabled = function() local ids = D.GetProtectedAuraSoundIDs and D:GetProtectedAuraSoundIDs(); return type(ids) ~= "table" or #ids == 0 end,
                         hidden = function() return D.Is121MUFVisibilitySoundDriverEnabled and D:Is121MUFVisibilitySoundDriverEnabled() end,
@@ -2517,4 +2548,3 @@ end
 
 -- Expose builder for GetV11OptionsTable
 D._BuildOptionsTree = GetOptions
-

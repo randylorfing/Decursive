@@ -1,6 +1,6 @@
 ## Interface: 120100
-## Title: Zhaohu's Decursive |cff55ffffOptions|r
-## Notes: Settings panel, option tree, and Test Mode for Zhaohu's Decursive. Loads on demand.
+## Title: Zhaohu's Decursive |cff55ffffOptions - v13|r
+## Notes: LoadOnDemand settings for the v13 command center.
 ## Author: Randy Lorfing
 ## X-License: GNU GPL V3
 ## Version: @project-version@
@@ -18,6 +18,18 @@ Dcr_opt_tree.lua
 # Test Mode / live MUF preview chrome (defines ZD:BuildTestMode before panel)
 TestMode\TestMode.lua
 
-# Settings UI
+# Mature option model and native page builders. The legacy shell is replaced
+# after load by V13\Shell.lua; these builders preserve complete feature access.
 Modern\ZD_UI.lua
 Modern\ZD_BlizzardSettings.lua
+
+# v13 primary settings interface.
+V13\Controls.lua
+V13\Shell.lua
+V13\Pages\Overview.lua
+V13\Pages\MUFs.lua
+V13\Pages\Cure.lua
+V13\Pages\Alerts.lua
+V13\Pages\Profiles.lua
+V13\Pages\Settings.lua
+V13\Pages\Advanced.lua

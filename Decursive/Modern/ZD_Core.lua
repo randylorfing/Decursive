@@ -1,7 +1,7 @@
 ﻿--[[
     This file is part of Decursive.
 
-    Zhaohu's Decursive v11 core module. This file was solely written by
+    Zhaohu's Decursive v13 compatibility core module. This file was solely written by
     Randy Lorfing.
     Copyright (C) 2026 Randy Lorfing
 
@@ -18,12 +18,11 @@
     You should have received a copy of the GNU General Public License
     along with Decursive.  If not, see <https://www.gnu.org/licenses/>.
 
-    Zhaohu's Decursive v11 — Detect • Cleanse • Protect.
+    Zhaohu's Decursive v13 — Detect • Cleanse • Protect.
 
-    This module deliberately keeps the proven v10.43 Decursive backend active
-    while v11 replaces the presentation and orchestration layers module by
-    module.  The WoW 12.1 managed-aura engine remains the authority for aura
-    visibility and never attempts to recover protected aura details.
+    This module connects the v13 command center to the hardened compatibility
+    runtime. The WoW 12.1 managed-aura engine remains the authority for aura
+    visibility and this addon never attempts to recover protected aura details.
 --]]
 
 local addonName, T = ...
@@ -37,7 +36,7 @@ D.ZhaohuModern = ZD
 
 ZD.version = "@project-version@"
 ZD.build = "single-ui"
-ZD.compatBackend = "10.43 feature engine"
+ZD.compatBackend = "v13-hardened-compat-runtime"
 ZD.editEnvironment = ZD.editEnvironment or nil
 ZD.lastStatus = ZD.lastStatus or "Ready"
 
@@ -389,9 +388,18 @@ function ZD:SetProfileOption(key, value)
     if not D.profile then return false end
 
     if key == "ShowDebuffsFrame" then
-        if (D.profile.ShowDebuffsFrame and true or false) ~= (value and true or false) and D.ShowHideDebuffsFrame then
-            D:ShowHideDebuffsFrame()
+        local enabled = value and true or false
+        if (D.profile.ShowDebuffsFrame and true or false) ~= enabled then
+            if D.SetDebuffsFrameEnabled then
+                D:SetDebuffsFrameEnabled(enabled)
+            elseif D.ShowHideDebuffsFrame then
+                D:ShowHideDebuffsFrame()
+            end
         end
+        -- Match the mature settings behavior: an explicit Show MUFs choice
+        -- disables automatic hiding so the next roster event cannot silently
+        -- reverse what the user just selected.
+        D.profile.AutoHideMUFs = 1
         return true
     end
 

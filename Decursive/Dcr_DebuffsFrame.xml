@@ -114,7 +114,9 @@
 
                     <OnHide>
                         if ( self.isMoving ) then
-                            self:GetParent():StopMovingOrSizing();
+                            if ( not InCombatLockdown() ) then
+                                self:GetParent():StopMovingOrSizing();
+                            end
                             self.isMoving = false;
                             DecursiveRootTable.Dcr.MicroUnitF.DraggingHandle = false;
                         end

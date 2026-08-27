@@ -49,6 +49,20 @@ local BATTLE_REZ_SPELL_IDS = DC.BattleRezSpellIDs
 
 local SOUL_LINK_SPELL_ID = 1259646
 local SOUL_LINK_ITEM_ID = 269586
+local canaccessvalue = _G.canaccessvalue or function(_) return true end
+local issecretvalue = _G.issecretvalue
+
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false end
+    return not issecretvalue or not issecretvalue(value)
+end
+
+local function accessibleBoolean(func, ...)
+    if type(func) ~= "function" then return nil end
+    local ok, value = pcall(func, ...)
+    if not ok or not isAccessiblePublicValue(value) then return nil end
+    return value and true or false
+end
 
 -- C_Spell.GetSpellCharges only reports a real number while in combat; it's
 -- nil otherwise (confirmed Blizzard API behavior). Outside combat we can't
@@ -56,13 +70,19 @@ local SOUL_LINK_ITEM_ID = 269586
 -- risk a false "you need Soul Link" indicator between pulls.
 local function playerHasBattleRezCharge()
     for _, spellID in ipairs(BATTLE_REZ_SPELL_IDS) do
-        if IsPlayerSpell and IsPlayerSpell(spellID) then
+        local known = false
+        if IsPlayerSpell then known = accessibleBoolean(IsPlayerSpell, spellID) end
+        if known == nil then return true end
+        if known == true then
             local charges
             if C_Spell and C_Spell.GetSpellCharges then
-                local info = C_Spell.GetSpellCharges(spellID)
-                charges = info and info.currentCharges
+                local ok, info = pcall(C_Spell.GetSpellCharges, spellID)
+                if ok and isAccessiblePublicValue(info) and type(info) == "table" then
+                    charges = info.currentCharges
+                end
             end
-            if charges == nil or charges > 0 then return true end
+            if not isAccessiblePublicValue(charges) or charges == nil then return true end
+            if type(charges) == "number" and charges > 0 then return true end
         end
     end
     return false
@@ -70,16 +90,25 @@ end
 
 local function soulLinkAvailable()
     if not D.profile or D.profile.SoulLink121Enabled == false then return false end
-    local count = (C_Item and C_Item.GetItemCount and C_Item.GetItemCount(SOUL_LINK_ITEM_ID))
-        or (GetItemCount and GetItemCount(SOUL_LINK_ITEM_ID))
-    if not count or count < 1 then return false end
+    local count
+    if C_Item and C_Item.GetItemCount then
+        local ok, value = pcall(C_Item.GetItemCount, SOUL_LINK_ITEM_ID)
+        if ok then count = value end
+    elseif GetItemCount then
+        local ok, value = pcall(GetItemCount, SOUL_LINK_ITEM_ID)
+        if ok then count = value end
+    end
+    if not isAccessiblePublicValue(count) or type(count) ~= "number" or count < 1 then return false end
     local start, duration
     if C_Item and C_Item.GetItemCooldown then
-        start, duration = C_Item.GetItemCooldown(SOUL_LINK_ITEM_ID)
+        local ok, value1, value2 = pcall(C_Item.GetItemCooldown, SOUL_LINK_ITEM_ID)
+        if ok then start, duration = value1, value2 end
     elseif GetItemCooldown then
-        start, duration = GetItemCooldown(SOUL_LINK_ITEM_ID)
+        local ok, value1, value2 = pcall(GetItemCooldown, SOUL_LINK_ITEM_ID)
+        if ok then start, duration = value1, value2 end
     end
-    if start and duration and start > 0 and duration > 0 then return false end
+    if not isAccessiblePublicValue(start) or not isAccessiblePublicValue(duration) then return false end
+    if type(start) == "number" and type(duration) == "number" and start > 0 and duration > 0 then return false end
     return true
 end
 
@@ -93,7 +122,7 @@ end
 local function soulLinkOutOfRange(unit)
     if C_Spell and C_Spell.IsSpellInRange then
         local ok, result = pcall(C_Spell.IsSpellInRange, SOUL_LINK_SPELL_ID, unit)
-        if ok and result ~= nil then return result == false end
+        if ok and isAccessiblePublicValue(result) and result ~= nil then return result == false end
     end
     return false
 end
@@ -119,7 +148,10 @@ local function updateAll()
     for _, MF in pairs(D.MicroUnitF.UnitToMUF) do
         local active = false
         local unit = MF and MF.CurrUnit
-        if relyingOnSoulLink and unit and UnitExists(unit) and UnitIsDeadOrGhost(unit) and not UnitIsUnit(unit, "player") then
+        local isDead = unit and accessibleBoolean(UnitIsDeadOrGhost, unit)
+        local isPlayer = unit and accessibleBoolean(UnitIsUnit, unit, "player")
+        local exists = unit and accessibleBoolean(UnitExists, unit)
+        if relyingOnSoulLink and unit and exists == true and isDead == true and isPlayer == false then
             active = soulLinkOutOfRange(unit)
             if active then
                 lastOutOfRangeCount = lastOutOfRangeCount + 1
@@ -184,7 +216,8 @@ local function showAlert()
         return
     end
 
-    local name = UnitName(lastOutOfRangeUnit) or "your target"
+    local name = D.UnitName and D:UnitName(lastOutOfRangeUnit) or nil
+    if not isAccessiblePublicValue(name) or type(name) ~= "string" then name = "your target" end
     local message = lastOutOfRangeCount > 1
         and ("Battle rez: move within range of %s (and %d other%s)!"):format(
             name, lastOutOfRangeCount - 1, lastOutOfRangeCount - 1 > 1 and "s" or "")
@@ -207,6 +240,7 @@ failWatcher:SetScript("OnEvent", function(_, event, arg1, arg2, spellID)
     if event == "UI_ERROR_MESSAGE" then
         -- (errorType, message) here -- see comment above.
         local msg = arg2
+        if not isAccessiblePublicValue(arg1) or not isAccessiblePublicValue(msg) then return end
         local isRangeError = (SPELL_FAILED_OUT_OF_RANGE and msg == SPELL_FAILED_OUT_OF_RANGE)
             or (ERR_OUT_OF_RANGE and msg == ERR_OUT_OF_RANGE)
         if isRangeError then
@@ -224,7 +258,7 @@ failWatcher:SetScript("OnEvent", function(_, event, arg1, arg2, spellID)
         end
         return
     end
-    if spellID == SOUL_LINK_SPELL_ID then showAlert() end
+    if isAccessiblePublicValue(spellID) and spellID == SOUL_LINK_SPELL_ID then showAlert() end
 end)
 
 -- Manual test trigger for the options-panel button (Dcr_opt.lua) -- shows

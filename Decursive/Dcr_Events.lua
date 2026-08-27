@@ -84,11 +84,26 @@ local GetGuildInfo      = _G.GetGuildInfo;
 local InCombatLockdown  = _G.InCombatLockdown;
 local UnitExists        = _G.UnitExists;
 local UnitCanAttack     = _G.UnitCanAttack;
+local UnitIsFriend      = _G.UnitIsFriend;
+local UnitIsPlayer      = _G.UnitIsPlayer;
 local UnitName          = _G.UnitName;
 local UnitGUID          = _G.UnitGUID;
 local GetTime           = _G.GetTime;
 local IsShiftKeyDown    = _G.IsShiftKeyDown;
 local canaccessvalue    = _G.canaccessvalue or function(_) return true; end
+local issecretvalue     = _G.issecretvalue;
+
+local function isAccessiblePublicValue(value)
+    if not canaccessvalue(value) then return false; end
+    return not issecretvalue or not issecretvalue(value);
+end
+
+local function accessibleBoolean(func, ...)
+    if type(func) ~= "function" then return nil; end
+    local ok, value = pcall(func, ...);
+    if not ok or not isAccessiblePublicValue(value) then return nil; end
+    return value and true or false;
+end
 
 -- Blizzard event management
 function D.OnEvent(frame, event, ...)
@@ -195,9 +210,19 @@ function D:PLAYER_LEAVING_WORLD()
         return
     end
 
+    -- Macro mutation is protected during combat. Leaving these temporary
+    -- macros in place for the next safe startup/exit is preferable to firing
+    -- ADDON_ACTION_BLOCKED during a combat reload or world transition.
+    if InCombatLockdown and InCombatLockdown() then
+        return
+    end
+
     for macroName, toDelete in pairs( D.Status.createdMacros) do
         local index = GetMacroIndexByName(macroName)
-        if index and toDelete then
+        -- GetMacroIndexByName returns 0 when no matching macro exists, and 0
+        -- is truthy in Lua. Never pass that sentinel to the protected delete
+        -- API during a world transition.
+        if type(index) == "number" and index > 0 and toDelete then
             DeleteMacro(index)
         end
     end
@@ -234,7 +259,8 @@ local last_petType = false;
 
 function D:UpdatePlayerPet () -- {{{
     curr_petType = UnitCreatureFamily("pet");
-    D:Debug("|cFF0000FFCurrent Pet type is",curr_petType,"|r");
+    if not isAccessiblePublicValue(curr_petType) then curr_petType = nil; end
+    D:Debug("|cFF0000FFCurrent Pet type is", curr_petType or "restricted/none", "|r");
 
     -- if we had a pet and lost it, retry once later...
     if (last_petType and not curr_petType and not OncePetRetry) then
@@ -246,7 +272,7 @@ function D:UpdatePlayerPet () -- {{{
     end
 
     -- if we've changed of pet
-    if (not last_petType or canaccessvalue(curr_petType) and last_petType ~= curr_petType) then
+    if (not last_petType or last_petType ~= curr_petType) then
         if (curr_petType) then D:Debug ("|cFF0066FFPet name changed:",curr_petType,"|r"); else D:Debug ("|cFF0066FFNo more pet!|r"); end; -- debug info only
 
         last_petType = curr_petType;
@@ -268,14 +294,18 @@ function D:PLAYER_FOCUS_CHANGED () -- {{{
 
     -- we need to rescan if the focus is not in our group and it's nice or if we already have a focus unit registered
 
-    local focusGUID = UnitGUID("focus")
+    local guidOK, focusGUID = pcall(UnitGUID, "focus")
+    if not guidOK or not isAccessiblePublicValue(focusGUID) then focusGUID = nil; end
 
     local FocusCurrent_ElligStatus;
 
-    if canaccessvalue(focusGUID) then
+    if focusGUID then
+        local exists = accessibleBoolean(UnitExists, "focus");
+        local canAttack = accessibleBoolean(UnitCanAttack, "focus", "player");
+        local isFriend = accessibleBoolean(UnitIsFriend, "focus", "player");
         FocusCurrent_ElligStatus = (
         not self.Status.Unit_Array_GUIDToUnit[focusGUID]    -- it's not already in the unit array
-        ) and ( UnitExists("focus") and (not UnitCanAttack("focus", "player") or UnitIsFriend("focus", "player"))) -- and it is (or used to) be nice
+        ) and exists == true and (canAttack == false or isFriend == true) -- and it is (or used to) be nice
     else
         D:Debug("focus GUID is not accessible")
     end
@@ -373,9 +403,21 @@ function D:PLAYER_REGEN_DISABLED() -- {{{
     -- this event fires after the player enters in combat, only InCombatLockdown() may be used for critical checks
     self.Status.Combat = true;
     if self.MFContainerHandle.isMoving then
-        self.MFContainer:StopMovingOrSizing();
+        -- PLAYER_REGEN_DISABLED arrives after lockdown is active. The MUF
+        -- container owns secure action buttons, so even stopping a drag here
+        -- is a protected layout mutation. Clear the Lua drag state now and
+        -- finish/snapshot the movement after combat instead.
         self.MFContainerHandle.isMoving = false;
         self.MicroUnitF.DraggingHandle = false;
+        self:AddDelayedFunctionCall("Dcr_StopMUFMovement", function()
+            if D.MFContainer then D.MFContainer:StopMovingOrSizing(); end
+            if D.MicroUnitF then
+                D.MicroUnitF:SavePos();
+                D.MicroUnitF:Place();
+                D.MicroUnitF:SavePos();
+            end
+            return true;
+        end);
     end
 end --}}}
 
@@ -404,6 +446,14 @@ do
         -- every other call site of this function.
         if self.ReinitializeDecursiveAfterZone and D.DcrFullyInitialized then
             self:ReinitializeDecursiveAfterZone("PLAYER_REGEN_ENABLED");
+        end
+
+        -- A registry rebuild includes restricted AddAuraSound calls. Apply any
+        -- roster/spec/learned-ID refresh requested during combat only after
+        -- lockdown has fully ended (the central guard also checks any active
+        -- addon restriction).
+        if self.FlushProtectedAuraSoundRefresh then
+            self:FlushProtectedAuraSoundRefresh("PLAYER_REGEN_ENABLED");
         end
 
         -- test for debug report
@@ -435,30 +485,74 @@ do
         local s_toString =  D:tReverse(Enum.AddOnRestrictionState)
 
         for fieldName, fieldValue in pairs(Enum.AddOnRestrictionType) do
-            currentState[fieldValue] = C_RestrictedActions.GetAddOnRestrictionState(fieldValue)
-            D:Debug(("AddonRestriction %s (%d): %s"):format(fieldName, fieldValue, s_toString[currentState[fieldValue]]))
+            local ok, state = pcall(C_RestrictedActions.GetAddOnRestrictionState, fieldValue);
+            if not ok or not isAccessiblePublicValue(state) or type(state) ~= "number" then
+                state = S_Active;
+            end
+            currentState[fieldValue] = state;
+            D:Debug(("AddonRestriction %s (%d): %s"):format(
+                fieldName, fieldValue, s_toString[state] or "unknown"));
         end
 
         function D:currentRestrictionsStr()
             local str = ""
             for t, s in pairs(currentState) do
                 if s ~= S_Inactive then
-                    str = ("%s%s%s:%d"):format(str, str ~= "" and "," or "", r_toString[t]:sub(1,2), s)
+                    local restrictionName = r_toString[t] or "Unknown"
+                    str = ("%s%s%s:%d"):format(str, str ~= "" and "," or "", restrictionName:sub(1,2), s)
                 end
             end
 
             return str
         end
 
+        function D:HasActiveAddonRestriction()
+            for restrictionType, state in pairs(currentState) do
+                -- During ADDON_RESTRICTION_STATE_CHANGED(Activating), querying
+                -- the API still returns Inactive until event dispatch ends.
+                -- Preserve the event's forward-looking state instead of
+                -- overwriting it with that intentionally stale query result.
+                if state == S_Activating or state == S_Active then
+                    return true;
+                end
+                local ok, latest = pcall(C_RestrictedActions.GetAddOnRestrictionState, restrictionType);
+                if ok and isAccessiblePublicValue(latest) and type(latest) == "number" then
+                    state = latest;
+                    currentState[restrictionType] = latest;
+                end
+                if state ~= S_Inactive then return true; end
+            end
+            return false;
+        end
+
         function D:ADDON_RESTRICTION_STATE_CHANGED(event, restrictionType, restrictionState)
-            D:Debug("ARSC: ", event, r_toString[restrictionType], s_toString[restrictionState])
+            if not isAccessiblePublicValue(restrictionType)
+                or not isAccessiblePublicValue(restrictionState)
+                or type(restrictionType) ~= "number"
+                or type(restrictionState) ~= "number"
+            then
+                return;
+            end
+            D:Debug("ARSC: ", event, r_toString[restrictionType] or "unknown",
+                s_toString[restrictionState] or "unknown")
 
             currentState[restrictionType] = restrictionState
+            if restrictionState == S_Inactive and self.FlushProtectedAuraSoundRefresh then
+                local function flush()
+                    if D.FlushProtectedAuraSoundRefresh then
+                        D:FlushProtectedAuraSoundRefresh("addon restriction ended");
+                    end
+                end
+                if C_Timer and C_Timer.After then C_Timer.After(0, flush); else flush(); end
+            end
         end
     else
         function D:currentRestrictionsStr()
             return "N/A"
         end;
+        function D:HasActiveAddonRestriction()
+            return false;
+        end
         --D:ADDON_RESTRICTION_STATE_CHANGED does not exist before MN
     end
 
@@ -497,7 +591,8 @@ function D:UPDATE_MOUSEOVER_UNIT ()
         return;
     end
 
-    if not self.profile.HideLiveList and not self.Status.MouseOveringMUF and not UnitCanAttack("mouseover", "player") then
+    local canAttack = accessibleBoolean(UnitCanAttack, "mouseover", "player");
+    if not self.profile.HideLiveList and not self.Status.MouseOveringMUF and canAttack == false then
         --      D:Debug("will check MouseOver");
         self.LiveList:DelayedGetDebuff("mouseover");
     end
@@ -511,7 +606,9 @@ function D:PLAYER_TARGET_CHANGED()
         return;
     end
 
-    if UnitExists("target") and not UnitCanAttack("player", "target") then
+    local targetExists = accessibleBoolean(UnitExists, "target");
+    local targetCanAttack = accessibleBoolean(UnitCanAttack, "player", "target");
+    if targetExists == true and targetCanAttack == false then
         D.Status.TargetExists = true;
 
         self.LiveList:DelayedGetDebuff("target");
@@ -591,9 +688,11 @@ function D:DECURSIVE_TALENTS_AVAILABLE()
     end
 
     -- some useful constants
-    DC.MyClass = (select(2, UnitClass("player")));
+    local classOK, _, classToken = pcall(UnitClass, "player");
+    DC.MyClass = classOK and isAccessiblePublicValue(classToken) and classToken or DC.CLASS_WARRIOR;
     DC.MyName  = (self:UnitName("player"));
-    DC.MyGUID  = (UnitGUID("player"));
+    local guidOK, playerGUID = pcall(UnitGUID, "player");
+    DC.MyGUID  = guidOK and isAccessiblePublicValue(playerGUID) and playerGUID or nil;
 
     if not DC.MyGUID then
         DC.MyGUID = "NONE";
@@ -602,6 +701,19 @@ function D:DECURSIVE_TALENTS_AVAILABLE()
 
     self.Groups_datas_are_invalid = true;
     D:GetUnitArray(); -- get the unit array
+
+    -- Cold login can reach PLAYER_ENTERING_WORLD before Decursive is fully
+    -- initialized, so that event's MUF rebuild is deliberately discarded.
+    -- The player GUID becoming public is the first deterministic point at
+    -- which the initial roster can be committed.  Restart the existing
+    -- generation-guarded recovery here so hidden MUF buttons are created and
+    -- displayed without depending on a later roster event or /reload.
+    if self.DcrFullyInitialized and self.ReinitializeDecursiveAfterZone then
+        self:ReinitializeDecursiveAfterZone("DECURSIVE_TALENTS_AVAILABLE");
+    elseif self.DcrFullyInitialized and self.MicroUnitF
+        and self.MicroUnitF.Delayed_MFsDisplay_Update then
+        self.MicroUnitF:Delayed_MFsDisplay_Update();
+    end
 end
 ---[=[
 local SeenUnitEventsUNITAURA = {};
@@ -632,6 +744,12 @@ do
     end
 
     function D:UNIT_AURA(selfevent, UnitID, o_auraUpdateInfo)
+
+        -- Mainline 12.1 aura event payloads can be secret. The later-loaded
+        -- native compatibility module replaces this handler with a no-op, but
+        -- keep the legacy implementation fail-closed as well so a partial load
+        -- or direct call can never inspect the protected update table.
+        if DC.TWELVEONE then return; end
 
         if not D.DcrFullyInitialized then
             D:Debug("|cFFFF0000D:UNIT_AURA aborted, init uncomplete!|r");
@@ -841,7 +959,10 @@ do -- Combat log event handling {{{1
     function D:DummyDebuff (UnitID)
         local PLAYER = bit.bor (COMBATLOG_OBJECT_CONTROL_PLAYER   , COMBATLOG_OBJECT_TYPE_PLAYER  , COMBATLOG_OBJECT_REACTION_FRIENDLY  ); -- still used
 
-        D:COMBAT_LOG_EVENT_UNFILTERED("COMBAT_LOG_EVENT_UNFILTERED", 0, "SPELL_AURA_APPLIED", false, nil, nil, COMBATLOG_OBJECT_NONE, 0, UnitGUID(UnitID), (UnitName(UnitID)), PLAYER, 0, 0, "Test item", 0x32, "DEBUFF");
+        local guidOK, unitGUID = pcall(UnitGUID, UnitID);
+        if not guidOK or not isAccessiblePublicValue(unitGUID) then unitGUID = nil; end
+        local unitName = D:UnitName(UnitID);
+        D:COMBAT_LOG_EVENT_UNFILTERED("COMBAT_LOG_EVENT_UNFILTERED", 0, "SPELL_AURA_APPLIED", false, nil, nil, COMBATLOG_OBJECT_NONE, 0, unitGUID, unitName, PLAYER, 0, 0, "Test item", 0x32, "DEBUFF");
     end
 
     local SpecialDebuffs = {
@@ -852,34 +973,66 @@ do -- Combat log event handling {{{1
 
     function D:COMBAT_LOG_EVENT_UNFILTERED(selfevent, timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellID, spellNAME, _spellSCHOOL, auraTYPE_failTYPE)
 
+        if event ~= nil and not isAccessiblePublicValue(event) then return; end
+        -- COMBAT_LOG_EVENT_UNFILTERED carries no payload in the normal event
+        -- dispatch; retrieving it requires CombatLogGetCurrentEventInfo().
+        -- Decursive's secure-click 12.1 runtime has no supported use for that
+        -- protected stream, so fail closed before the API call. Explicit
+        -- synthetic/public invocations (the test helper below) may continue
+        -- through the narrow 12.1 branch without querying the combat log.
+        if DC.TWELVEONE and event == nil then return; end
         if event == nil then
             timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellID, spellNAME, _spellSCHOOL, auraTYPE_failTYPE = CombatLogGetCurrentEventInfo()
         end
                     --[==[
                     --if self.debug then self:Debug("COMBAT_LOG_EVENT_UNFILTERED: ", timestamp, event, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellID, spellNAME, _spellSCHOOL, auraTYPE_failTYPE); end
                     ]==]
-        -- WoW 12.1 protected sound learning: for SPELL_DISPEL, the first
-        -- event-specific value after the dispel spell fields is extraSpellID.
-        -- The existing auraTYPE_failTYPE local occupies that position in this
-        -- compact handler signature. Only learn a public/non-secret numeric ID.
-        if event == "SPELL_DISPEL" and band(sourceFlags or 0, ME) ~= 0 then
-            -- Diagnostic capture for Midnight 12.1.  Do NOT stringify or otherwise
-            -- inspect a secret value; record only whether Blizzard exposed it.
-            T._AuraSoundDiag = T._AuraSoundDiag or {};
-            local extraSpellID = auraTYPE_failTYPE;
-            local diag = T._AuraSoundDiag;
-            diag.playerDispelEvents = (diag.playerDispelEvents or 0) + 1;
-            diag.lastDispelExtraType = type(extraSpellID);
-            diag.lastDispelExtraAccessible = canaccessvalue(extraSpellID) and true or false;
-            diag.lastDispelExtraSecret = (_G.issecretvalue and _G.issecretvalue(extraSpellID)) and true or false;
-            if type(extraSpellID) == "number" and diag.lastDispelExtraAccessible and not diag.lastDispelExtraSecret then
-                diag.lastDispelExtraPublicID = extraSpellID;
-                if self.profile and self.profile.SoundProtectedAuraAutoLearn and self.LearnProtectedAuraSoundSpellID then
-                    self:LearnProtectedAuraSoundSpellID(extraSpellID, "successful dispel");
+        -- Midnight combat-log fields may be secret. The 12.1 runtime no longer
+        -- uses live CLEU for affliction state or cast outcomes; AuraContainer
+        -- and UNIT_SPELLCAST_* own those jobs. Retain a narrow branch only for
+        -- explicit synthetic/public calls and return before the legacy handler
+        -- can compare, index, or stringify a protected payload. pcall is not an
+        -- access boundary.
+        if DC.TWELVEONE then
+            if not isAccessiblePublicValue(event) or type(event) ~= "string" then return; end
+
+            if event == "SPELL_DISPEL" then
+                if not isAccessiblePublicValue(sourceFlags) or type(sourceFlags) ~= "number"
+                    or band(sourceFlags, ME) == 0
+                then
+                    return;
                 end
-            else
-                diag.lastDispelExtraPublicID = nil;
+
+                -- For SPELL_DISPEL the first event-specific value after the
+                -- dispel spell fields is extraSpellID. The compact signature's
+                -- auraTYPE_failTYPE local occupies that position.
+                T._AuraSoundDiag = T._AuraSoundDiag or {};
+                local extraSpellID = auraTYPE_failTYPE;
+                local diag = T._AuraSoundDiag;
+                local extraAccessible = isAccessiblePublicValue(extraSpellID);
+                diag.playerDispelEvents = (diag.playerDispelEvents or 0) + 1;
+                diag.lastDispelExtraAccessible = extraAccessible;
+                diag.lastDispelExtraSecret = issecretvalue and issecretvalue(extraSpellID) and true or false;
+                diag.lastDispelExtraType = extraAccessible and type(extraSpellID) or "restricted";
+                if extraAccessible and type(extraSpellID) == "number" then
+                    diag.lastDispelExtraPublicID = extraSpellID;
+                    if self.profile and self.profile.SoundProtectedAuraAutoLearn and self.LearnProtectedAuraSoundSpellID then
+                        self:LearnProtectedAuraSoundSpellID(extraSpellID, "successful dispel");
+                    end
+                else
+                    diag.lastDispelExtraPublicID = nil;
+                end
+            elseif event == "SPELL_AURA_APPLIED"
+                and isAccessiblePublicValue(spellID) and type(spellID) == "number"
+                and isAccessiblePublicValue(destGUID) and type(destGUID) == "string"
+            then
+                local publicUnit = self.Status and self.Status.Unit_Array_GUIDToUnit
+                    and self.Status.Unit_Array_GUIDToUnit[destGUID];
+                if publicUnit and self.NotifyDispelAlertFromPublicAura then
+                    self:NotifyDispelAlertFromPublicAura(spellID, "SPELL_AURA_APPLIED", publicUnit);
+                end
             end
+            return;
         end
 
         -- check for exceptions
@@ -896,10 +1049,9 @@ do -- Combat log event handling {{{1
 
             UnitID = self.Status.Unit_Array_GUIDToUnit[destGUID]; -- get the grouped unit associated to the destGUID if there is none then the unit is not in our group or is filtered out
 
-            -- Public SPELL_AURA_APPLIED for DispelDB / learned IDs: a successful
-            -- AddAuraSound registration owns audio; otherwise this public event
-            -- safely falls back to Decursive playback. Secret spell IDs remain
-            -- entirely Blizzard-owned (AuraContainer + AddAuraSound).
+            -- Explicit/synthetic public SPELL_AURA_APPLIED for DispelDB or
+            -- learned IDs. Normal 12.1 CLEU dispatch returned before requesting
+            -- the payload, so live protected handling remains Blizzard-owned.
             if UnitID and event == "SPELL_AURA_APPLIED"
                 and self.NotifyDispelAlertFromPublicAura
             then
@@ -1101,9 +1253,18 @@ do -- Communication event handling and broadcasting {{{1
 
         T.LastVCheck = GetTime();
 
-        if UnitExists("target") and (UnitFactionGroup("target")) == (UnitFactionGroup("player")) and UnitIsPlayer("target") then -- the unit exists and is a player of our faction
-            LibStub("AceComm-3.0"):SendCommMessage( "ZhaohuDcrVersion", "giveversion", "WHISPER", self:UnitName("target"));
-            D:Debug("Asking version to ", self:UnitName("target"));
+        local targetExists = accessibleBoolean(UnitExists, "target");
+        local targetPlayer = accessibleBoolean(UnitIsPlayer, "target");
+        local targetFactionOK, targetFaction = pcall(UnitFactionGroup, "target");
+        local playerFactionOK, playerFaction = pcall(UnitFactionGroup, "player");
+        local targetName = self:UnitName("target");
+        if targetExists == true and targetPlayer == true and targetName
+            and targetFactionOK and playerFactionOK
+            and isAccessiblePublicValue(targetFaction) and isAccessiblePublicValue(playerFaction)
+            and targetFaction == playerFaction
+        then -- the unit exists and is a player of our faction
+            LibStub("AceComm-3.0"):SendCommMessage( "ZhaohuDcrVersion", "giveversion", "WHISPER", targetName);
+            D:Debug("Asking version to ", targetName);
         end
 
         local Distribution = GetDistributionChanel();
@@ -1266,7 +1427,8 @@ do
             local foundmembers = 0;
             local raidName;
             for i=1, MAX_RAID_MEMBERS do
-                raidName = (GetRaidRosterInfo(i));
+                local ok, value = pcall(GetRaidRosterInfo, i);
+                raidName = ok and isAccessiblePublicValue(value) and value or nil;
 
                 if raidName then
 
@@ -1312,8 +1474,17 @@ function D:ReturnVersions()
 
     local formatedversions = {};
     for name, versiondetails in pairs(D.versions) do
-        if Name_To_Unit[name] and UnitExists(Name_To_Unit[name]) then
-            name = D:ColorText(name, "FF"..DC.HexClassColor[select(2, UnitClass(Name_To_Unit[name]))]);
+        if Name_To_Unit[name] and accessibleBoolean(UnitExists, Name_To_Unit[name]) == true then
+            local unit = Name_To_Unit[name]
+            local _, classToken
+            if D.GetUnitClassSafe then
+                _, classToken = D:GetUnitClassSafe(unit)
+            else
+                local ok, _, fallbackToken = pcall(UnitClass, unit)
+                if ok and isAccessiblePublicValue(fallbackToken) then classToken = fallbackToken end
+            end
+            local classColor = classToken and DC.HexClassColor[classToken]
+            if classColor then name = D:ColorText(name, "FF" .. classColor) end
         else
             D:Debug("ReturnVersions() no unit for ", name);
         end
@@ -1339,7 +1510,8 @@ do
     local GetTalentInfo      = _G.GetTalentInfo;
 
     local function CheckTalentsAvaibility() -- {{{
-        if not (UnitGUID("player")) then
+        local ok, guid = pcall(UnitGUID, "player");
+        if not ok or not isAccessiblePublicValue(guid) or not guid then
             D:Debug("Player GUID not available");
             return false;
         end
@@ -1360,12 +1532,23 @@ do
             -- dispatch event
             D:SendMessage("DECURSIVE_TALENTS_AVAILABLE");
 
+            return true;
+
         end
+
+        return false;
     end -- }}}
 
 
     function D:StartTalentAvaibilityPolling()
-        -- poll talents every 2 seconds
+        -- UnitGUID is normally available by PLAYER_LOGIN (and always is on a
+        -- /reload). Try once immediately so a cold start does not add an
+        -- unnecessary two-second blank-MUF window. If Blizzard is not ready,
+        -- retain the original two-second readiness polling path.
+        if PollTalentsAvaibility() then
+            return;
+        end
+
         if D:TimerExixts("PollTalents") then
             return;
         end

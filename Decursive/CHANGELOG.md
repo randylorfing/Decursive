@@ -1,5 +1,109 @@
 # Zhaohu-Decursive Changelog
 
+## v12.1.1
+
+### Restored original MUF visual bounds and range semantics
+- Fixed a method-style call to the plain `D.IsSpellInRange(spellName, unit)`
+  helper that shifted both arguments and painted every non-player MUF yellow
+  on dungeon entry.
+- Preserved Lua-decided range as a three-state result: yellow requires every
+  relevant configured cure to return an explicit checked out-of-range result;
+  nil, inaccessible, secret, mixed and unchecked results are neutral. Secret
+  booleans remain Blizzard-rendered without Lua branching.
+- Hidden range state for inactive MUF slots so a roster or zone rebuild cannot
+  leave yellow ghost squares behind.
+- Restored upstream Decursive's exact visual geometry: a normal 20x20 secure
+  click target has a centered 16x16 affliction/range/failure/cooldown surface;
+  pet MUFs use 16x16 click targets with 12x12 visual surfaces. The two-pixel
+  class border remains visible at every scale.
+
+### Native sound registry reliability
+- Changed startup registration from `player` only to desired pre-arming of
+  stable `party1` through `party4` tokens before a dungeon-wide addon
+  restriction can prevent later registration. `/zdsound` reports exact coverage
+  before restricted content begins.
+- Replaced destructive clear-and-rebuild sound refreshes with a persistent
+  desired-state reconciler. Unchanged handles are retained, additions occur
+  before removals, and a failed replacement keeps the last working binding.
+  Failed removals receive three bounded retries and remain visible as stale
+  handles instead of being silently forgotten.
+- Reconciled sounds at the authoritative roster/cure-capability boundaries and
+  added talent/spell refresh events without reading protected aura data.
+- Scoped raid registrations to canonical member tokens, manual IDs and
+  built-ins matching the active public instance name; this avoids registering
+  the entire dungeon database against every raid/pet/focus token.
+- Expanded `/zdsound` with exact/desired coverage, active/stale counts, unit
+  coverage, add/remove results, retry state and
+  `/zdsound <spellID> [unitToken]` queries.
+- Clarified that native sounds use Blizzard's `Added` trigger. Continuing aura
+  stacks intentionally stay silent; only addon-owned public fallback sounds can
+  use Decursive's configurable two-second debounce.
+
+### One settings interface
+- Promoted the graphite/cyan v13 command center to the only user-facing settings window.
+- Routed `/decursive`, `/dcr`, `/zd`, `/zdecursive`, the options keybind, Blizzard Settings launcher, Alt+RightClick and list shortcuts into that window.
+- Removed the temporary `/dcrv13` launcher and retired the old sidebar shell.
+
+### Complete settings coverage
+- Added an **All Settings** workspace with category and page navigation for every established option.
+- Preserved the mature option model and native builders internally so custom spells, secure mouse bindings, priority/skip lists, filters, profiles, import/export, macros, diagnostics and DispelDB remain available.
+- Kept the proven cure engine as the hardened v13 compatibility runtime; the UI promotion does not replace secure MUFs, protected-aura handling, dispel alerts, sound or cooldown behavior.
+- Removed the legacy beta/RC startup notice window. Non-stable builds remain
+  classified internally for diagnostics, expiration checks and version exchange
+  without interrupting login.
+
+### Cold-client MUF recovery
+- Replaced visibility toggling based on `Frame:IsVisible()` with an explicit
+  desired-state setter that reconciles both the saved preference and the secure
+  parent frame's actual shown state.
+- Anchored and showed newly assigned MUF children at the roster display
+  boundary instead of depending on a later periodic update tick.
+- Added bounded roster convergence after player readiness, world entry,
+  configuration/profile changes and post-combat recovery.
+- Added `/zdmuf`, which reports safe public startup state without reading aura
+  contents and can diagnose a failure before `/reload` changes the evidence.
+
+### Deployment safety
+- Added source validation for the primary-shell installation, complete settings workspace and removal of the preview command.
+- Documented the production gate that requires the full WoW 12.1 in-game matrix before tagging or publishing.
+- Replaced the stale hard-coded `11.0.10` diagnostic header and newer-version notice with the packaged version, made lowercase RC tags activate the development-build warning correctly, and removed the duplicate `v` prefix from packaged 12.1 diagnostics.
+- Prevented native aura-sound registry rebuilds from reaching restricted
+  `C_UnitAuras.AddAuraSound` calls during combat or another active addon
+  restriction; requests now coalesce until the registry can be rebuilt safely.
+- Removed the unnecessary native sound-registry rebuild after every cure, which could emit `ADDON_ACTION_BLOCKED` from the secure click/spellcast path even when wrapped in `pcall`.
+
+### Full 12.1 restricted-action audit
+- Moved the 12.1 combat-log boundary ahead of `CombatLogGetCurrentEventInfo()` so the secure-click runtime never invokes the unsupported stream and then attempts to sanitize its result afterward.
+- Disabled every legacy aura-enumeration entry point on 12.1, including the Live List, stealth/buff scan, direct UNIT_AURA handler and stale tooltip/count paths.
+- Added access/secret checks for unit identity, roster, role, range, cooldown,
+  cast and event values before comparison, indexing, formatting or persistence.
+- Guarded macro deletion/creation, key binding mutation, secure MUF attributes,
+  window reset/scale/show operations, status-light changes, first-time options
+  loading and addon shutdown at their actual protected API boundary.
+- Deferred MUF drag completion, drag-handle mouse-state changes and any missed
+  status/range/line-of-sight/cooldown overlay construction until combat ends;
+  repeated combat tickers no longer rewrite overlay anchors or sizes.
+- Corrected restriction-transition caching so an `Activating` event cannot be
+  overwritten by the intentionally stale state query made during that event.
+- Separated combat-locked secure MUF topology from aura secrecy. Native
+  AuraContainers can rebuild after an in-key reload, while post-initialization
+  AuraButton display mutations still require `CanBeAccessedInContext()`.
+- Expanded validation to parse every runtime Lua and XML file and reject the
+  packager-corrupted long-comment pattern before packaging. Built artifacts now
+  also fail validation if any `@project-*` token remains unreplaced.
+
+### Production release pipeline
+- Changed publishing from ordinary `master` pushes to version tags only.
+- Split verification from publishing so source linting and a credential-free
+  dry-run package complete before upload credentials are exposed.
+- Pinned the checkout, Lua checker and WoW packager revisions used for release.
+- Added packaged TOC, version, Interface, token, ignored-file, Lua/XML, ZIP-root,
+  archive-integrity and staging-byte validation.
+- Excluded internal architecture, deployment-candidate, to-do, hotfix and
+  superseded release-note files from the installed production addon.
+- Required every release tag to point to a commit already contained in
+  `master`; publication cannot start directly from a development branch.
+
 ## v12.0.7
 
 ### Removed the debug preprocessing markers entirely

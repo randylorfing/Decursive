@@ -45,7 +45,9 @@ function D:RegisterDispelDBExpansion(key, meta, entries)
 end
 
 function D:GetDispelDBEntry(spellID)
+    if _G.canaccessvalue and not _G.canaccessvalue(spellID) then return nil end
     if _G.issecretvalue and _G.issecretvalue(spellID) then return nil end
+    if type(spellID) ~= "number" then return nil end
     return self.DispelDB and self.DispelDB.bySpellID and self.DispelDB.bySpellID[spellID]
 end
 
