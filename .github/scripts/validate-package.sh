@@ -107,6 +107,77 @@ else
     fail "LICENSE.txt is missing from the package; check license-output in .pkgmeta."
 fi
 
+# ---------------------------------------------------------------------------
+# 7. Case-insensitive filename collisions.
+#
+#    Linux packs the zip, but most players extract it on Windows, where two
+#    paths differing only in case are ONE file. v12.1.2 shipped both
+#    Decursive/README.md and Decursive/Readme.md: extracting it prompted to
+#    overwrite, and one document silently replaced the other.
+#
+#    The Lua parser cannot see this -- neither file is Lua -- so it needs its
+#    own check.
+# ---------------------------------------------------------------------------
+collisions=$(
+    find "$releasedir" -type f -printf '%P\n' 2>/dev/null \
+        | tr 'A-Z' 'a-z' | sort | uniq -d
+)
+if [ -n "$collisions" ]; then
+    while IFS= read -r lower; do
+        [ -n "$lower" ] || continue
+        actual=$(find "$releasedir" -type f -printf '%P\n' 2>/dev/null \
+            | awk -v l="$lower" 'tolower($0)==l' | paste -sd', ' -)
+        fail "case-insensitive filename collision: $actual (these are one file on Windows)"
+    done <<< "$collisions"
+else
+    note "no case-insensitive filename collisions"
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Source-only files must not ship.
+#
+#    With package-as: Decursive the packager stages the entire checkout under
+#    the package folder, so anything left at the repository root lands inside
+#    the addon unless .pkgmeta ignores it. v12.1.2 shipped README.md and
+#    RELEASE_PROCESS.md this way.
+# ---------------------------------------------------------------------------
+leaked=0
+while IFS= read -r pattern; do
+    hits=$(find "$releasedir" -type f -iname "$pattern" 2>/dev/null || true)
+    if [ -n "$hits" ]; then
+        while IFS= read -r h; do
+            [ -n "$h" ] || continue
+            fail "source-only file shipped in the package: ${h#"$releasedir/"}"
+            leaked=$((leaked + 1))
+        done <<< "$hits"
+    fi
+done <<'PATTERNS'
+RELEASE_PROCESS.md
+RELEASE_NOTES_v11*.md
+RELEASE_NOTES_v12.0*.md
+Todo.txt
+IMPLEMENTATION_SUMMARY.md
+12_1_PATCH_NOTES.md
+V10.*.md
+V11_*.md
+.gitattributes
+.editorconfig
+.docmeta
+.pkgmeta
+PATTERNS
+[ "$leaked" -eq 0 ] && note "no source-only files leaked into the package"
+
+# The repository's own development docs directory must never be packaged.
+if [ -d "$releasedir/Decursive/docs" ] || [ -d "$releasedir/docs" ]; then
+    fail "the docs/ tree was packaged; it is repository-only."
+fi
+
+# The branding asset is source-only and is 612 KB, ~30% of an otherwise clean
+# download. It has shipped by accident before.
+if find "$releasedir" -type d -name branding | grep -q .; then
+    fail "branding/ was packaged; it is source-only and no code references it."
+fi
+
 if [ "$status" -eq 0 ]; then
     echo "Package validation passed."
 else
