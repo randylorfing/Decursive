@@ -2,13 +2,13 @@
 
 Everything that must be verified before committing, tagging, or publishing a
 release of Zhaohu's Decursive, including the GPL obligations inherited from
-John Wellesz and the packager traps that have shipped broken builds three times.
+John Wellesz and the packager traps that have shipped broken builds four times.
 
     Repo         randylorfing/Decursive
     Branch       master
     License      GNU GPL v3
     CurseForge   project 1659159
-    Written at   v12.0.7
+    Written at   v12.1.3
 
 Where this document and the repository disagree, the repository wins. Re-verify
 against `.pkgmeta`, the workflow file, and the `.toc` files before relying on
@@ -22,8 +22,11 @@ These override convenience. Every one exists because breaking it cost a release.
 
 **Never publish without verifying the published artifact.**
 A green CI check is not proof. v11.0.46, v12.0.4 and v12.0.5 all passed CI,
-uploaded successfully, and shipped a Lua file that would not parse in game. The
-only reliable test is to download the release zip and inspect it (section 9).
+uploaded successfully, and shipped a Lua file that would not parse in game.
+v12.1.2 then passed all eight automated package checks — including a syntax parse
+of 83 Lua files — and still shipped a Windows extraction collision, because the
+fault was in two `.md` files. Automation only covers the classes you have already
+been burned by. Download the release zip and inspect it (section 9).
 
 **The maintainer's zip is source of truth.**
 When they hand over offline work, do not apply independent bugfixes on top of
@@ -57,7 +60,8 @@ DeadlyBossMods uses.
     Decursive_Options/      LoadOnDemand companion. Settings UI, option tree,
                             Test Mode. RequiredDeps: Decursive
     .pkgmeta                Packaging contract. Repo ROOT, not inside an addon folder.
-    .github/workflows/      Single workflow: lint -> validate -> package -> verify
+    .github/workflows/      Tag-only publish: verify (no credentials) then release
+    .github/scripts/        validate-package.sh (built package), validate-v13.sh (repo)
     Decursive/Libs/         Vendored libraries, committed to git. NOT externals.
 
 ### Load order matters
@@ -314,36 +318,62 @@ reintroduces the collision above.
 ## 7. CI PIPELINE
 
 One workflow: `.github/workflows/build-package-and-upload.yml`. It fires on
-pushes to `master` and on ANY tag — nothing else.
+**version tags only** (`v*`), plus a manual `workflow_dispatch`. Branch pushes do
+not build.
 
-**Consequence:** feature branches do not build. There is no way to smoke-test a
-package from a branch without either pushing to `master` or cutting a tag. Push
-to `master` first and let that build go green before tagging.
+It is split into two jobs, and the split is the whole safety model:
 
-    STEP                                        PURPOSE
-    Run luacheck                                Lints source. Cannot see packaging
-                                                corruption.
-    Check for packager-rewritable debug markers GATE. Fails the job BEFORE
-                                                packaging if any --@debug@ /
-                                                --@end-debug@ marker exists, or a
-                                                duplicated delimiter is committed.
-    Package retail                              Builds and, on tags, uploads to
-                                                CurseForge + creates the GitHub
-                                                release.
-    Verify packaged output                      Backstop. Greps .release for
-                                                duplicated delimiters.
+    JOB       CREDENTIALS   WHAT IT DOES
+    verify    NONE          luacheck; debug-marker gate; install ripgrep;
+                            validate-v13.sh (repository invariants); packager
+                            dry run (args: -d, skip uploading); then
+                            validate-package.sh against .release
+    release   CF + GitHub   needs: verify. Gated on a tag ref. Packages and
+                            uploads. The ONLY job holding tokens.
 
-**Ordering is deliberate.** The marker gate runs BEFORE the packager. On tag
-builds the CurseForge upload happens INSIDE the packager step, so a check placed
-after it would only report the problem once the broken file was already
-published — which is exactly how three broken releases escaped.
+**Why it is split.** On a tag build the CurseForge upload happens *inside* the
+packager step. Any check placed after that step reports a fault only once the
+broken file is already public — which is exactly how v11.0.46, v12.0.4 and
+v12.0.5 escaped. Packaging and validating with no credentials in scope, then
+publishing only on success, closes that hole.
+
+**Rehearsal.** `workflow_dispatch` runs `verify` only, because `release` is gated
+on `startsWith(github.ref, 'refs/tags/v')`. A manual run therefore lints,
+packages and validates but *cannot* publish. Use it before every tag:
+
+    gh workflow run "Check and build addon" --ref master
+
+### The two validators
+
+`.github/scripts/validate-package.sh <releasedir>` — inspects the BUILT package:
+structure, duplicated delimiters, unsubstituted tokens, a Lua **syntax parse of
+every packaged file**, TOC references, LICENSE presence, case-insensitive
+filename collisions, and source-only files that leaked in.
+
+`.github/scripts/validate-v13.sh` — repository invariants: workflow shape, the
+package-token baseline (50 version / 4 date / 1 hash), TOC authorship and licence
+metadata, and v13 architecture boundaries.
+
+**validate-v13.sh requires ripgrep, which ubuntu-latest does not preinstall.**
+Without `rg`, every `! rg -q ...` guard inverts and the script reports confident,
+specific problems that do not exist — it once claimed three workflow
+misconfigurations that were all fine. The workflow installs it explicitly. If
+that script ever reports something surprising, check `rg` is present before
+believing it.
 
 ### Reading the log
 
-`CurseForge ID: 1659159 [token set]` is the proof an upload was actually
-attempted. Its ABSENCE — with no error alongside it — means the packager never
-recognised the project, which is a `.pkgmeta` or TOC fault, not a credentials
-problem. That silent absence is how two releases uploaded nothing at all.
+`CurseForge ID: 1659159 [token set]` followed by `Uploading ... Success!` is the
+proof the file reached CurseForge. That `Success!` is CurseForge's own API
+response, printed separately from the GitHub one.
+
+Its ABSENCE — with no error alongside it — means the packager never recognised
+the project, which is a `.pkgmeta` or TOC fault, not a credentials problem. That
+silent absence is how two releases uploaded nothing at all.
+
+The packager reads `CF_API_KEY` **or** `CF_API_TOKEN`, and `GITHUB_OAUTH` **or**
+`GITHUB_API_TOKEN` (release.sh ~line 486). Either name works; validate-v13.sh
+requires the `*_TOKEN` spellings.
 
 
 --------------------------------------------------------------------------------
@@ -357,30 +387,41 @@ Do not tag on your own initiative. If they direct you to publish without testing
 state the risk once, then proceed — it is their call.
 
 **2. Audit the working tree.**
-Licence headers intact, packager tokens restored to 55 / 4, no stray build
-artifacts staged, `.toc` fields present.
+Licence headers intact, package tokens at the 50 / 4 / 1 baseline, `.toc` fields
+present. Run both validators locally.
 
-**3. Commit.**
+**3. Stage deliberately. Never `git add -A` blind.**
+It has swept a 2 MB `Decursive.zip` build artifact into a commit. Stage named
+paths, then read `git diff --cached --stat` before committing. `*.zip` is now
+gitignored, but the habit is the protection.
+
+**4. Commit.**
 Explain WHY, not just what — root cause, mechanism, and what was verified. No
 `Co-Authored-By` trailer.
 
-**4. Push to `master` and wait for green.**
-This is the free rehearsal: it runs luacheck and the marker gate without creating
-anything that has to be cleaned up. Runs can take several minutes to appear in
-the queue; a missing run is usually latency, not failure.
+**5. Push to `master`, then run the rehearsal.**
+A branch push no longer builds anything. Trigger `verify` manually:
 
-**5. Update the maintainer's AddOns folder.**
-Build from committed state, substitute tokens, apply the `ignore` rules, then
-verify every file referenced by each `.toc` exists.
+    gh workflow run "Check and build addon" --ref master
+
+Wait for green. This packages and validates with no credentials in scope and
+cannot publish. **Confirm the rehearsal ran against the commit you are about to
+tag** — compare the run's `headSha` with `git rev-parse --short HEAD`. A
+documentation-only commit has broken the token baseline before (see §11).
+
+**6. Update the maintainer's AddOns folder and let them test.**
+Prefer deploying the *published artifact* over a local rebuild once a release
+exists, so they test exactly what users get. Before a release exists, build from
+committed state, substitute tokens, and apply the `ignore` rules.
 
     AddOns path:
     C:\Program Files (x86)\World of Warcraft\_retail_\Interface\AddOns
 
-**6. Tag and push.**
+**7. Tag and push.**
 Annotated tag, `vX.Y.Z`. Never reuse a published number. The tag message becomes
 the human record of the release.
 
-**7. Verify the published artifact.** Mandatory — section 9.
+**8. Verify the published artifact.** Mandatory — section 9.
 
 **If it fails:** if the tag build fails BEFORE creating a release, delete the tag
 locally and on the remote, fix, and re-cut the same number. If a release was
@@ -451,11 +492,99 @@ and two 512x512 icons were once 55% of it. Compare COMPRESSED sizes
 (`unzip -v`), not on-disk sizes: a 1 MB TGA may compress to 24 KB while a
 600 KB JPEG compresses to 0%.
 
+**`unzip` prompts "replace ...?" on the published zip**
+A case-insensitive filename collision. The zip is built on Linux, where
+`README.md` and `Readme.md` are two files; on Windows they are one, so
+extraction overwrites one silently. `validate-package.sh` now checks for this.
+
+**`luac: <file>:1: unexpected symbol near '<?>'`**
+A UTF-8 BOM (`EF BB BF`). WoW's Lua tolerates it, so such files ship and work in
+game for releases, but standard parsers reject them. Strip the three leading
+bytes: `tail -c +4 file > tmp && mv tmp file`.
+
+**A validator reports problems that make no sense**
+Check its dependencies first. `validate-v13.sh` is built on ripgrep; without it
+every `! rg -q ...` guard inverts and it asserts specific, confident, wrong
+things. Exit code 127 anywhere in the step is the tell.
+
 
 --------------------------------------------------------------------------------
-## 11. OUTSTANDING
+## 11. LESSONS LEARNED
 
-**v11.0.46, v12.0.4 and v12.0.5 remain live on CurseForge** and all carry the
-unparseable `LibQTip-1.0.lua`. Anyone installing them gets the syntax error.
-Hiding or deleting those files requires the CurseForge project's file-management
-page and cannot be done from the repository.
+Each of these cost a release, a broken build, or an hour of misdiagnosis.
+
+**A green CI check is not proof. Download and extract the published zip.**
+Three releases passed lint, uploaded successfully, and shipped a Lua file that
+would not parse. Later, v12.1.2 passed all eight automated checks — including a
+parse of 83 Lua files — and still shipped a Windows extraction collision,
+because the fault was in two `.md` files. Automation covers the classes you have
+already been burned by; extracting the artifact covers the rest.
+
+**Anything at the repository root ships inside the addon.**
+With `package-as: Decursive` the packager stages the whole checkout under the
+package folder. Adding `README.md` and `RELEASE_PROCESS.md` at the root put them
+in users' AddOns folders. Every new root-level file needs a matching `.pkgmeta`
+ignore rule — treat that as part of adding the file.
+
+**An offline drop is a packaged build, not a source tree. MERGE, never replace.**
+Files the packager ignores are simply absent from it. A clean replace deletes
+them from source — including `branding/decursive-logo.jpg`, which is missing from
+every zip *by design*. Always list repo-only files before overwriting.
+
+**Check the drop's base commit.**
+One drop reported `v12.0.7-15-g9fe890b`, a commit that did not exist in this
+repository. The offline work happens in a different clone; content may be a
+superset, a subset, or diverged. Grep for markers from the last few releases
+before assuming it builds on current state.
+
+**Verify claims in release notes against the tree.**
+One drop's notes stated release validation had been added. No workflow file was
+in the zip and no such step existed. Another drop shipped a validator that
+required a helper the same drop deliberately removed — it rejected its own fix.
+
+**Restore every package token, not just the obvious one.**
+Tokens arrive substituted. `@project-abbreviated-hash@` became a bare short hash
+that a `git describe`-shaped search missed entirely; it is a public field other
+addons read. Confirm the baseline is 50 / 4 / 1 afterwards.
+
+**Prose counts as source to the token validator.**
+Quoting a token name verbatim in `CHANGELOG.md` raised its count and broke the
+baseline. Name tokens in prose without spelling them.
+
+**Line endings and file modes are load-bearing.**
+Shell scripts must be LF and mode 755, or Linux rejects the shebang with
+`bad interpreter: ...^M`. `.gitattributes` pins this; invoke scripts as
+`bash path/to/script.sh` so a lost exec bit cannot break CI.
+
+**CurseForge's public page lags an accepted upload — sometimes by a lot.**
+`Uploading ... Success!` is CurseForge's own API response and is authoritative.
+The project page showed the previous version for well over twenty minutes after
+two successful uploads. Do not re-cut a release chasing this; check the project's
+files page while logged in, which distinguishes queued from rejected.
+
+**Deleting a GitHub release does not remove the CurseForge file.**
+They are independent uploads. Pulling a bad build means doing both.
+
+**Windows cannot reproduce a case-collision locally.**
+The filesystem collapses the pair on write, so a local test reports "no
+collision" and passes. That check only means anything in CI, on Linux.
+
+**A run that has not appeared is usually queue latency, not failure.**
+GitHub Actions took roughly five minutes to pick up several pushes here. Poll
+before concluding anything is wrong.
+
+**Confirm the rehearsal covers the exact commit being tagged.**
+Compare the run's `headSha` against `git rev-parse --short HEAD`. A
+documentation-only commit landed after a green rehearsal and broke the token
+baseline; tagging blind would have failed the release build.
+
+
+--------------------------------------------------------------------------------
+## 12. OUTSTANDING
+
+**The per-environment defaults table exists in three divergent copies.** See §2.
+Known and deliberately deferred by the maintainer.
+
+*(Resolved: the broken v11.0.46 / v12.0.4 / v12.0.5 / v12.1.2 files have been
+removed from CurseForge by the maintainer. Deleting a GitHub release does not
+remove the CurseForge file — both must be done.)*
