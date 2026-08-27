@@ -33,9 +33,48 @@
   therefore remains 54 px and red inside follower dungeons and other restricted
   instances.
 
+### Hardened release pipeline
+- Publishing is now driven by version tags only and split into two jobs. The
+  `verify` job runs with **no publishing credentials in scope**: luacheck, the
+  packager-rewritable debug-marker gate, repository invariants, a packager dry
+  run, and validation of the packaged artifact. The `release` job runs only
+  after `verify` passes and is the sole holder of the CurseForge and GitHub
+  tokens.
+- This closes the gap that let v11.0.46, v12.0.4 and v12.0.5 ship a Lua file
+  that would not parse: on a tag build the upload happens *inside* the packager
+  step, so any check placed after it reports the fault only once the broken file
+  is already published.
+- Added a packaged-artifact validator that parses every packaged Lua file and
+  checks package structure, token substitution, TOC references and the presence
+  of `LICENSE.txt`. It parsed 83 files on its first run.
+- Added a manual workflow trigger for rehearsal. The publish job is gated on a
+  tag reference, so a manual run can never publish; this replaces the rehearsal
+  that branch builds used to provide.
+- Superseded release notes and development documents are now excluded from the
+  package. They remain in the repository as project history.
+
+### Fixes found while integrating this release
+- Restored `D.Revision = "@project-abbreviated-hash@"` in `DCR_init.lua`. The
+  packager had substituted it to a bare short hash, and the earlier token
+  restoration only matched the longer `git describe` form. It is a public field
+  that other addons may read from outside.
+- Stripped UTF-8 byte-order marks from `ZD_UI.lua`, `Dcr_opt_tree.lua` and
+  `ZD_Core.lua`. WoW's Lua tolerates a BOM, which is why these shipped and
+  worked in game, but `luac` rejects all three at line 1, which blocked the new
+  packaged-Lua parse. Only the three leading bytes were removed.
+- Corrected the source validator, which still required the retired
+  `HasActiveAddonRestriction()` helper and so rejected the very sound-trigger
+  fix released here.
+- The source validator is built on ripgrep, which the CI runner does not
+  preinstall; without it every check silently inverted and reported problems
+  that did not exist. It is now installed explicitly.
+- Added `.gitattributes` pinning shell scripts and workflow YAML to LF endings.
+  A CRLF checkout makes Linux reject the shebang and would break every gate.
+
 ### Source provenance, licensing, and fork identity
-- Renumbered the production candidate and release notes to v12.1.1 while
-  retaining the internal v13 module namespace for the redesigned UI/runtime.
+- Renumbered the production candidate and release notes to v12.1.2, because
+  v12.1.1 was already published, while retaining the internal v13 module
+  namespace for the redesigned UI/runtime.
 - Both addon TOCs now credit John Wellesz and Randy Lorfing, retain the
   packager-owned version/date tokens, identify the fork's CurseForge project,
   and route bug reports to Randy.
@@ -182,6 +221,33 @@
   superseded release-note files from the installed production addon.
 - Required every release tag to point to a commit already contained in
   `master`; publication cannot start directly from a development branch.
+
+## v12.1.1
+
+The v12.1.2 entry above supersedes this release and describes the same v13
+settings work in full detail. This entry records what v12.1.1 itself shipped,
+since it was published and some installations will be running it.
+
+### v13 command-center settings shell
+- Added `Decursive/V13/` (Namespace, EventBus, SettingsSchema, CombatScheduler,
+  RuntimeStatus, Theme, NotificationBridge) and `Decursive_Options/V13/` (Shell,
+  Controls and seven pages) -- 2,472 new lines across 16 files.
+- One settings window opened by `/dcr`, `/decursive`, `/zd`, the options keybind
+  and Blizzard Settings, with Overview, MUFs, Cure, Alerts and Profiles pages
+  plus a searchable **All Settings** workspace carrying the complete catalog.
+- The mature option model and native page builders were retained underneath, so
+  no feature access was lost. No beta/RC notice window at login.
+
+### First combat guard on native aura-sound registration
+- Gated registration on `InCombatLockdown()` and active addon restrictions to
+  stop `ADDON_ACTION_BLOCKED` errors when dispelling repeatedly in Mythic+.
+- **Superseded in v12.1.2.** This guard was too broad: treating every unrelated
+  addon restriction as a reason to defer could leave registration queued for an
+  entire dungeon. v12.1.2 narrows it to the chat-messaging lockdown boundary.
+
+### Licensing
+- Normalised all 16 new v13 files to the project's full GPLv3 header. John
+  Wellesz's copyright was unaffected; these are new files.
 
 ## v12.0.7
 
