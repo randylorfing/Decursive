@@ -41,6 +41,17 @@ move-folders:
 ignore:
     - Decursive/Libs/LibStub/tests
     - Decursive/branding
+    # Repository-root documentation. With package-as: Decursive the packager
+    # stages the whole checkout under the package folder, so anything left at
+    # the repo root ships INSIDE the addon. README.md is doubly bad there: it
+    # collides case-insensitively with the tracked Decursive/Readme.md, so a
+    # Windows extraction prompts to overwrite. Shipped by mistake in v12.1.2.
+    - README.md
+    - RELEASE_PROCESS.md
+    - .gitattributes
+    - .editorconfig
+    - .docmeta
+    - docs
     # Superseded release notes and development docs are source-only. They stay
     # in the repository as project history but have no business in a user's
     # AddOns folder, and shipping them only inflates the download.
