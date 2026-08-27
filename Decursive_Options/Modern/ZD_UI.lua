@@ -1,4 +1,4 @@
-﻿--[[
+--[[
     This file is part of Decursive.
 
     Zhaohu's Decursive v11 modern configuration UI. This file was solely

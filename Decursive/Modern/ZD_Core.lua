@@ -1,4 +1,4 @@
-﻿--[[
+--[[
     This file is part of Decursive.
 
     Zhaohu's Decursive v13 compatibility core module. This file was solely written by

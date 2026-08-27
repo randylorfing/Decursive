@@ -1,4 +1,4 @@
-﻿--[[
+--[[
     This file is part of Decursive.
 
     Decursive Options - AceConfig-shaped option tree (LoadOnDemand). This
