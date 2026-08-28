@@ -327,7 +327,7 @@ Decursive 바를 움직여 이 목록을 이동할 수 있습니다. (/DCRSHOW�
 L["OPT_ENABLEDEBUG"] = "디버깅 사용"
 L["OPT_ENABLEDEBUG_DESC"] = "디버깅 출력 사용"
 L["OPT_ENABLEDECURSIVE"] = "Decursive 사용"
-L["OPT_FILTERED_DEBUFF_RENAMED"] = "주문ID %d의 필터링된 피해 \"%s\"|1이;가; 자동으로 \"%s\"|1으로;로; 이름이 변경되었습니다."
+L["OPT_FILTERED_DEBUFF_RENAMED"] = "필터링된 피해 \"%s\"|1이;가; 자동으로 \"%s\"|1으로;로; 이름이 변경되었습니다. (주문 ID: %d)"
 L["OPT_FILTEROUTCLASSES_FOR_X"] = "%q|1은;는; 전투 중 지정된 클래스에서 무시됩니다."
 L["OPT_GENERAL"] = "기본 설정"
 L["OPT_GROWDIRECTION"] = "MUF 표시 반전"

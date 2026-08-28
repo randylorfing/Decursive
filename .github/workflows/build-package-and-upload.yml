@@ -1,21 +1,25 @@
 name: Check and build addon
 
-# Publishing is driven by version tags only. Branch pushes no longer build,
-# because a branch build produced no artifact anyone could install while still
-# consuming a run -- and, more importantly, the credential-carrying step now
-# lives behind a gate that only a tag should ever open.
+# Verification runs for pull requests, master, version tags, and manual
+# rehearsals. Publishing is still driven only by version tags, and the
+# credential-carrying job remains behind a tag-only gate.
 on:
   push:
+    branches:
+      - master
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - master
   # Manual rehearsal. Running this from the Actions tab executes `verify` only:
-  # the `release` job is gated on a tag ref below, so a dispatch can lint,
-  # package and validate without any possibility of publishing. This replaces
-  # the rehearsal that branch builds used to provide.
+  # the `release` job requires a pushed tag below, so a dispatch can lint,
+  # package and validate without any possibility of publishing, even when its
+  # selected ref is a version tag. This replaces the rehearsal that branch
+  # builds used to provide.
   workflow_dispatch:
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -33,16 +37,55 @@ jobs:
   verify:
     name: Verify (no credentials)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Run luacheck
-        uses: BigWigsMods/actions/luacheck@master
+      # The full legacy tree intentionally defines and consumes WoW globals, so
+      # keep the all-source pass focused on syntax. A second pass below applies
+      # correctness-oriented warnings to code maintained by this fork.
+      - name: Parse all Lua sources with luacheck
+        uses: BigWigsMods/actions/luacheck@a2a89117153b3f3036da956b6a55a7ae06c5340f # reviewed master 2026-08-27
         with:
           args: -qo 011
+
+      - name: Run maintained-code static checks
+        uses: BigWigsMods/actions/luacheck@a2a89117153b3f3036da956b6a55a7ae06c5340f # reviewed master 2026-08-27
+        with:
+          files: >-
+            Decursive/DCR_init.lua
+            Decursive/Dcr_12_1.lua
+            Decursive/Dcr_12_1_Utils.lua
+            Decursive/Dcr_12_1_DebuffIdentity.lua
+            Decursive/Dcr_12_1_SoulLink.lua
+            Decursive/Dcr_DIAG.lua
+            Decursive/Dcr_DebuffsFrame.lua
+            Decursive/Dcr_Events.lua
+            Decursive/Dcr_LiveList.lua
+            Decursive/Dcr_ProfileIO.lua
+            Decursive/Dcr_opt.lua
+            Decursive/Dcr_preload.lua
+            Decursive/Dcr_utils.lua
+            Decursive/Decursive.lua
+            Decursive/Database
+            Decursive/Modern
+            Decursive/V13
+            Decursive_Options/Modern/ZD_UI.lua
+            Decursive_Options/V13
+          # Retain warnings with correctness impact (uninitialized values,
+          # assignment arity, unreachable control flow, and malformed blocks)
+          # while excluding intentional WoW globals, callback captures, unused
+          # compatibility locals, whitespace, line-length policy, and the
+          # original DCR_init.lua localization of Lua's `select` function.
+          args: >-
+            -q --codes --no-global
+            --ignore 211 212 213 231 232 233 241 311 312 313 314 331
+            421 422 423 431 432 433 611 612 613 614 621 631 411/select
 
       # Guards the root cause of the delimiter corruption. The packager appends
       # its own ]==] to any surviving --@end-debug@ closer, and where a long
@@ -62,11 +105,10 @@ jobs:
           [ "$status" -eq 0 ] && echo "OK: no rewritable debug markers, no duplicated delimiters."
           exit "$status"
 
-      # validate-v13.sh is built on ripgrep, which ubuntu-latest does not ship.
-      # Without it every `rg` call exits 127 and the script's `! rg -q ...`
-      # checks read as failures, reporting problems that do not exist.
-      - name: Install ripgrep
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+      # validate-v13.sh is built on ripgrep, which ubuntu-latest does not ship,
+      # and its focused secure-action mocks require a Lua runtime.
+      - name: Install repository validation tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep lua5.4
 
       # Repository-level invariants: workflow shape, package-token baseline,
       # licence and attribution metadata, and the v13 architecture boundaries.
@@ -74,7 +116,7 @@ jobs:
         run: bash .github/scripts/validate-v13.sh
 
       - name: Package (dry run, no upload)
-        uses: BigWigsMods/packager@master
+        uses: BigWigsMods/packager@36b4c3b7b7bd17c835ad8c83fed4976c067edfbe # reviewed master 2026-08-27
         with:
           args: -d
 
@@ -88,17 +130,21 @@ jobs:
   release:
     name: Package and publish
     needs: verify
-    # Only a version tag may publish. A manual dispatch stops after `verify`.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Only a pushed version tag may publish. Even a manual dispatch whose
+    # selected ref is an existing version tag stops after `verify`.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Package and upload
-        uses: BigWigsMods/packager@master
+        uses: BigWigsMods/packager@36b4c3b7b7bd17c835ad8c83fed4976c067edfbe # reviewed master 2026-08-27
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_KEY }}
           GITHUB_API_TOKEN: ${{ github.token }}

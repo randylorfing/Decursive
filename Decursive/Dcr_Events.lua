@@ -68,7 +68,6 @@ D.DebuffUpdateRequest = 0;
 
 local pairs     = _G.pairs;
 local next      = _G.next;
-local pairs     = _G.pairs;
 local ipairs    = _G.ipairs;
 local unpack    = _G.unpack;
 local select    = _G.select;
@@ -94,8 +93,13 @@ local canaccessvalue    = _G.canaccessvalue or function(_) return true; end
 local issecretvalue     = _G.issecretvalue;
 
 local function isAccessiblePublicValue(value)
+    if issecretvalue and issecretvalue(value) then return false end
     if not canaccessvalue(value) then return false; end
-    return not issecretvalue or not issecretvalue(value);
+    if type(value) == "table" then
+        if _G.issecrettable and _G.issecrettable(value) then return false end
+        if _G.canaccesstable and not _G.canaccesstable(value) then return false end
+    end
+    return true
 end
 
 local function accessibleBoolean(func, ...)
@@ -434,18 +438,11 @@ do
             self.MicroUnitF:ApplyContextMUFScale();
         end
 
-        -- Catch-up MUF rebuild: ReinitializeDecursiveAfterZone's staged
-        -- passes call UpdateAttributes(..., true) (DoNotDelay=true) -- if
-        -- combat was STILL active when every one of those passes fired
-        -- (e.g. a mid-fight revive, PLAYER_ALIVE firing but the fight isn't
-        -- over yet), that DoNotDelay=true means UpdateAttributes silently
-        -- gives up with no retry scheduled, and nothing else re-triggers a
-        -- rebuild once combat actually ends -- a real, previously-unclosed
-        -- gap alongside the PLAYER_ALIVE one above. Cheap to call here
-        -- unconditionally: generation-counter guarded internally, same as
-        -- every other call site of this function.
-        if self.ReinitializeDecursiveAfterZone and D.DcrFullyInitialized then
-            self:ReinitializeDecursiveAfterZone("PLAYER_REGEN_ENABLED");
+        -- Protected MUF/provider mutations mark one shared dirty bit in combat.
+        -- Leaving combat flushes that work once. It is not a world transition
+        -- and must not replay the six-pass zone rebuild unconditionally.
+        if self.FlushModernSecureUIDirty and D.DcrFullyInitialized then
+            self:FlushModernSecureUIDirty("PLAYER_REGEN_ENABLED")
         end
 
         -- A registry rebuild includes restricted AddAuraSound calls. Apply any
@@ -626,17 +623,22 @@ end
 
 function D:PLAYER_ALIVE()
     D:Debug("|cFFFF0000PLAYER_ALIVE|r");
-    -- ReConfigure only re-checks which spells/items you can currently use
-    -- (spec/talent/item changes) -- it does NOTHING for MUF display. The
-    -- actual MUF-repopulation path (proven necessary for the identical
-    -- "squares missing until /reload" symptom on GROUP_ROSTER_UPDATE,
-    -- see the comment there) was never added here, even though a
-    -- death/revive is exactly the kind of roster-churn event that symptom
-    -- was about. Same "prefer the thorough path if available" pattern.
-    if self.ReinitializeDecursiveAfterZone then
-        self:ReinitializeDecursiveAfterZone("PLAYER_ALIVE");
+    if self.MarkModernSecureUIDirty then
+        self:MarkModernSecureUIDirty("PLAYER_ALIVE", true, false)
+        if self.FlushModernSecureUIDirty then
+            self:FlushModernSecureUIDirty("PLAYER_ALIVE")
+        end
     end
     self:ScheduleDelayedCall("Dcr_ReConfigure", self.ReConfigure, 4, self);
+    if self.RefreshMUFActionMacros then
+        self:ScheduleDelayedCall(
+            "Dcr_RefreshMUFActionMacros",
+            self.RefreshMUFActionMacros,
+            0.5,
+            self,
+            "PLAYER_ALIVE"
+        )
+    end
     T.PLAYER_IS_ALIVE = GetTime();
 end
 
@@ -648,11 +650,29 @@ end
 function D:LEARNED_SPELL_IN_SKILL_LINE()
     D:Debug("|cFFFF0000A new spell was learned, scheduling a reconfiguration (LEARNED_SPELL_IN_SKILL_LINE)|r");
     self:ScheduleDelayedCall("Dcr_ReConfigure", self.ReConfigure, 4, self);
+    if self.RefreshMUFActionMacros then
+        self:ScheduleDelayedCall(
+            "Dcr_RefreshMUFActionMacros",
+            self.RefreshMUFActionMacros,
+            0.5,
+            self,
+            "LEARNED_SPELL_IN_SKILL_LINE"
+        )
+    end
 end
 
 function D:SPELLS_CHANGED()
     D:Debug("|cFFFF0000Spells were changed, scheduling a reconfiguration check|r");
     self:ScheduleDelayedCall("Dcr_ReConfigure", self.ReConfigure, 4, self); -- used to be 15s changed to 4 to be more reaactive for warlocks
+    if self.RefreshMUFActionMacros then
+        self:ScheduleDelayedCall(
+            "Dcr_RefreshMUFActionMacros",
+            self.RefreshMUFActionMacros,
+            0.5,
+            self,
+            "SPELLS_CHANGED"
+        )
+    end
 end
 
 function D:PLAYER_EQUIPMENT_CHANGED()
@@ -676,6 +696,27 @@ end
 function D:PLAYER_TALENT_UPDATE()
     D:Debug("|cFFFF0000Talents were changed, scheduling a reconfiguration check|r");
     self:ScheduleDelayedCall("Dcr_ReConfigure", self.ReConfigure, 4, self);
+    if self.RefreshMUFActionMacros then
+        self:ScheduleDelayedCall(
+            "Dcr_RefreshMUFActionMacros",
+            self.RefreshMUFActionMacros,
+            0.5,
+            self,
+            "PLAYER_TALENT_UPDATE"
+        )
+    end
+end
+
+function D:PLAYER_SPECIALIZATION_CHANGED()
+    if self.RefreshMUFActionMacros then
+        self:ScheduleDelayedCall(
+            "Dcr_RefreshMUFActionMacros",
+            self.RefreshMUFActionMacros,
+            0.5,
+            self,
+            "PLAYER_SPECIALIZATION_CHANGED"
+        )
+    end
 end
 
 function D:DECURSIVE_TALENTS_AVAILABLE()
@@ -708,8 +749,11 @@ function D:DECURSIVE_TALENTS_AVAILABLE()
     -- which the initial roster can be committed.  Restart the existing
     -- generation-guarded recovery here so hidden MUF buttons are created and
     -- displayed without depending on a later roster event or /reload.
+    -- DCR_COLD_LOGIN_MUF_RECOVERY_V1: this is the first deterministic
+    -- player-GUID/talent readiness boundary, so it retains the full bounded
+    -- startup/world settling path. It is not ordinary post-combat recovery.
     if self.DcrFullyInitialized and self.ReinitializeDecursiveAfterZone then
-        self:ReinitializeDecursiveAfterZone("DECURSIVE_TALENTS_AVAILABLE");
+        self:ReinitializeDecursiveAfterZone("DECURSIVE_TALENTS_AVAILABLE")
     elseif self.DcrFullyInitialized and self.MicroUnitF
         and self.MicroUnitF.Delayed_MFsDisplay_Update then
         self.MicroUnitF:Delayed_MFsDisplay_Update();
@@ -1217,6 +1261,57 @@ end --}}}
 
 do -- Communication event handling and broadcasting {{{1
     local alpha = false;
+    local VERSION_REQUEST_WINDOW = 60
+    local MAX_VERSION_MESSAGE_LENGTH = 160
+    local MAX_VERSION_NAME_LENGTH = 64
+    local MAX_SENDER_LENGTH = 128
+    local validDistributions = {
+        WHISPER = true,
+        PARTY = true,
+        RAID = true,
+        INSTANCE_CHAT = true,
+        GUILD = true,
+    }
+    local activeVersionRequest = {
+        expiresAt = 0,
+        distributions = {},
+        whisperTargets = {},
+    }
+
+    local function sanitizeCommIdentity(value, maxLength)
+        if not isAccessiblePublicValue(value) or type(value) ~= "string"
+            or #value < 1 or #value > maxLength or value:find("[%c]")
+        then
+            return nil
+        end
+        return value
+    end
+
+    local function resetActiveVersionRequest(now)
+        activeVersionRequest.expiresAt = now + VERSION_REQUEST_WINDOW
+        wipe(activeVersionRequest.distributions)
+        wipe(activeVersionRequest.whisperTargets)
+    end
+
+    local function markExpectedReply(distribution, target)
+        if distribution == "WHISPER" and target then
+            activeVersionRequest.whisperTargets[target] = true
+            if Ambiguate then
+                activeVersionRequest.whisperTargets[Ambiguate(target, "none")] = true
+            end
+        elseif validDistributions[distribution] then
+            activeVersionRequest.distributions[distribution] = true
+        end
+    end
+
+    local function isExpectedVersionReply(distribution, from, now)
+        if now > activeVersionRequest.expiresAt then return false end
+        if distribution == "WHISPER" then
+            if activeVersionRequest.whisperTargets[from] then return true end
+            return Ambiguate and activeVersionRequest.whisperTargets[Ambiguate(from, "none")] == true or false
+        end
+        return activeVersionRequest.distributions[distribution] == true
+    end
 
 
     local function GetDistributionChanel()
@@ -1251,7 +1346,9 @@ do -- Communication event handling and broadcasting {{{1
             return false;
         end
 
-        T.LastVCheck = GetTime();
+        local requestTime = GetTime()
+        T.LastVCheck = requestTime
+        resetActiveVersionRequest(requestTime)
 
         local targetExists = accessibleBoolean(UnitExists, "target");
         local targetPlayer = accessibleBoolean(UnitIsPlayer, "target");
@@ -1264,6 +1361,7 @@ do -- Communication event handling and broadcasting {{{1
             and targetFaction == playerFaction
         then -- the unit exists and is a player of our faction
             LibStub("AceComm-3.0"):SendCommMessage( "ZhaohuDcrVersion", "giveversion", "WHISPER", targetName);
+            markExpectedReply("WHISPER", targetName)
             D:Debug("Asking version to ", targetName);
         end
 
@@ -1271,6 +1369,7 @@ do -- Communication event handling and broadcasting {{{1
 
         if Distribution then
             LibStub("AceComm-3.0"):SendCommMessage( "ZhaohuDcrVersion", "giveversion", Distribution);
+            markExpectedReply(Distribution)
         end
         D:Debug("Asking version on ", Distribution);
 
@@ -1280,34 +1379,49 @@ do -- Communication event handling and broadcasting {{{1
 
     T.VersionAnnounceReceived = 0;
     function D:OnCommReceived(message, distribution, from)
-
-
-
         local gettime = GetTime();
 
-        if message == "giveversion" then
+        message = sanitizeCommIdentity(message, MAX_VERSION_MESSAGE_LENGTH)
+        distribution = sanitizeCommIdentity(distribution, 32)
+        from = sanitizeCommIdentity(from, MAX_SENDER_LENGTH)
+        if not message or not distribution or not from or not validDistributions[distribution] then
+            D:Debug("Rejected malformed version communication")
+            return
+        end
 
+        if message == "giveversion" then
             D:AnnounceVersion(distribution, from);
-            T.LastVCheck = gettime; -- Enable version info gathering for 60 seconds (just like if the user clicked the button himself)
 
         elseif message:sub(1, 8) == "Version:" then
 
-            local versionName, versionTimeStamp, versionIsAlpha, versionEnabled = message:match ("^Version: ([^,]+),(%d+),(%d),(%d)");
+            if not isExpectedVersionReply(distribution, from, gettime) then
+                D:Debug("Ignored unsolicited version reply from ", from)
+                return
+            end
+
+            local versionName, versionTimeStamp, versionIsAlpha, versionEnabled = message:match("^Version: ([^,]+),(%d+),([01]),([01])$")
 
             versionTimeStamp    = tonumber(versionTimeStamp);
             versionIsAlpha      = tonumber(versionIsAlpha);
             versionEnabled      = tonumber(versionEnabled);
 
+            local validVersionName = versionName
+                and #versionName >= 1
+                and #versionName <= MAX_VERSION_NAME_LENGTH
+                -- Version names are later embedded in formatted UI text. Keep
+                -- them to the package-version alphabet so WoW escape sequences
+                -- such as color, texture, or hyperlink payloads cannot survive.
+                and versionName:match("^[vV]?%d[%w%._+%-]*$") ~= nil
+            local validTimestamp = type(versionTimeStamp) == "number"
+                and versionTimeStamp >= 0
+                and versionTimeStamp < 100000000000
 
-            if versionName then
+            if validVersionName and validTimestamp then
                 if not D.versions then
                     D.versions = {}
                 end
 
-                -- only populate the table if it was requested (through the 'check add-on version' button in the about panel)
-                if gettime - T.LastVCheck < 60 then
-                    D.versions[from] = { versionName, versionTimeStamp, versionIsAlpha, versionEnabled, distribution };
-                end
+                D.versions[from] = { versionName, versionTimeStamp, versionIsAlpha, versionEnabled, distribution }
 
                 if from ~= DC.MyName then
                     T.VersionAnnounceReceived = T.VersionAnnounceReceived + 1;
@@ -1326,12 +1440,11 @@ do -- Communication event handling and broadcasting {{{1
 
                 -- Delayed v11 UI refresh with spam prevention after receiving version info.
                 -- We don't want to update the thing if the option panel is closed so we update up to 60s after the check version button was used
-                if not D:DelayedCallExixts ("NewversionDatareceived") and gettime - T.LastVCheck < 60 then
+                if not D:DelayedCallExixts ("NewversionDatareceived") then
                     D:ScheduleDelayedCall("NewversionDatareceived", function () D:NotifyConfigurationChanged() end, 1);
-                    T.LastVCheck = gettime;
                 end
             else
-                D:Debug("Malformed version string received: ", message);
+                D:Debug("Rejected malformed version reply from ", from)
             end
         else
             D:Debug("Unhandled comm received (spam?)");

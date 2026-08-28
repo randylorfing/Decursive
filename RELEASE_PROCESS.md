@@ -60,8 +60,8 @@ DeadlyBossMods uses.
     Decursive_Options/      LoadOnDemand companion. Settings UI, option tree,
                             Test Mode. RequiredDeps: Decursive
     .pkgmeta                Packaging contract. Repo ROOT, not inside an addon folder.
-    .github/workflows/      Tag-only publish: verify (no credentials) then release
-    .github/scripts/        validate-package.sh (built package), validate-v13.sh (repo)
+    .github/workflows/      PR/master/tag verification; tag-only publication
+    .github/scripts/        Repository, localization, and built-package validators
     Decursive/Libs/         Vendored libraries, committed to git. NOT externals.
 
 ### Load order matters
@@ -179,8 +179,10 @@ Lua block comment.
 ### Also
 
 - Both `.toc` files declare `## X-License: GNU GPL V3`.
-- `LICENSE.txt` is GENERATED into the package by the packager via
-  `license-output`. It is not committed at the repo root.
+- The complete GPLv3 text is committed as [LICENSE](LICENSE) for GitHub license
+  discovery and as [Decursive/LICENSE.txt](Decursive/LICENSE.txt) for the addon.
+  The packager copies `LICENSE.txt` into both packaged addon folders through
+  `license-output`; the root `LICENSE` is ignored by [.pkgmeta](.pkgmeta).
 - Third-party code under `Libs/` keeps its own upstream licence; out of scope.
 - Two files (`Decursive/embeds.xml`, `Decursive/Localization/load.xml`) omit the
   Quu provenance paragraph that the other 30 Wellesz-lineage files carry. Both
@@ -229,11 +231,11 @@ The packager substitutes some tokens at build time and leaves others alone.
 Getting this backwards either breaks versioning or deletes source.
 
     TOKEN                        COUNT      HANDLING
-    @project-version@            55         RESTORE before committing
+    @project-version@            50         RESTORE before committing
     @project-date-iso@           4          RESTORE before committing
     --@debug@ / --@end-debug@    0          MUST STAY ABSENT (section 10)
     @no-lib-strip@               2 pairs    Leave untouched, not substituted here
-    @project-abbreviated-hash@   1          Leave untouched, not substituted here
+    @project-abbreviated-hash@   1          RESTORE before committing
 
 ### Restoring after an offline drop
 
@@ -251,9 +253,10 @@ survive:**
 Restore tokens by matching each line's exact shape, then confirm the counts
 return to baseline:
 
-    grep -rho "@project-version@\|@project-date-iso@" Decursive Decursive_Options | sort | uniq -c
+    grep -rho "@project-version@\|@project-date-iso@\|@project-abbreviated-hash@" Decursive Decursive_Options | sort | uniq -c
+    #   1 @project-abbreviated-hash@
     #   4 @project-date-iso@
-    #  55 @project-version@
+    #  50 @project-version@
 
 
 --------------------------------------------------------------------------------
@@ -317,19 +320,22 @@ reintroduces the collision above.
 --------------------------------------------------------------------------------
 ## 7. CI PIPELINE
 
-One workflow: `.github/workflows/build-package-and-upload.yml`. It fires on
-**version tags only** (`v*`), plus a manual `workflow_dispatch`. Branch pushes do
-not build.
+One workflow: [.github/workflows/build-package-and-upload.yml](.github/workflows/build-package-and-upload.yml).
+Its read-only `verify` job runs on pull requests targeting `master`, pushes to
+`master`, version tags (`v*`), and manual `workflow_dispatch`. Its write-enabled
+`release` job runs only for version tags.
 
 It is split into two jobs, and the split is the whole safety model:
 
     JOB       CREDENTIALS   WHAT IT DOES
-    verify    NONE          luacheck; debug-marker gate; install ripgrep;
-                            validate-v13.sh (repository invariants); packager
+    verify    READ ONLY     full-tree Lua syntax plus maintained-code static
+                            checks; debug-marker gate; install ripgrep;
+                            validate-v13.sh (repository and localization
+                            invariants); packager
                             dry run (args: -d, skip uploading); then
                             validate-package.sh against .release
-    release   CF + GitHub   needs: verify. Gated on a tag ref. Packages and
-                            uploads. The ONLY job holding tokens.
+    release   CF + GitHub   needs: verify. Gated on a pushed version tag.
+                            Packages and uploads. The ONLY job holding tokens.
 
 **Why it is split.** On a tag build the CurseForge upload happens *inside* the
 packager step. Any check placed after that step reports a fault only once the
@@ -337,29 +343,38 @@ broken file is already public — which is exactly how v11.0.46, v12.0.4 and
 v12.0.5 escaped. Packaging and validating with no credentials in scope, then
 publishing only on success, closes that hole.
 
-**Rehearsal.** `workflow_dispatch` runs `verify` only, because `release` is gated
-on `startsWith(github.ref, 'refs/tags/v')`. A manual run therefore lints,
-packages and validates but *cannot* publish. Use it before every tag:
+**Rehearsal.** Pull requests and `master` pushes verify automatically.
+`workflow_dispatch` also runs `verify` only, because `release` requires both a
+`push` event and a `v*` tag ref. A manual run therefore lints, packages and
+validates but *cannot* publish, even if an existing version tag is selected as
+the dispatch ref. Use it before every tag:
 
     gh workflow run "Check and build addon" --ref master
 
 ### The two validators
 
-`.github/scripts/validate-package.sh <releasedir>` — inspects the BUILT package:
-structure, duplicated delimiters, unsubstituted tokens, a Lua **syntax parse of
-every packaged file**, TOC references, LICENSE presence, case-insensitive
-filename collisions, and source-only files that leaked in.
+[.github/scripts/validate-package.sh](.github/scripts/validate-package.sh)
+`<assembled-release-directory>` — inspects the BUILT, expanded package directory
+(normally `.release`), not the source checkout or a zip archive. It checks
+structure, duplicated delimiters, every unsubstituted package token including
+the abbreviated hash, a Lua **syntax parse of every packaged file**, TOC
+references, both addon licenses, case-insensitive filename collisions, and
+source-only files that leaked in.
 
-`.github/scripts/validate-v13.sh` — repository invariants: workflow shape, the
+[.github/scripts/validate-v13.sh](.github/scripts/validate-v13.sh) — repository
+invariants: workflow permissions and immutable action pins, the
 package-token baseline (50 version / 4 date / 1 hash), TOC authorship and licence
-metadata, and v13 architecture boundaries.
+metadata, localization format compatibility and coverage, and v13 architecture
+boundaries.
 
-**validate-v13.sh requires ripgrep, which ubuntu-latest does not preinstall.**
-Without `rg`, every `! rg -q ...` guard inverts and the script reports confident,
-specific problems that do not exist — it once claimed three workflow
-misconfigurations that were all fine. The workflow installs it explicitly. If
-that script ever reports something surprising, check `rg` is present before
-believing it.
+**The repository validator requires Git, Perl, and ripgrep.** Git for Windows
+includes Git and Perl; install ripgrep separately. The script now fails fast if
+one is unavailable instead of inverting checks and reporting false failures.
+The workflow installs ripgrep explicitly on `ubuntu-latest`.
+
+On Windows, run the shell commands from **Git Bash**. The validators locate the
+repository from their own script paths, tolerate CRLF TOC metadata, and
+normalize drive-letter or backslash paths passed to the package validator.
 
 ### Reading the log
 
@@ -388,7 +403,14 @@ state the risk once, then proceed — it is their call.
 
 **2. Audit the working tree.**
 Licence headers intact, package tokens at the 50 / 4 / 1 baseline, `.toc` fields
-present. Run both validators locally.
+present. Run repository validation, assemble a credential-free package into
+`.release`, and only then pass that assembled directory to the package validator:
+
+    bash .github/scripts/validate-v13.sh
+    # Run the pinned BigWigs packager locally with -d to assemble .release.
+    bash .github/scripts/validate-package.sh .release
+
+The package validator does not accept the source tree or a zip path.
 
 **3. Stage deliberately. Never `git add -A` blind.**
 It has swept a 2 MB `Decursive.zip` build artifact into a commit. Stage named
@@ -399,13 +421,14 @@ gitignored, but the habit is the protection.
 Explain WHY, not just what — root cause, mechanism, and what was verified. No
 `Co-Authored-By` trailer.
 
-**5. Push to `master`, then run the rehearsal.**
-A branch push no longer builds anything. Trigger `verify` manually:
+**5. Push to `master`, confirm its automatic verification, then rehearse the
+exact commit if needed.**
+The push automatically runs `verify`. A manual rehearsal remains available:
 
     gh workflow run "Check and build addon" --ref master
 
-Wait for green. This packages and validates with no credentials in scope and
-cannot publish. **Confirm the rehearsal ran against the commit you are about to
+Wait for green. Verification has read-only repository permission, no publishing
+secrets, and cannot publish. **Confirm the run used the commit you are about to
 tag** — compare the run's `headSha` with `git rev-parse --short HEAD`. A
 documentation-only commit has broken the token baseline before (see §11).
 
@@ -440,7 +463,7 @@ all three broken releases.
 - [ ] **Structure:** `ex/Decursive/` and `ex/Decursive_Options/` at top level,
       each `.toc` at depth 2. Anything deeper means the addon will not load.
 - [ ] **No duplicated delimiters:** `grep -rn ']==]]==]' ex` returns nothing.
-- [ ] **No raw tokens:** `grep -rl '@project-version@\|@project-date-iso@' ex`
+- [ ] **No raw tokens:** `grep -rlE '@project-[[:alnum:]-]+@' ex`
       returns nothing.
 - [ ] **Ignored paths absent:** `ex/Decursive/branding` does not exist.
 - [ ] **`LICENSE.txt` generated** into both addon folders.
@@ -523,8 +546,10 @@ already been burned by; extracting the artifact covers the rest.
 **Anything at the repository root ships inside the addon.**
 With `package-as: Decursive` the packager stages the whole checkout under the
 package folder. Adding `README.md` and `RELEASE_PROCESS.md` at the root put them
-in users' AddOns folders. Every new root-level file needs a matching `.pkgmeta`
-ignore rule — treat that as part of adding the file.
+in users' AddOns folders. Every new root-level file needs a matching
+[.pkgmeta](.pkgmeta) ignore rule — including the GitHub-discovery
+[LICENSE](LICENSE), because the package receives its own `LICENSE.txt` copies.
+Treat the ignore rule as part of adding the file.
 
 **An offline drop is a packaged build, not a source tree. MERGE, never replace.**
 Files the packager ignores are simply absent from it. A clean replace deletes
@@ -553,7 +578,7 @@ baseline. Name tokens in prose without spelling them.
 
 **Line endings and file modes are load-bearing.**
 Shell scripts must be LF and mode 755, or Linux rejects the shebang with
-`bad interpreter: ...^M`. `.gitattributes` pins this; invoke scripts as
+`bad interpreter: ...^M`. [.gitattributes](.gitattributes) pins this; invoke scripts as
 `bash path/to/script.sh` so a lost exec bit cannot break CI.
 
 **CurseForge's public page lags an accepted upload — sometimes by a lot.**

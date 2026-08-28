@@ -91,8 +91,13 @@ local issecretvalue     = _G.issecretvalue;
 local pcall             = _G.pcall;
 
 local function isAccessiblePublicValue(value)
+    if issecretvalue and issecretvalue(value) then return false end
     if not canaccessvalue(value) then return false; end
-    return not issecretvalue or not issecretvalue(value);
+    if type(value) == "table" then
+        if _G.issecrettable and _G.issecrettable(value) then return false end
+        if _G.canaccesstable and not _G.canaccesstable(value) then return false end
+    end
+    return true
 end
 
 local function accessibleCall(func, ...)
@@ -1248,12 +1253,24 @@ function MicroUnitF.OnPreClick(frame, Button) -- {{{
 
     RequestedPrio = D:tGiveValueIndex(D.db.global.MouseButtons, modifier and (modifier .. ButtonsString:sub(-3)) or ButtonsString);
 
+    -- Record the exact protected action window before SecureActionButtonTemplate
+    -- executes it. UI_ERROR_MESSAGE has no spell or item identity, so modern
+    -- result handlers may only consume errors while this concrete MUF attempt is
+    -- active. Target/focus bindings are ignored by the receiving helpers.
+    if D.Begin121SecureActionAttempt then
+        D:Begin121SecureActionAttempt(frame.Object, Button, RequestedPrio)
+    end
+    if D.Begin121SoulLinkAttempt then
+        D:Begin121SoulLinkAttempt(frame.Object, Button, RequestedPrio, modifier == nil)
+    end
+
     D:Debug("RequestedPrio:", RequestedPrio);
     if frame.Object.UnitStatus == NORMAL and D:tcheckforval(D.Status.CuringSpellsPrio, RequestedPrio) then
 
         -- WoW 12.1 can hide the aura details while the Blizzard-managed MUF indicator
         -- still knows the unit is dispellable. Do not spam "There is nothing to cure!"
         -- when the legacy Decursive debuff cache is empty.
+        return
 
         -- detect wrong button click and prepare for not-in-line-of-sight casting failures in coordination with CLEU (unavailable in MN)
     elseif (frame.Object.UnitStatus == AFFLICTED and frame.Object.Debuffs[1] and not frame.Object.Debuffs[1].secretMode) then
@@ -1346,6 +1363,7 @@ function MicroUnitF.prototype:init(Container, Unit, FrameNum, ID) -- {{{
     self.PrevCenterText     = false;
     self.Shown              = false; -- Setting this to true will broke the stick to right option
     self.UpdateCD           = 0;
+    self.LastKnownRangeStatus = true
     self.RaidTargetIcon     = false;
     self.PrevRaidTargetIndex= false;
 
@@ -1500,7 +1518,6 @@ do
     -- used to tell if we changed something to improve performances.
     -- Each attribute change trigger an event...
     local ReturnValue = false;
-    local tmp;
     -- this updates the sttributes of a MUF's frame object
     function MicroUnitF.prototype:SetUnstableAttribute(attribute, value)
         -- SecureActionButton attributes are protected in combat. Keep the
@@ -1528,7 +1545,9 @@ do
 
         -- Delay the call if we are fighting
         if InCombatLockdown() then
-            if not DoNotDelay then
+            if D.MarkModernSecureUIDirty then
+                D:MarkModernSecureUIDirty("MUF secure attributes", false)
+            elseif not DoNotDelay then
                 D:AddDelayedFunctionCall (
                 "MicroUnit_" .. Unit,                   -- UID
                 self.UpdateAttributes, self, Unit);     -- function call
@@ -1565,63 +1584,81 @@ do
 
         -- D:Debug("UpdateAttributes() executed");
 
-        if self.LastAttribUpdate == 0 then -- only once
-            -- set the mouse left-button actions on all modifiers
-            self.Frame:SetAttribute("*type1", "macro");
-            self.Frame:SetAttribute("ctrl-type1", "macro");
-            self.Frame:SetAttribute("alt-type1", "macro");
-            self.Frame:SetAttribute("shift-type1", "macro");
-
-            -- set the mouse right-button actions on all modifiers
-            self.Frame:SetAttribute("*type2", "macro");
-            self.Frame:SetAttribute("ctrl-type2", "macro");
-            self.Frame:SetAttribute("alt-type2", "macro");
-            self.Frame:SetAttribute("shift-type2", "macro");
-
-            -- set the mouse middle-button actions on all modifiers
-            self.Frame:SetAttribute("*type3", "macro");
-            self.Frame:SetAttribute("ctrl-type3", "macro");
-            self.Frame:SetAttribute("alt-type3", "macro");
-            self.Frame:SetAttribute("shift-type3", "macro");
-
-            -- set the mouse 4th-button actions on all modifiers
-            self.Frame:SetAttribute("*type4", "macro");
-            self.Frame:SetAttribute("ctrl-type4", "macro");
-            self.Frame:SetAttribute("alt-type4", "macro");
-            self.Frame:SetAttribute("shift-type4", "macro");
-
-            -- set the mouse 4th-button actions on all modifiers
-            self.Frame:SetAttribute("*type5", "macro");
-            self.Frame:SetAttribute("ctrl-type5", "macro");
-            self.Frame:SetAttribute("alt-type5", "macro");
-            self.Frame:SetAttribute("shift-type5", "macro");
-        end
-
-        local MouseButtons = D.db.global.MouseButtons;
-
-
-        self:SetUnstableAttribute(MouseButtons[#MouseButtons - 1]:format("macrotext"), ("/target %s"):format(Unit));
-        self:SetUnstableAttribute(MouseButtons[#MouseButtons    ]:format("macrotext"), ("/focus %s"):format(Unit));
-
-
-        local FoundSpells = D.Status.FoundSpells;
-        local ReversedCureOrder = D.Status.ReversedCureOrder;
-        local CuringSpells = D.Status.CuringSpells;
-
-        for prio, macroData in pairs(D.Status.prio_macro) do
-            if not D.UnitFilteringTest (Unit, macroData.unitFiltering) then
-                self:SetUnstableAttribute(MouseButtons[prio]:format("macrotext"), macroData.macroText)
+        local mouseButtons = D.db.global.MouseButtons
+        if self.LastAttribUpdate == 0 then
+            for _, binding in ipairs(mouseButtons) do
+                self.Frame:SetAttribute(binding:format("type"), "macro")
             end
         end
 
-        -- Right-click (priority 2) guaranteed battle-rez-on-dead fallback:
-        -- battle-rez is already merged into every configured cure priority
-        -- above, but a spec with only one registered cure spell (e.g.
-        -- Mistweaver's single Detox) never claims priority 2 at all, which
-        -- would otherwise leave right-click doing nothing. This only fills
-        -- the slot in if no real cure spell already claimed it.
-        if not D.Status.prio_macro[2] and D.GetBattleRezMacroText then
-            self:SetUnstableAttribute(MouseButtons[2]:format("macrotext"), D:GetBattleRezMacroText(Unit));
+        self:SetUnstableAttribute(mouseButtons[#mouseButtons - 1]:format("macrotext"), ("/target %s"):format(Unit))
+        self:SetUnstableAttribute(mouseButtons[#mouseButtons]:format("macrotext"), ("/focus %s"):format(Unit))
+
+        local physicalLeftBinding = "*%s1"
+        local rezEligibleUnit = D.IsMUFRezEligibleUnitToken
+            and D:IsMUFRezEligibleUnitToken(Unit) or false
+        local physicalLeftReserved = mouseButtons[#mouseButtons - 1] == physicalLeftBinding
+            or mouseButtons[#mouseButtons] == physicalLeftBinding
+        local physicalLeftAssigned = false
+        self.SmartRezLeftEnabled121 = false
+        self.SmartRezFallbackPriority2Enabled121 = false
+
+        for priority, macroData in pairs(D.Status.prio_macro) do
+            local binding = mouseButtons[priority]
+            if binding then
+                if binding == physicalLeftBinding and macroData.customMacro then
+                    -- A user-authored left-click macro owns that gesture even
+                    -- when its unit filter suppresses it for this MUF.
+                    physicalLeftReserved = true
+                end
+                local filtered = D.UnitFilteringTest(Unit, macroData.unitFiltering)
+                local macroText
+                if not filtered then
+                    if binding == physicalLeftBinding and rezEligibleUnit
+                        and macroData.smartRezAvailable
+                    then
+                        macroText = macroData.macroText
+                        self.SmartRezLeftEnabled121 = true
+                    else
+                        macroText = macroData.cureOnlyMacroText or macroData.macroText
+                    end
+                elseif binding == physicalLeftBinding and rezEligibleUnit
+                    and not macroData.customMacro
+                    and type(macroData.rezOnlyMacroText) == "string"
+                    and macroData.rezOnlyMacroText ~= ""
+                then
+                    macroText = macroData.rezOnlyMacroText
+                    self.SmartRezLeftEnabled121 = true
+                end
+
+                if macroText then
+                    self:SetUnstableAttribute(binding:format("macrotext"), macroText)
+                    if binding == physicalLeftBinding then physicalLeftAssigned = true end
+                end
+            end
+        end
+
+        -- If no configured cure owns physical unmodified left-click for this
+        -- MUF (including a filtered default cure), keep resurrection available
+        -- there without assigning player resurrection to pet MUFs.
+        if rezEligibleUnit and not physicalLeftReserved
+            and not physicalLeftAssigned and D.GetBattleRezMacroText
+        then
+            local rezMacro = D:GetBattleRezMacroText("mouseover")
+            if rezMacro ~= "" then
+                self:SetUnstableAttribute(physicalLeftBinding:format("macrotext"), rezMacro)
+                self.SmartRezLeftEnabled121 = true
+            end
+        end
+
+        -- Preserve the separate priority-two resurrection fallback for
+        -- compatibility with existing layouts that have only one cure action.
+        if rezEligibleUnit and not D.Status.prio_macro[2] and D.GetBattleRezMacroText then
+            local fallbackMacro = D:GetBattleRezMacroText("mouseover")
+            if fallbackMacro ~= "" then
+                self:SetUnstableAttribute(mouseButtons[2]:format("macrotext"), fallbackMacro)
+                self.SmartRezFallbackPriority2Enabled121 = true
+            end
         end
 
         -- clean unused attributes...
@@ -1680,6 +1717,7 @@ do
     local floor             = _G.math.floor;
     local fmod              = _G.math.fmod;
     local CooldownFrame_Set = _G.CooldownFrame_Set;
+    local C_DurationUtil    = _G.C_DurationUtil
     local GetSpellCooldown  = _G.C_Spell and _G.C_Spell.GetSpellCooldown and function(spellid)
         local cooldownInfo = _G.C_Spell.GetSpellCooldown(spellid);
 
@@ -1695,6 +1733,39 @@ do
     local bor               = _G.bit.bor;
     local band              = _G.bit.band;
     local SpellID;
+
+    local function SetSpellCooldownFromDurationObject(frame, spellID)
+        if not frame or not frame.SetCooldownFromDurationObject
+            or not _G.C_Spell or type(_G.C_Spell.GetSpellCooldownDuration) ~= "function"
+        then
+            return false
+        end
+
+        local ok, durationObject = pcall(_G.C_Spell.GetSpellCooldownDuration, spellID)
+        if not ok then return false end
+        return pcall(frame.SetCooldownFromDurationObject, frame, durationObject)
+    end
+
+    local function SetItemCooldownFromDurationObject(frame, itemID)
+        if not frame or not frame.SetCooldownFromDurationObject
+            or not C_DurationUtil or not C_DurationUtil.CreateDuration
+            or type(GetItemCooldown) ~= "function"
+        then
+            return false
+        end
+
+        local ok, startTime, duration, _, modRate = pcall(GetItemCooldown, itemID)
+        if not ok then return false end
+        if isAccessiblePublicValue(modRate) then
+            if type(modRate) ~= "number" then modRate = 1 end
+        end
+
+        local durationObject = C_DurationUtil.CreateDuration()
+        if not durationObject then return false end
+        local configured = pcall(durationObject.SetTimeFromStart, durationObject, startTime, duration, modRate)
+        if not configured then return false end
+        return pcall(frame.SetCooldownFromDurationObject, frame, durationObject)
+    end
 
     function MicroUnitF.prototype:SetColor() -- {{{
 
@@ -1792,8 +1863,29 @@ do
                 -- So we test before calling this api that we can still cure this debuff type
                 if Status.CuringSpells[DebuffType] then -- so this will fail on MN as we cannot know the type and thus the spell except for the charm type but this will work for classes that have only one dubuff cleansing ability
                     SpellID = Status.FoundSpells[Status.CuringSpells[DebuffType]][2];
-                    RangeStatus = SpellID > 0 and IsSpellInRange(Status.CuringSpells[DebuffType], Unit) or D:isItemUsable(-1 * SpellID) and IsItemInRange(-1 * SpellID, Unit);
-                    if not isAccessiblePublicValue(RangeStatus) then RangeStatus = nil; end
+                    if SpellID > 0 then
+                        RangeStatus = accessibleCall(IsSpellInRange, Status.CuringSpells[DebuffType], Unit)
+                    else
+                        local itemID = -1 * SpellID
+                        local usable = accessibleCall(D.isItemUsable, D, itemID)
+                        if usable == true then
+                            RangeStatus = accessibleCall(IsItemInRange, itemID, Unit)
+                        elseif usable == false then
+                            RangeStatus = false
+                        else
+                            RangeStatus = nil
+                        end
+                    end
+                    if isAccessiblePublicValue(RangeStatus)
+                        and (RangeStatus == true or RangeStatus == false or RangeStatus == 1 or RangeStatus == 0)
+                    then
+                        RangeStatus = RangeStatus == true or RangeStatus == 1
+                        self.LastKnownRangeStatus = RangeStatus
+                    else
+                        -- Unknown/secret is not out of range. Preserve the last
+                        -- public observation without branching on protected data.
+                        RangeStatus = self.LastKnownRangeStatus ~= false
+                    end
                 else
                     RangeStatus = false;
                 end
@@ -1805,11 +1897,15 @@ do
                         if not DC.MN then
                             CooldownFrame_Set (self.CooldownFrame, GetSpellCooldown(Status.CuringSpells[DebuffType]));
                         else
-                            self.CooldownFrame:SetCooldownFromDurationObject(C_Spell.GetSpellCooldownDuration(Status.CuringSpells[DebuffType]));
+                            SetSpellCooldownFromDurationObject(self.CooldownFrame, Status.CuringSpells[DebuffType])
                         end
                     else
                         --D:Debug("SetColor(): setting interface cooldown for ", -1 * SpellID, "GetItemCooldown:",  GetItemCooldown(-1 * SpellID));
-                        CooldownFrame_Set (self.CooldownFrame, GetItemCooldown(-1 * SpellID));
+                        if DC.MN then
+                            SetItemCooldownFromDurationObject(self.CooldownFrame, -1 * SpellID)
+                        else
+                            CooldownFrame_Set (self.CooldownFrame, GetItemCooldown(-1 * SpellID))
+                        end
                     end
                     self.UpdateCD = Time;
                 end
@@ -2194,7 +2290,7 @@ end -- }}}
 
 
 
-function MicroUnitF:OnAttributeChanged(self, name, value)
+function MicroUnitF:OnAttributeChanged(name, value)
     D:Debug("Micro unit", name, "AttributeChanged to", value);
 end
 

@@ -116,6 +116,24 @@ local function accessibleCall(func, ...)
     if not ok or not isAccessiblePublicValue(value) then return nil; end
     return value;
 end
+
+function LiveList:ClearDisplay(resetProtectedModeNotice)
+    for _, item in pairs(self.ExistingPerID) do
+        if item then
+            if item.Frame then item.Frame:Hide() end
+            item.IsShown = false
+            item.UnitID = nil
+            item.Debuff = nil
+            item.IsCharmed = false
+        end
+    end
+
+    self.NumberShown = 0
+    self.TestItemDisplayed = false
+    if resetProtectedModeNotice ~= false then
+        self.ProtectedModeMessageShown = false
+    end
+end
 local function cancompare(a,b)
     return isAccessiblePublicValue(a) and isAccessiblePublicValue(b);
  end
@@ -438,14 +456,7 @@ function LiveList:DisplayProtectedModeMessage() -- {{{
     -- Do not fabricate Live List rows: its rows require real debuff data and the
     -- old AddLineToFrame/PostCreate helpers do not exist in this implementation.
     if self.NumberShown > 0 then
-        for i = 1, self.NumberShown do
-            local item = self.ExistingPerID[i];
-            if item and item.IsShown then
-                item.Frame:Hide();
-                item.IsShown = false;
-            end
-        end
-        self.NumberShown = 0;
+        self:ClearDisplay(false)
     end
 
     if not self.ProtectedModeMessageShown then

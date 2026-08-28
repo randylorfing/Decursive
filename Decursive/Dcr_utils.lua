@@ -661,7 +661,10 @@ do
     end
 
     if CUSTOM_CLASS_COLORS and CUSTOM_CLASS_COLORS.RegisterCallback then
-        CUSTOM_CLASS_COLORS:RegisterCallback(function() D:ScheduleDelayedCall('update_Class_Colors', D.CreateClassColorTables, .3, D) end);
+        CUSTOM_CLASS_COLORS:RegisterCallback(function()
+            if not D.DcrFullyInitialized then return end
+            D:ScheduleDelayedCall('update_Class_Colors', D.CreateClassColorTables, .3, D)
+        end)
     end
 
 end
@@ -672,13 +675,25 @@ function D:GetSpellFromLink(link)
         local spellID;
         spellID = tonumber(link:match('|Hspell:(%d+)'));
 
-        local spellName, spellRank = GetSpellInfo(spellID);
+        local spellInfo, legacySpellRank = GetSpellInfo(spellID)
+        local spellName
+        local spellRank
+        if type(spellInfo) == "table" then
+            spellName = spellInfo.name
+            spellRank = spellInfo.subName
+        else
+            spellName = spellInfo
+            spellRank = legacySpellRank
+        end
 
         if not spellName then
             return nil;
         end
 
-       local isPetAbility = select(2, D:GetSpellUsefulInfoIfKnown(spellName));
+        -- Retail's spellbook lookup expects the public numeric spell ID. Passing
+        -- C_Spell.GetSpellInfo()'s result table (or its localized name) makes a
+        -- valid custom spell link look unknown.
+        local isPetAbility = select(2, D:GetSpellUsefulInfoIfKnown(spellID))
 
         if spellRank and spellRank ~= "" then
             spellName = ("%s(%s)"):format(spellName, spellRank);

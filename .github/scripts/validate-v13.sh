@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+cd "$repo_root"
+
+for required_command in git perl rg; do
+    if ! command -v "$required_command" >/dev/null 2>&1; then
+        echo "ERROR: required command '$required_command' is unavailable." >&2
+        echo "Install it before running repository validation; Git for Windows includes git and perl, while ripgrep must be installed separately." >&2
+        exit 2
+    fi
+done
+
 status=0
 
 fail() {
@@ -12,13 +23,18 @@ lua_roots=(Decursive Decursive_Options)
 
 release_workflow=.github/workflows/build-package-and-upload.yml
 if ! rg -q --fixed-strings -- "- 'v*'" "$release_workflow" \
-    || rg -q '^[[:space:]]+branches:' "$release_workflow"; then
-    fail 'The publishing workflow must be triggered by version tags only.'
+    || ! rg -q '^  pull_request:' "$release_workflow" \
+    || [ "$(rg -c '^[[:space:]]+- master$' "$release_workflow")" -lt 2 ]; then
+    fail 'The workflow must verify pull requests and master pushes while retaining the version-tag trigger.'
 fi
 if ! rg -q --fixed-strings 'args: -d' "$release_workflow" \
     || ! rg -q --fixed-strings 'needs: verify' "$release_workflow" \
     || ! rg -q --fixed-strings 'validate-package.sh .release' "$release_workflow"; then
     fail 'The publishing workflow lacks its credential-free pre-publish package gate.'
+fi
+if ! rg -q --fixed-strings 'Run maintained-code static checks' "$release_workflow" \
+    || ! rg -q --fixed-strings -- '--no-global' "$release_workflow"; then
+    fail 'The workflow lacks its correctness-oriented maintained-code luacheck pass.'
 fi
 if ! rg -q --fixed-strings 'CF_API_TOKEN: ${{ secrets.CF_API_KEY }}' "$release_workflow" \
     || ! rg -q --fixed-strings 'GITHUB_API_TOKEN: ${{ github.token }}' "$release_workflow"; then
@@ -26,6 +42,35 @@ if ! rg -q --fixed-strings 'CF_API_TOKEN: ${{ secrets.CF_API_KEY }}' "$release_w
 fi
 [ -f .github/scripts/validate-package.sh ] \
     || fail 'The packaged-artifact validator is missing.'
+[ -f .github/scripts/validate-localizations.sh ] \
+    || fail 'The localization validator is missing.'
+[ -f .github/scripts/test-smart-rez.lua ] \
+    || fail 'The smart resurrection behavior harness is missing.'
+[ -f .github/scripts/test-soul-link-visual.lua ] \
+    || fail 'The Emergency Soul Link visual behavior harness is missing.'
+
+verify_block=$(sed -n '/^  verify:/,/^  release:/p' "$release_workflow")
+release_block=$(sed -n '/^  release:/,$p' "$release_workflow")
+if ! printf '%s\n' "$verify_block" | rg -q '^[[:space:]]+contents: read$' \
+    || printf '%s\n' "$verify_block" | rg -q 'secrets\.|contents: write'; then
+    fail 'The verify job must have read-only contents permission and no publishing secrets.'
+fi
+if ! printf '%s\n' "$release_block" | rg -q '^[[:space:]]+contents: write$' \
+    || ! printf '%s\n' "$release_block" | rg -q --fixed-strings "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"; then
+    fail 'The release job must have push-event-and-version-tag-gated contents write permission.'
+fi
+if rg -n 'uses:[[:space:]]+[^[:space:]#]+@(master|main|v[0-9])([[:space:]]|$)' "$release_workflow"; then
+    fail 'Every external action must be pinned to a reviewed full commit SHA.'
+fi
+while IFS= read -r action_use; do
+    if ! printf '%s\n' "$action_use" | rg -q 'uses:[[:space:]]+[^[:space:]#]+@[0-9a-f]{40}([[:space:]]+#.*)?$'; then
+        fail "External action is not pinned to a full commit SHA: $action_use"
+    fi
+done < <(rg '^[[:space:]]+-?[[:space:]]*uses:' "$release_workflow" || true)
+
+if ! bash .github/scripts/validate-localizations.sh; then
+    status=1
+fi
 
 if rg -n --fixed-strings 'L["ER_VERSION_NOTICE"]' Decursive/DCR_init.lua \
     || rg -n --fixed-strings 'L["DEV_VERSION_ALERT"]' Decursive/DCR_init.lua; then
@@ -62,15 +107,15 @@ if [ "$source_version_tokens" -ne 50 ] || [ "$source_date_tokens" -ne 4 ] \
 fi
 
 for toc in Decursive/Decursive.toc Decursive_Options/Decursive_Options.toc; do
-    if ! rg -q '^## Author: John Wellesz, Randy Lorfing$' "$toc"; then
+    if ! rg -q '^## Author: John Wellesz, Randy Lorfing\r?$' "$toc"; then
         fail "$toc must credit John Wellesz and Randy Lorfing."
     fi
-    if ! rg -q '^## X-License: GNU GPL V3$' "$toc" \
-        || ! rg -q '^## Version: @project-version@$' "$toc"; then
+    if ! rg -q '^## X-License: GNU GPL V3\r?$' "$toc" \
+        || ! rg -q '^## Version: @project-version@\r?$' "$toc"; then
         fail "$toc is missing its GPL or packager-owned version metadata."
     fi
 done
-if ! rg -q '^## X-eMail: randylorfing@gmail\.com$' Decursive/Decursive.toc; then
+if ! rg -q '^## X-eMail: randylorfing@gmail\.com\r?$' Decursive/Decursive.toc; then
     fail 'Bug reports are not routed to the fork maintainer in Decursive.toc.'
 fi
 
@@ -174,11 +219,21 @@ if [ -e Decursive_Options/LICENSE.txt ] \
     fail 'Decursive_Options/LICENSE.txt is packager output and must not be committed in source.'
 fi
 if ! rg -q --fixed-strings 'Decursive/branding' .pkgmeta \
-    || ! rg -q --fixed-strings 'Decursive/RELEASE_NOTES_v12.0*.md' .pkgmeta; then
+    || ! rg -q --fixed-strings 'Decursive/RELEASE_NOTES_v12.0*.md' .pkgmeta \
+    || ! rg -q --fixed-strings 'Decursive/docs' .pkgmeta; then
     fail 'Source-only assets or superseded release notes lack package-ignore rules.'
 fi
 if ! rg -q --fixed-strings 'license-output: LICENSE.txt' .pkgmeta; then
     fail 'The packager-generated license output is not configured.'
+fi
+if [ ! -f LICENSE ] \
+    || ! diff -q --strip-trailing-cr LICENSE Decursive/LICENSE.txt >/dev/null \
+    || ! rg -q --fixed-strings 'GNU GENERAL PUBLIC LICENSE' LICENSE \
+    || ! rg -q --fixed-strings 'Version 3, 29 June 2007' LICENSE; then
+    fail 'The repository-root LICENSE must be the complete GPLv3 text shipped in Decursive/LICENSE.txt.'
+fi
+if ! rg -q '^[[:space:]]+- LICENSE$' .pkgmeta; then
+    fail 'The repository-root LICENSE must be ignored from addon packages.'
 fi
 
 if rg -n --glob '*.lua' --glob '*.toc' --fixed-strings '/dcrv13' "${lua_roots[@]}"; then
@@ -210,14 +265,16 @@ fi
 for capture in \
     'local tabKey = tab.key' \
     'local entryKey = entry.key' \
-    'local rowIndex = i' \
-    'local choiceKey = item.key' \
     'local bindingIndex = comboIndex' \
     'local spellID = spellIDValue'; do
     if ! rg -q --fixed-strings "$capture" Decursive_Options/Modern/ZD_UI.lua; then
         fail "A deferred mature-menu callback lacks its per-row capture: $capture"
     fi
 done
+if ! rg -q --fixed-strings 'move(card.kind, row.index' Decursive_Options/Modern/ZD_UI.lua \
+    || ! rg -q --fixed-strings 'local choiceKey = choice.choiceKey' Decursive_Options/Modern/ZD_UI.lua; then
+    fail 'A pooled mature-menu callback does not read its current frame-owned row identity.'
+fi
 if ! rg -q --fixed-strings 'function Controls:Apply(labelText, setter, value)' Decursive_Options/V13/Controls.lua \
     || ! rg -q --fixed-strings 'Controls:Apply(labelText, setter' Decursive_Options/V13/Controls.lua \
     || ! rg -q --fixed-strings 'if result == false then' Decursive_Options/Modern/ZD_UI.lua \
@@ -227,9 +284,10 @@ fi
 
 protected_pattern='CreateUnitAuraContainer|CreateUnitAuraSlots|AddAuraGroup|AddAuraSlot|SetDispelTypeText|SetDurationText'
 while IFS= read -r match; do
-    case "$match" in
+    normalized_match=${match//\\//}
+    case "$normalized_match" in
         Decursive/V13/Platform/ProtectedAuras.lua:*) ;;
-        *) fail "Protected aura API outside Platform/ProtectedAuras.lua: $match" ;;
+        *) fail "Protected aura API outside Platform/ProtectedAuras.lua: $normalized_match" ;;
     esac
 done < <(rg -n --glob '*.lua' "$protected_pattern" Decursive/V13 || true)
 
@@ -240,9 +298,10 @@ fi
 
 sound_registry_pattern='_G\.C_UnitAuras\.(AddAuraSound|RemoveAuraSound)'
 while IFS= read -r match; do
-    case "$match" in
+    normalized_match=${match//\\//}
+    case "$normalized_match" in
         Decursive/Decursive.lua:*) ;;
-        *) fail "Native aura-sound registry API outside Decursive.lua: $match" ;;
+        *) fail "Native aura-sound registry API outside Decursive.lua: $normalized_match" ;;
     esac
 done < <(rg -n --glob '*.lua' "$sound_registry_pattern" Decursive Decursive_Options || true)
 
@@ -375,7 +434,8 @@ if rg -n --fixed-strings 'pcall(D.IsSpellInRange, D,' Decursive/Dcr_12_1.lua; th
     fail 'The MUF range overlay calls D.IsSpellInRange with a shifted method-style signature.'
 fi
 
-if ! rg -q --fixed-strings 'pcall(D.IsSpellInRange, spellName, unit)' Decursive/Dcr_12_1.lua \
+if ! rg -q --fixed-strings 'DCR_RANGE_KNOWN_RESULT_GUARD_V1' Decursive/Dcr_12_1.lua \
+    || ! rg -q --fixed-strings 'pcall(D.IsSpellInRange, spellName, unit)' Decursive/Dcr_12_1.lua \
     || ! rg -q --fixed-strings 'local rangeKnown = ok and isAccessiblePublicValue(value)' Decursive/Dcr_12_1.lua \
     || ! rg -q --fixed-strings 'local ok, value, checked = pcall(UnitInRange, unit)' Decursive/Dcr_12_1.lua \
     || ! rg -q --fixed-strings 'and (checked == true or checked == 1)' Decursive/Dcr_12_1.lua \
@@ -433,7 +493,8 @@ fi
 # public player GUID and a stable party snapshot. The readiness edge must start
 # the bounded MUF recovery, and every settling pass must re-evaluate the
 # context scale/auto-hide state that an early solo snapshot may have changed.
-if ! rg -q --fixed-strings 'if PollTalentsAvaibility() then' Decursive/Dcr_Events.lua \
+if ! rg -q --fixed-strings 'DCR_COLD_LOGIN_MUF_RECOVERY_V1' Decursive/Dcr_Events.lua \
+    || ! rg -q --fixed-strings 'if PollTalentsAvaibility() then' Decursive/Dcr_Events.lua \
     || ! rg -q --fixed-strings 'self:ReinitializeDecursiveAfterZone("DECURSIVE_TALENTS_AVAILABLE")' Decursive/Dcr_Events.lua \
     || ! rg -q --fixed-strings 'D.MicroUnitF:ApplyContextMUFScale()' Decursive/Dcr_12_1.lua \
     || ! rg -q --fixed-strings 'if D.AutoHideShowMUFs then D:AutoHideShowMUFs() end' Decursive/Dcr_12_1.lua; then
@@ -467,9 +528,28 @@ for toc in Decursive/Decursive.toc Decursive_Options/Decursive_Options.toc; do
     done < "$toc"
 done
 
+lua_runner=''
+for candidate in lua lua5.4 lua5.1; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        lua_runner="$candidate"
+        break
+    fi
+done
+
+if [ -n "$lua_runner" ]; then
+    "$lua_runner" .github/scripts/test-smart-rez.lua || status=1
+    "$lua_runner" .github/scripts/test-soul-link-visual.lua || status=1
+else
+    echo 'INFO: no local Lua runtime is available; CI installs Lua 5.4 for behavior harnesses.'
+fi
+
 lua_parser=''
 if command -v luac >/dev/null 2>&1; then
     lua_parser='luac'
+elif command -v luac5.4 >/dev/null 2>&1; then
+    lua_parser='luac5.4'
+elif command -v luac5.1 >/dev/null 2>&1; then
+    lua_parser='luac5.1'
 elif command -v texluac >/dev/null 2>&1; then
     lua_parser='texluac'
 fi
@@ -486,8 +566,21 @@ if command -v xmllint >/dev/null 2>&1; then
     while IFS= read -r file; do
         xmllint --noout "$file" || status=1
     done < <(rg --files "${lua_roots[@]}" 2>/dev/null | rg '\.xml$' || true)
-elif command -v python3 >/dev/null 2>&1; then
-    python3 - "${lua_roots[@]}" <<'PY' || status=1
+else
+    python_command=()
+    if command -v python3 >/dev/null 2>&1 \
+        && python3 -c 'import sys' >/dev/null 2>&1; then
+        python_command=(python3)
+    elif command -v python >/dev/null 2>&1 \
+        && python -c 'import sys' >/dev/null 2>&1; then
+        python_command=(python)
+    elif command -v py >/dev/null 2>&1 \
+        && py -3 -c 'import sys' >/dev/null 2>&1; then
+        python_command=(py -3)
+    fi
+
+    if [ "${#python_command[@]}" -gt 0 ]; then
+        "${python_command[@]}" - "${lua_roots[@]}" <<'PY' || status=1
 import pathlib
 import sys
 import xml.etree.ElementTree as ET
@@ -496,8 +589,9 @@ for root in sys.argv[1:]:
     for path in pathlib.Path(root).rglob("*.xml"):
         ET.parse(path)
 PY
-else
-    echo 'INFO: no local XML parser is available; XML existence is still checked through both TOCs.'
+    else
+        echo 'INFO: no local XML parser is available; XML existence is still checked through both TOCs.'
+    fi
 fi
 
 if [ "$status" -ne 0 ]; then

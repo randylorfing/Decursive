@@ -305,6 +305,6 @@ The complete contributor history remains available in the addon's in-game **Abou
 
 ## License
 
-Zhaohu's Decursive is free software licensed under the [GNU General Public License version 3 or later](https://github.com/randylorfing/Decursive/blob/master/Decursive/LICENSE.txt).
+Zhaohu's Decursive is free software licensed under the [GNU General Public License version 3 or later](LICENSE.txt).
 
 Copyright notices and authorship are preserved in the source files as required by the GPL.

@@ -162,7 +162,7 @@ type and confirm a non-dispelling specialization fails closed.
    MUF startup cases and the removed/reapplied native-sound case above.
 2. Commit is merged to `master` only after review.
 3. Pull-request/source validation completes successfully.
-4. A new, never-reused `v12.1.1` tag is created from a commit contained in
+4. A new, never-reused `vX.Y.Z` tag is created from a commit contained in
    `master`; ordinary branch pushes cannot publish.
 5. The release workflow's credential-free package build and archive validation
    pass before the publish job begins.

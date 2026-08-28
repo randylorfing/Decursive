@@ -131,10 +131,10 @@
                 self.isMoving = false;
                 end
             </OnHide>
-            <OnLOad>
+            <OnLoad>
                 self:RegisterEvent("ADDON_LOADED");
                 self:SetBackdrop(DecursiveRootTable._C.UI_BACKDROP)
-            </OnLOad>
+            </OnLoad>
             <OnEvent>
                 if event == "ADDON_LOADED" and (...) == (DecursiveRootTable and DecursiveRootTable._AddonName or "Decursive") then
                 local T = DecursiveRootTable or {};
@@ -306,8 +306,6 @@
                     <OnClick>
                         DecursiveRootTable.Dcr.profile.CustomeFrameInsertBottom = (not DecursiveRootTable.Dcr.profile.CustomeFrameInsertBottom);
                         DecursiveRootTable.Dcr:ChangeTextFrameDirection(DecursiveRootTable.Dcr.profile.CustomeFrameInsertBottom);
-
-                        DecursiveRootTable.Dcr:Println("|cFFAAAAAATEST");
 
                     </OnClick>
                     <OnShow>

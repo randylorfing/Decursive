@@ -1,8 +1,8 @@
 # Zhaohu's Decursive v12.1.3
 
-Version 13 introduces a completely redesigned command-center settings
-experience while preserving Decursive's compact secure Micro Unit Frames and
-fast click-to-cure workflow.
+The v13 interface architecture introduces a completely redesigned
+command-center settings experience while preserving Decursive's compact secure
+Micro Unit Frames and fast click-to-cure workflow.
 
 ## Project provenance and license
 
@@ -20,8 +20,9 @@ fast click-to-cure workflow.
 
 ## Highlights
 
-- One graphite/cyan settings window opened by `/dcr`, `/decursive`, `/zd`, the
-  options keybind, Blizzard Settings and the established list shortcuts.
+- One graphite/cyan settings window opened by `/dcr`, `/decursive`, `/zd`,
+  `/zdecursive`, the options keybind, Blizzard Settings and the established list
+  shortcuts.
 - No legacy beta/RC notice window interrupting login.
 - Focused Overview, MUFs, Cure, Alerts and Profiles pages plus a searchable
   **All Settings** workspace containing the complete established catalog.
@@ -81,3 +82,7 @@ Exit World of Warcraft and replace both the `Decursive` and
 copying over them, which prevents stale files from older builds. The
 `DecursiveDB` SavedVariables file is not part of the addon package and is
 preserved.
+
+For current installation, command, and support guidance, see the
+[shipped user guide](README.md). Report defects through
+[GitHub Issues](https://github.com/randylorfing/Decursive/issues).

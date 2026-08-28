@@ -997,11 +997,34 @@ local time              = _G.time;
 local canaccessvalue    = _G.canaccessvalue or function(_) return true; end;
 local issecretvalue     = _G.issecretvalue;
 
+-- Smart resurrection is implemented entirely with prebuilt secure macro
+-- conditionals. These lists are deliberately spell-ID based for detection,
+-- while the macro builder below resolves the player's localized spell names.
+DC.NormalRezSpellIDs = DC.NormalRezSpellIDs or { 50769, 7328, 2006, 2008, 115178, 361227 }
+-- Soulstone (20707) is intentionally not a Decursive smart-rez action. It
+-- does not own the shared battle-rez cooldown in the same way as these native
+-- casts, so Warlocks use Emergency Soul Link through the same fallback path as
+-- classes without a native shared-charge battle resurrection.
+DC.BattleRezSpellIDs = { 20484, 61999, 391054 }
+
 local function playerKnowsSpell(spellID)
-    if not IsPlayerSpell then return false; end
-    local ok, known = pcall(IsPlayerSpell, spellID);
+    local ok, known
+    if _G.C_SpellBook and type(_G.C_SpellBook.IsSpellInSpellBook) == "function"
+        and _G.Enum and _G.Enum.SpellBookSpellBank
+    then
+        ok, known = pcall(
+            _G.C_SpellBook.IsSpellInSpellBook,
+            spellID,
+            _G.Enum.SpellBookSpellBank.Player,
+            true
+        )
+    elseif IsPlayerSpell then
+        ok, known = pcall(IsPlayerSpell, spellID)
+    else
+        return false
+    end
     return ok and canaccessvalue(known)
-        and (not issecretvalue or not issecretvalue(known)) and known == true;
+        and (not issecretvalue or not issecretvalue(known)) and known == true
 end
 
 function D:AddDebugText(a1, ...)
@@ -1109,6 +1132,14 @@ function D:VersionWarnings(forceDisplay) -- {{{
         D:Debug("|cFFFF0000TIME TRAVELER DETECTED!|r");
     end
 
+    -- Saved variables can predate the stricter communication validator. Clear
+    -- any legacy value before it reaches formatted notice or diagnostics text.
+    if type(D.db.global.NewerVersionName) ~= "string"
+        or #D.db.global.NewerVersionName > 64
+        or D.db.global.NewerVersionName:match("^[vV]?%d[%w%._+%-]*$") == nil then
+        D.db.global.NewerVersionName = false
+    end
+
     -- if not fromCheckOut then -- this version is properly packaged
     if D.db.global.NewerVersionName then -- a new version was detected some time ago
         if D.db.global.NewerVersionDetected > D.VersionTimeStamp and D.db.global.NewerVersionName ~= D.version then -- it's still newer than this one
@@ -1205,6 +1236,111 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
 end -- // }}}
 
 local FirstEnable = true;
+local SecureDisableCleanupFrame
+
+local function stopSecureDisableCleanupWatcher()
+    if not SecureDisableCleanupFrame then return end
+    SecureDisableCleanupFrame:UnregisterAllEvents()
+    SecureDisableCleanupFrame:Hide()
+end
+
+local function hideSecureMUFContainerWhenSafe()
+    if D.DcrFullyInitialized then
+        stopSecureDisableCleanupWatcher()
+        return true
+    end
+    if InCombatLockdown and InCombatLockdown() then return false end
+
+    if D.MFContainer then D.MFContainer:Hide() end
+    stopSecureDisableCleanupWatcher()
+    return true
+end
+
+local function requestSecureMUFContainerCleanup()
+    if hideSecureMUFContainerWhenSafe() then return end
+
+    if not SecureDisableCleanupFrame then
+        SecureDisableCleanupFrame = _G.CreateFrame("Frame")
+        SecureDisableCleanupFrame:SetScript("OnEvent", hideSecureMUFContainerWhenSafe)
+    end
+    SecureDisableCleanupFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    SecureDisableCleanupFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    SecureDisableCleanupFrame:Show()
+end
+
+local function hideOrdinaryRuntimeFrames()
+    local frames = {
+        _G.DecursiveMainBar,
+        _G.DcrLiveList,
+        _G.DecursivePriorityListFrame,
+        _G.DecursiveSkipListFrame,
+        _G.DecursivePopulateListFrame,
+        _G.DecursiveAnchor,
+        _G.DecursiveTextFrame,
+        _G.DecursiveDebuggingFrame,
+        _G.DcrDisplay_Tooltip,
+    }
+    for i = 1, #frames do
+        if frames[i] and frames[i].Hide then frames[i]:Hide() end
+    end
+end
+
+local CORE_STATUS_TABLES = {
+    "FoundSpells",
+    "UnitFilteringTypes",
+    "CuringSpells",
+    "CuringSpellsPrio",
+    "Blacklisted_Array",
+    "LineOfSightBlocked_Array",
+    "DelayedFunctionCalls",
+    "Unit_Array_GUIDToUnit",
+    "Unit_Array_UnitToGUID",
+    "Unit_Array",
+    "InternalPrioList",
+    "InternalSkipList",
+    "t_CheckBleedDebuffsActiveIDs",
+    "prio_macro",
+    "createdMacros",
+    "ReversedCureOrder",
+}
+
+local function clearCoreRuntimeState()
+    if D.LiveList and D.LiveList.ClearDisplay then
+        D.LiveList:ClearDisplay()
+    end
+
+    if type(D.ManagedDebuffUnitCache) == "table" then
+        for _, cached in pairs(D.ManagedDebuffUnitCache) do
+            if type(cached) == "table" then _G.wipe(cached) end
+        end
+        _G.wipe(D.ManagedDebuffUnitCache)
+    end
+    if type(D.UnitDebuffed) == "table" then _G.wipe(D.UnitDebuffed) end
+    if type(D.Stealthed_Units) == "table" then _G.wipe(D.Stealthed_Units) end
+
+    D.ForLLDebuffedUnitsNum = 0
+    D.DebuffUpdateRequest = 0
+    D.Groups_datas_are_invalid = true
+    T._DispelNotificationIgnoreUntil = 0
+    T._PlayingASound = false
+
+    if type(D.Status) == "table" then
+        for i = 1, #CORE_STATUS_TABLES do
+            local state = D.Status[CORE_STATUS_TABLES[i]]
+            if type(state) == "table" then _G.wipe(state) end
+        end
+        D.Status.Enabled = false
+        D.Status.HasSpell = false
+        D.Status.SoundPlayed = false
+        D.Status.TargetExists = false
+        D.Status.MouseOveringMUF = false
+        D.Status.MouseOveringMUFObject = nil
+        D.Status.ClickedMF = nil
+        D.Status.ClickCastingWIP = false
+        D.Status.UnitNum = 0
+        D.Status.DelayedFunctionCallsCount = 0
+    end
+end
 
 --[==[
 D.debug = true
@@ -1215,6 +1351,11 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
     if T._SelfDiagnostic() == 2 then
         return false;
     end
+
+    if D.ResumeProtectedAuraSoundRuntime then
+        D:ResumeProtectedAuraSoundRuntime()
+    end
+    stopSecureDisableCleanupWatcher()
 
 
     if DC.TWELVEONE and not self.db.global.TwelveOnePatchedMessageWasShown then
@@ -1272,6 +1413,9 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
     if not DC.WOWC or DC.CATACLYSM then
         D.eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE");
     end
+    if DC.TWELVEONE then
+        D.eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    end
     D.eventFrame:RegisterEvent("PLAYER_ALIVE"); -- talents SHOULD be available
     D.eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD");
     D.eventFrame:RegisterEvent("PLAYER_LEAVING_WORLD");
@@ -1292,7 +1436,9 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
     -- Player pet detection event (used to find pet spells)
     D.eventFrame:RegisterEvent("UNIT_PET");
 
-    D.eventFrame:RegisterEvent("UNIT_AURA");
+    if not DC.TWELVEONE then
+        D.eventFrame:RegisterEvent("UNIT_AURA")
+    end
 
     D.eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED");
 
@@ -1312,6 +1458,14 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
 
     -- Configure specific profile dependent data
     D:SetConfiguration();
+
+    if D.StartupModernSecureUI then
+        D:StartupModernSecureUI()
+    end
+
+    if D.profile and D.profile.Print_CustomFrame and _G.DecursiveTextFrame then
+        _G.DecursiveTextFrame:Show()
+    end
 
     if FirstEnable and not D.db.global.NoStartMessages then
         D:ColorPrint(0.3, 0.5, 1, L["IS_HERE_MSG"]);
@@ -1340,6 +1494,7 @@ function D:SetConfiguration() -- {{{
     D:CancelDelayedCall("Dcr_LLupdate");
     D:CancelDelayedCall("Dcr_MUFupdate");
     D:CancelDelayedCall("Dcr_ScanEverybody");
+    D:CancelDelayedCall("scanEverybodyAfterSpellChanged")
 
     D.Groups_datas_are_invalid = true;
     D.Status = {};
@@ -1518,14 +1673,14 @@ function D:SetConfiguration() -- {{{
     end
 
     -- put the updater events at the end of the init so there is no chance they could be called before everything is ready (even if LUA is not multi-threaded... just to stay logical )
-    if not D.profile.HideLiveList then
+    if not DC.TWELVEONE and not D.profile.HideLiveList then
         self:ScheduleRepeatedCall("Dcr_LLupdate", D.LiveList.Update_Display, D.profile.ScanTime, D.LiveList);
     end
 
     if D.profile.ShowDebuffsFrame then
         self:ScheduleRepeatedCall("Dcr_MUFupdate", self.DebuffsFrame_Update, self.db.global.DebuffsFrameRefreshRate, self);
 
-        if self.db.global.MFScanEverybodyTimer > 0 then
+        if not DC.TWELVEONE and self.db.global.MFScanEverybodyTimer > 0 then
             self:ScheduleRepeatedCall("Dcr_ScanEverybody", self.ScanEveryBody, self.db.global.MFScanEverybodyTimer, self, self.db.global.ScanEverybodyReport);
         end
     end
@@ -1586,31 +1741,41 @@ function D:SetConfiguration() -- {{{
 
     T._CatchAllErrors = prev_CatchAllErrors; -- During init we catch all the errors else, if a library fails we won't know it.
     D:VersionWarnings();
+    return true
 end -- }}}
 
 function D:OnDisable() -- When the addon is disabled by Ace -- {{{
-    D.Status.Enabled = false;
+    if type(D.Status) == "table" then D.Status.Enabled = false end
     D.DcrFullyInitialized = false;
+
+    if D.ShutdownModernSecureUI then
+        D:ShutdownModernSecureUI()
+    end
 
     D:SetIcon(T._AddonPath .. "iconOFF.tga");
 
     -- MFContainer owns secure action buttons. Hiding it while combat-locked is
-    -- a protected-frame mutation and pcall would not make it safe. Disabling
-    -- still stops Decursive's event/timer work; leave the visual container in
-    -- its current state until the UI is reloaded or the addon is re-enabled.
-    if (D.profile and D.profile.ShowDebuffsFrame)
-        and not (InCombatLockdown and InCombatLockdown())
-    then
-        D.MFContainer:Hide();
-    end
+    -- a protected-frame mutation and pcall would not make it safe. The core
+    -- watcher and modern shutdown hook finish cleanup after combat instead.
+    requestSecureMUFContainerCleanup()
 
     D:CancelAllTimedCalls();
     D:Debug(D:GetTimersInfo());
 
+    if D.eventFrame then
+        D.eventFrame:SetScript("OnEvent", nil)
+        D.eventFrame:UnregisterAllEvents()
+    end
 
+    if D.ShutdownProtectedAuraSoundRuntime then
+        D:ShutdownProtectedAuraSoundRuntime()
+    elseif D.ClearProtectedAuraSounds then
+        D:ClearProtectedAuraSounds("addon disabled")
+    end
 
+    hideOrdinaryRuntimeFrames()
+    clearCoreRuntimeState()
     D:NotifyConfigurationChanged();
-    D.eventFrame:SetScript("OnEvent", nil);
 
     if not DC.TWELVEONE then
         -- the disable warning popup : {{{ -
@@ -1829,7 +1994,9 @@ function D:ReConfigure() --{{{
             Reconfigure = true;
             break;
         end
-    break until true if Reconfigure then break end end -- a continue statement would have been nice in Lua...
+    until true
+        if Reconfigure then break end
+    end -- a continue statement would have been nice in Lua...
 
     if Reconfigure == true then
         D:Debug("D:ReConfigure RECONFIGURATION!");
@@ -1983,7 +2150,8 @@ function D:Configure() --{{{
 
             end
         end
-    break until true end
+    until true
+    end
 
     -- Verify the cure order list (if it was damaged)
     self:CheckCureOrder ();
@@ -2383,93 +2551,213 @@ do
         return true;
     end -- }}}
 
-    -- Battle-rez/Soul Link script fragment, on a dead target only. Kept as
-    -- its own dedicated builder (a genuinely separate "script") even though
-    -- it's combined with the dispel script into one macro on the same
-    -- click below -- WoW does not allow an addon to swap a secure button's
-    -- macro text based on live mouseover state (especially not in combat),
-    -- so "one click, two behaviors chosen by target state" can only be done
-    -- via in-macro [dead]/[nodead] conditionals, not via two physically
-    -- separate macros dynamically selected. skipStopCasting lets the
-    -- combined builder below supply its own single /stopcasting at the top
-    -- instead of getting two redundant copies.
-    --
-    -- Tried in order: your own known battle-rez spell (Rebirth/Raise
-    -- Ally/Intercession -- normal range, no item needed; Soulstone
-    -- excluded, it's a pre-placement mechanic on a living target, not
-    -- something you click a corpse for), then Emergency Soul Link (5-yard
-    -- item) as the fallback. Both draw from the same shared Combat
-    -- Resurrection charge pool, so this is "try the free option, then the
-    -- item" -- either line is a harmless no-op via WoW's own handling when
-    -- unavailable/on cooldown/unknown, same as any other spell click.
-    function D:GetBattleRezMacroText(unit, skipStopCasting)
-        if not (DC.TWELVEONE and (not D.profile or D.profile.SoulLink121Enabled ~= false)) then
-            return ""
-        end
-        local lines = skipStopCasting and "" or "/stopcasting\n"
-        for _, brezSpellID in ipairs(DC.BattleRezSpellIDs or {}) do
-            if playerKnowsSpell(brezSpellID) then
-                lines = lines .. ("/cast [@%s,dead] spell:%d\n"):format(unit, brezSpellID)
-                break
+    function D:GetKnownRezSpellName(spellIDs)
+        if not DC.TWELVEONE or type(spellIDs) ~= "table" then return nil end
+        for _, spellID in ipairs(spellIDs) do
+            if playerKnowsSpell(spellID) then
+                local ok, spellName = pcall(GetSpellName, spellID)
+                if ok and canaccessvalue(spellName)
+                    and (not issecretvalue or not issecretvalue(spellName))
+                    and type(spellName) == "string" and spellName ~= ""
+                then
+                    return spellName, spellID
+                end
             end
         end
-        lines = lines .. ("/use [@%s,dead] item:269586\n"):format(unit)
-        return lines
+        return nil
     end
 
-    function D:SetMacrosPerPrioTable(unit)
-        local prio_macro = D.Status.prio_macro;
-        local tmp;
+    function D:GetSmartRezActions()
+        if not DC.TWELVEONE then return nil, nil, false, false end
 
-        for Spell, Prio in pairs(D.Status.CuringSpellsPrio) do
+        if InCombatLockdown and InCombatLockdown() then
+            local cached = self.Status and self.Status.SmartRezActions
+            if type(cached) == "table" then
+                return cached.battleRezName, cached.outOfCombatRezName,
+                    cached.combatSoulLink, cached.outOfCombatSoulLink
+            end
+            return nil, nil, false, false
+        end
 
-            if not D.Status.FoundSpells[Spell][5] then -- if using the default macro mechanism
+        local normalRezName = self:GetKnownRezSpellName(DC.NormalRezSpellIDs)
+        local battleRezName = self:GetKnownRezSpellName(DC.BattleRezSpellIDs)
+        local outOfCombatRezName = normalRezName or battleRezName
+        local soulLinkEnabled = not self.profile or self.profile.SoulLink121Enabled ~= false
+        local combatSoulLink = soulLinkEnabled and not battleRezName
+        local outOfCombatSoulLink = soulLinkEnabled and not outOfCombatRezName
 
-                    -- Two scripts combined into one macro on this same
-                    -- click: the battle-rez fragment (dead target only) and
-                    -- the dispel line (nodead-guarded, so it can never fire
-                    -- on a corpse). /stopcasting sits once at the very top
-                    -- -- it must only ever cancel something left over from
-                    -- BEFORE this click; putting it after the battle-rez
-                    -- line would immediately cancel Rebirth's real
-                    -- (non-instant) cast the instant it started, on the
-                    -- same click.
-                    local battleRezLines = D:GetBattleRezMacroText(unit, true)
+        if type(self.Status) == "table" then
+            self.Status.SmartRezActions = {
+                battleRezName = battleRezName,
+                outOfCombatRezName = outOfCombatRezName,
+                combatSoulLink = combatSoulLink,
+                outOfCombatSoulLink = outOfCombatSoulLink
+            }
+        end
 
-                    --the [target=%s, help][target=%s, harm] prevents the 'please select a unit' cursor problem (Blizzard should fix this...)
-                    local defaultMacroText = ("%s%s/%s [@%s, help, nodead][@%s, harm, nodead] %s"):format(
-                      -- battle-rez always needs /stopcasting regardless of
-                      -- the cure spell's own pet-test, since it's included
-                      -- here with its own copy skipped
-                      (not D.Status.FoundSpells[Spell][1] or battleRezLines ~= "") and "/stopcasting\n" or "", -- pet test
-                      battleRezLines,
-                      D.Status.FoundSpells[Spell][2] > 0 and "cast" or "use", -- item test
-                      unit, unit,
-                      Spell
-                    )
-                    if defaultMacroText:len() < 256 then -- same guard as the custom-macro branch below
-                        prio_macro[Prio] = {
-                            macroText = defaultMacroText,
-                            unitFiltering = D.Status.FoundSpells[Spell][6]
-                        }
-                    else
-                        D:errln("Macro too long for prio", Prio);
-                    end
-            else
-                tmp = D.Status.FoundSpells[Spell][5];
-                tmp = tmp:gsub("UNITID", unit);
-                if tmp:len() < 256 then -- last chance protection, shouldn't happen
-                    prio_macro[Prio] = {
-                        macroText = tmp,
-                        unitFiltering = D.Status.FoundSpells[Spell][6]
-                    }
+        return battleRezName, outOfCombatRezName,
+            combatSoulLink, outOfCombatSoulLink
+    end
+
+    -- Build cure-only, rez-only, and combined variants once while secure
+    -- attributes are writable. The game evaluates dead/nodead and combat state
+    -- at click time, so Lua never reads a unit's death state to choose an action.
+    function D:BuildSmartRezMacroText(unit, cureCommand, cureName, cureUsesPet)
+        unit = type(unit) == "string" and unit or "mouseover"
+
+        local battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink = self:GetSmartRezActions()
+        local hasRezAction = battleRezName ~= nil or outOfCombatRezName ~= nil
+            or combatSoulLink or outOfCombatSoulLink
+        local combatClause = ("[@%s,help,exists,dead,combat]"):format(unit)
+        local outOfCombatClause = ("[@%s,help,exists,dead,nocombat]"):format(unit)
+        local friendlyCureClause = ("[@%s,help,exists,nodead]"):format(unit)
+        local hostileCureClause = ("[@%s,harm,exists,nodead]"):format(unit)
+
+        local function build(includeRez, includeCure)
+            local lines = {}
+            local castActions = {}
+            local useActions = {}
+
+            if includeRez then
+                if battleRezName and outOfCombatRezName == battleRezName then
+                    castActions[#castActions + 1] = combatClause .. outOfCombatClause .. " " .. battleRezName
                 else
-                    D:errln("Macro too long for prio", Prio);
+                    if battleRezName then
+                        castActions[#castActions + 1] = combatClause .. " " .. battleRezName
+                    end
+                    if outOfCombatRezName then
+                        castActions[#castActions + 1] = outOfCombatClause .. " " .. outOfCombatRezName
+                    end
+                end
+
+                if combatSoulLink and outOfCombatSoulLink then
+                    useActions[#useActions + 1] = combatClause .. outOfCombatClause .. " item:269586"
+                else
+                    if combatSoulLink then
+                        useActions[#useActions + 1] = combatClause .. " item:269586"
+                    end
+                    if outOfCombatSoulLink then
+                        useActions[#useActions + 1] = outOfCombatClause .. " item:269586"
+                    end
                 end
             end
 
+            if includeCure and type(cureName) == "string" and cureName ~= "" then
+                local cureAction = friendlyCureClause .. hostileCureClause .. " " .. cureName
+                if cureCommand == "use" then
+                    useActions[#useActions + 1] = cureAction
+                else
+                    castActions[#castActions + 1] = cureAction
+                end
+            end
+
+            if includeRez and hasRezAction then
+                if includeCure and cureUsesPet then
+                    lines[#lines + 1] = ("/stopcasting [@%s,help,exists,dead]"):format(unit)
+                else
+                    lines[#lines + 1] = "/stopcasting"
+                end
+            elseif includeCure and not cureUsesPet then
+                lines[#lines + 1] = "/stopcasting"
+            end
+            if #castActions > 0 then lines[#lines + 1] = "/cast " .. table.concat(castActions, ";") end
+            if #useActions > 0 then lines[#lines + 1] = "/use " .. table.concat(useActions, ";") end
+            return table.concat(lines, "\n")
         end
 
+        local combined = build(true, cureName ~= nil)
+        local cureOnly = build(false, cureName ~= nil)
+        local rezOnly = build(true, false)
+        return combined, cureOnly, rezOnly, hasRezAction
+    end
+
+    -- Compatibility helper retained for the separate priority-two fallback.
+    function D:GetBattleRezMacroText(unit, skipStopCasting)
+        local _, _, rezOnly = self:BuildSmartRezMacroText(unit)
+        if skipStopCasting and rezOnly:sub(1, 13) == "/stopcasting\n" then
+            rezOnly = rezOnly:sub(14)
+        end
+        return #rezOnly <= 255 and rezOnly or ""
+    end
+
+    function D:IsMUFRezEligibleUnitToken(unit)
+        if type(unit) ~= "string" then return false end
+        return not unit:lower():find("pet", 1, true)
+    end
+
+    function D:RefreshMUFActionMacros(reason)
+        if not self.DcrFullyInitialized or type(self.Status) ~= "table"
+            or type(self.Status.prio_macro) ~= "table"
+        then
+            return false
+        end
+        if InCombatLockdown() then
+            self:AddDelayedFunctionCall(
+                "Dcr_RefreshMUFActionMacros",
+                self.RefreshMUFActionMacros,
+                self,
+                reason
+            )
+            return false
+        end
+
+        self:SetMacrosPerPrioTable("mouseover")
+        local changedAt = GetTime()
+        if changedAt == self.Status.SpellsChanged then changedAt = changedAt + 0.000001 end
+        self.Status.SpellsChanged = changedAt
+
+        local existing = self.MicroUnitF and self.MicroUnitF.ExistingPerUNIT
+        if type(existing) == "table" then
+            for unit, MF in pairs(existing) do
+                if MF and MF.UpdateAttributes then
+                    MF:UpdateAttributes(MF.CurrUnit or unit, true)
+                end
+            end
+        end
+        return true
+    end
+
+    function D:SetMacrosPerPrioTable(unit)
+        local prio_macro = D.Status.prio_macro
+        for priority in pairs(prio_macro) do prio_macro[priority] = nil end
+
+        for Spell, Prio in pairs(D.Status.CuringSpellsPrio) do
+            local foundSpell = D.Status.FoundSpells[Spell]
+            if foundSpell and not foundSpell[5] then
+                local command = foundSpell[2] > 0 and "cast" or "use"
+                local combined, cureOnly, rezOnly, hasRezAction = D:BuildSmartRezMacroText(
+                    unit,
+                    command,
+                    Spell,
+                    foundSpell[1]
+                )
+                if #cureOnly <= 255 then
+                    prio_macro[Prio] = {
+                        macroText = #combined <= 255 and combined or cureOnly,
+                        cureOnlyMacroText = cureOnly,
+                        rezOnlyMacroText = #rezOnly <= 255 and rezOnly or "",
+                        smartRezAvailable = hasRezAction and #combined <= 255,
+                        unitFiltering = foundSpell[6]
+                    }
+                    if #combined > 255 then
+                        D:AddDebugText("Smart resurrection macro exceeded 255 bytes for priority", Prio)
+                    end
+                else
+                    D:AddDebugText("Cure macro exceeded 255 bytes for priority", Prio)
+                end
+            elseif foundSpell and foundSpell[5] then
+                local customMacro = foundSpell[5]:gsub("UNITID", unit)
+                if #customMacro <= 255 then
+                    prio_macro[Prio] = {
+                        macroText = customMacro,
+                        customMacro = true,
+                        unitFiltering = foundSpell[6]
+                    }
+                else
+                    D:AddDebugText("Custom cure macro exceeded 255 bytes for priority", Prio)
+                end
+            end
+        end
     end
 
     function D:UpdateMacro () -- {{{

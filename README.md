@@ -6,7 +6,7 @@ and you cure them by clicking. No target swapping, no scanning nameplates.
 
 - **Project:** https://github.com/randylorfing/Decursive
 - **Requires:** WoW Retail 12.1 (interface `120100`)
-- **License:** GNU GPL v3
+- **License:** [GNU GPL version 3 or later](LICENSE)
 
 ---
 
@@ -269,7 +269,7 @@ https://github.com/randylorfing/Decursive/issues
 
 Decursive was created by **Patrick Bohnet (Quu)** and released into the public
 domain as *Decursive v1.9.4*. **John Wellesz** took it over after its first year and
-maintained it for nearly twenty years, 2006–2025. This fork continues that work for
+maintained and developed it from 2006 through 2026. This fork continues that work for
 WoW 12.1 and is maintained by **Randy Lorfing**.
 
-Licensed under the **GNU General Public License v3**.
+Licensed under the [GNU General Public License version 3 or later](LICENSE).

@@ -48,10 +48,14 @@ ignore:
     # Windows extraction prompts to overwrite. Shipped by mistake in v12.1.2.
     - README.md
     - RELEASE_PROCESS.md
+    # GitHub needs the repository-root GPL text for license discovery, but the
+    # addon already ships LICENSE.txt in each packaged addon folder through
+    # license-output below.
+    - LICENSE
     - .gitattributes
     - .editorconfig
     - .docmeta
-    - docs
+    - Decursive/docs
     # Superseded release notes and development docs are source-only. They stay
     # in the repository as project history but have no business in a user's
     # AddOns folder, and shipping them only inflates the download.

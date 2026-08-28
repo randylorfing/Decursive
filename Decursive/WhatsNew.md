@@ -1,3 +1,13 @@
+# Zhaohu's Decursive release notes
+
+The current fork release is documented in
+[Zhaohu's Decursive v12.1.3](RELEASE_NOTES_v12.1.3.md). Installation, commands,
+troubleshooting, and support are covered by the [shipped user guide](README.md).
+
+The entries below are the archived changelog of the original Decursive project.
+They are retained for provenance and are not compatibility or support guidance
+for Zhaohu's Decursive.
+
 Decursive 2.8.3
 ===============
 

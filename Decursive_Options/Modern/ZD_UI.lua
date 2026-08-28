@@ -723,6 +723,16 @@ local function hideRendered(page)
     end
 end
 
+local function refreshRenderedValues(root)
+    if not root then return end
+    local refresh = root.RefreshFromOption or root._RefreshOptionValue or root._Refresh
+    if type(refresh) == "function" then pcall(refresh, root) end
+    if root.GetChildren then
+        local children = { root:GetChildren() }
+        for _, child in ipairs(children) do refreshRenderedValues(child) end
+    end
+end
+
 local function optionSet(page, option, state, info, value, ...)
     local extraArgs = { ... }
     local setSpec = inheritedSpec(option.set, state.set)
@@ -751,7 +761,11 @@ local function optionSet(page, option, state, info, value, ...)
             return false
         end
         ZD:SetStatus("Setting updated.")
-        page._needsRebuild = true
+        -- Re-evaluate dynamic hidden/disabled predicates. The page renderer
+        -- reuses a cached tree for the resulting structural state, so this does
+        -- not recreate frames for ordinary value-only changes.
+        local ownerPage = page._ownerPage or page
+        ownerPage._needsRebuild = true
         ZD:RefreshUI()
         return true
     end
@@ -997,6 +1011,7 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                         for _,v in ipairs(values()) do if v.key==cur then display=v.name break end end
                         b:SetLabel(display)
                     end
+                    row._RefreshOptionValue = refresh
                     b:SetScript("OnClick",function()
                         if isDisabled or not ZD:CanConfigure() then return end
                         local list=values(); if #list==0 then return end
@@ -1016,6 +1031,11 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                     box:SetPoint("TOPLEFT",0,-28)
                     local getSpec=inheritedSpec(option.get, state.get)
                     local ok,v=invokeOption(getSpec,handler,info); box.edit:SetText(ok and tostring(v or "") or "")
+                    row._RefreshOptionValue = function()
+                        if box.edit.HasFocus and box.edit:HasFocus() then return end
+                        local valueOK, value = invokeOption(getSpec, handler, info)
+                        box.edit:SetText(valueOK and tostring(value or "") or "")
+                    end
                     local apply=button(row,"Apply",82,28,function()
                         if isDisabled or not ZD:CanConfigure() then return end
                         optionSet(page,option,state,info,box.edit:GetText())
@@ -1120,6 +1140,7 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
                         local sw=CreateFrame("Button",nil,row,"BackdropTemplate"); sw:SetSize(38,20); sw:SetPoint("RIGHT",0,0); makeBackdrop(sw,C.off,C.border)
                         local function read() local ok2,val=invokeOption(option.get,handler,info,entryKey); return ok2 and val and true or false end
                         local function refresh() local on=read(); sw:SetBackdropColor(on and C.accent[1] or C.off[1],on and C.accent[2] or C.off[2],on and C.accent[3] or C.off[3],1) end
+                        row._RefreshOptionValue = refresh
                         sw:SetScript("OnClick",function() if isDisabled or not ZD:CanConfigure() then return end; local ok2,result=invokeOption(option.set,handler,info,entryKey,not read()); if not ok2 then ZD:SetStatus(tostring(result),true) elseif result == false then ZD:SetStatus("Filter could not be applied.",true) else ZD:SetStatus("Filter updated.") end; refresh() end)
                         refresh(); setDisabledVisual(row,isDisabled)
                         y=y-34
@@ -1154,30 +1175,127 @@ local function renderOptions(page, group, path, inherited, y, depth, skipKeys)
     return y
 end
 
+local function optionStateSignature(group, path, inherited, skipKeys)
+    local parts = {}
+    local function add(value)
+        local text = tostring(value == nil and "<nil>" or value)
+        parts[#parts + 1] = #text .. ":" .. text
+    end
+
+    local function walk(node, nodePath, parentState, nodeSkipKeys)
+        local handler = node.handler or parentState.handler
+        local info = optionInfo(nodePath, node, handler)
+        local hidden = parentState.hidden == true or optionValue(node.hidden, handler, info, false) == true
+        local disabled = parentState.disabled == true or optionValue(node.disabled, handler, info, false) == true
+        add("group")
+        add(table.concat(nodePath, "/"))
+        add(hidden)
+        add(disabled)
+        if hidden then return end
+
+        local state = {
+            handler = handler,
+            get = inheritedSpec(node.get, parentState.get),
+            set = inheritedSpec(node.set, parentState.set),
+            hidden = hidden,
+            disabled = disabled,
+        }
+        for _, item in ipairs(sortedOptionArgs(node.args, node.plugins)) do
+            local key, option = item.key, item.option
+            if not (nodeSkipKeys and nodeSkipKeys[key]) and not option.guiHidden then
+                local childPath = {}
+                for index, value in ipairs(nodePath) do childPath[index] = value end
+                childPath[#childPath + 1] = key
+                local childHandler = option.handler or state.handler
+                local childInfo = optionInfo(childPath, option, childHandler)
+                local childHidden = state.hidden or optionValue(option.hidden, childHandler, childInfo, false) == true
+                local childDisabled = state.disabled or optionValue(option.disabled, childHandler, childInfo, false) == true
+                local kind = option.type or "description"
+                add(table.concat(childPath, "/"))
+                add(kind)
+                add(childHidden)
+                add(childDisabled)
+                if not childHidden then
+                    add(optionName(option, childHandler, childInfo, tostring(key)))
+                    add(optionValue(option.desc, childHandler, childInfo, ""))
+                    if kind == "select" or kind == "multiselect" then
+                        for _, entry in ipairs(normalizeSelectValues(optionValue(option.values, childHandler, childInfo, {}))) do
+                            add(entry.key)
+                            add(entry.name)
+                        end
+                    end
+                    if kind == "group" then
+                        walk(option, childPath, state, nil)
+                    end
+                end
+            end
+        end
+    end
+
+    walk(group, path, inherited, skipKeys)
+    return table.concat(parts, "|")
+end
+
 function ZD:BuildOptionGroupPage(parent, groupKey, titleText, subtitleText, skipKeys)
     local p = makeOptionScrollPage(parent)
     self:PageTitle(p, titleText, subtitleText)
     p.groupKey = groupKey
     p.skipKeys = skipKeys
+    p._renderCache = {}
+    p._canvasSeed = p.optionCanvas
+
     function p:Rebuild()
-        hideRendered(self)
-        self._rangeControls = {}
         local ok, model = pcall(D.GetV11OptionsTable, D)
         if not ok or type(model) ~= "table" or not model.args then
-            local e=trackRendered(self,label(self.optionCanvas,"The settings model is not available yet.",12,C.danger,"TOPLEFT",8,-8)); e:SetWidth(620)
-            self.optionCanvas:SetHeight(80); return
+            self.optionCanvas:SetHeight(80)
+            return
         end
         local group=model.args[groupKey]
         if type(group)~="table" then
-            local e=trackRendered(self,label(self.optionCanvas,"This settings section is unavailable.",12,C.danger,"TOPLEFT",8,-8)); e:SetWidth(620)
-            self.optionCanvas:SetHeight(80); return
+            self.optionCanvas:SetHeight(80)
+            return
         end
         local inherited={handler=model.handler,get=model.get,set=model.set,disabled=false,hidden=false}
-        local y=renderOptions(self,group,{groupKey},inherited,-8,0,skipKeys)
-        self.optionCanvas:SetHeight(math.max(520, -y + 24))
+        local signature = optionStateSignature(group, {groupKey}, inherited, skipKeys)
+        local cached = self._renderCache[signature]
+        if not cached then
+            local canvas
+            if not self._canvasSeedClaimed then
+                canvas = self._canvasSeed
+                self._canvasSeedClaimed = true
+            else
+                canvas = CreateFrame("Frame", nil, self.optionScroll)
+                canvas:SetWidth(650)
+                canvas:SetHeight(1)
+            end
+            local renderPage = {
+                optionCanvas = canvas,
+                _rendered = {},
+                _rangeControls = {},
+                _ownerPage = self,
+            }
+            local y=renderOptions(renderPage,group,{groupKey},inherited,-8,0,skipKeys)
+            canvas:SetHeight(math.max(520, -y + 24))
+            cached = { canvas = canvas, renderPage = renderPage }
+            self._renderCache[signature] = cached
+        end
+        for _, entry in pairs(self._renderCache) do
+            entry.canvas:SetShown(entry == cached)
+        end
+        self.optionCanvas = cached.canvas
+        self._activeRenderPage = cached.renderPage
+        self.optionScroll:SetScrollChild(cached.canvas)
+        cached.canvas:Show()
+        refreshRenderedValues(cached.canvas)
         self._needsRebuild=false
     end
-    function p:Refresh() if self._needsRebuild then self:Rebuild() end end
+    function p:Refresh()
+        if self._needsRebuild or not self._activeRenderPage then
+            self:Rebuild()
+        else
+            refreshRenderedValues(self._activeRenderPage.optionCanvas)
+        end
+    end
     p:Rebuild()
     return p
 end
@@ -1196,6 +1314,8 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
     self:PageTitle(p, titleText, subtitleText)
     p.tabs = tabs or {}
     p.activeTab = initialTab or (tabs and tabs[1] and tabs[1].key)
+    p._tabRenderCache = {}
+    p._tabCanvasSeed = p.optionCanvas
 
     local tabBar = CreateFrame("Frame", nil, p)
     tabBar:SetPoint("TOPLEFT", 0, -82)
@@ -1209,7 +1329,6 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
         local w = tab.width or math.max(110, math.min(180, (#tab.name * 7) + 28))
         local b = button(tabBar, tab.name, w, 30, function()
             p.activeTab = tabKey
-            p._needsRebuild = true
             p:Rebuild()
         end)
         b:SetPoint("TOPLEFT", x, -2)
@@ -1228,13 +1347,74 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
 
     function p:SetTab(key)
         for _, tab in ipairs(self.tabs) do
-            if tab.key == key then self.activeTab = key; self._needsRebuild = true; self:Rebuild(); return true end
+            if tab.key == key then
+                self.activeTab = key
+                self:Rebuild()
+                return true
+            end
         end
     end
 
+    local function buildTabCache(tab)
+        local ok, model = pcall(D.GetV11OptionsTable, D)
+        local validModel = ok and type(model) == "table" and model or nil
+        local group = validModel and resolveOptionPath(validModel, tab.path) or nil
+        local inherited = {
+            handler = validModel and validModel.handler,
+            get = validModel and validModel.get,
+            set = validModel and validModel.set,
+            disabled = false,
+            hidden = false,
+        }
+        if type(group) == "table" then
+            local node = validModel
+            for _, key in ipairs(tab.path or {}) do
+                node = node.args[key]
+                inherited.handler = node.handler or inherited.handler
+                inherited.get = inheritedSpec(node.get, inherited.get)
+                inherited.set = inheritedSpec(node.set, inherited.set)
+                inherited.disabled = inherited.disabled
+                    or optionValue(node.disabled, inherited.handler, optionInfo(tab.path, node, inherited.handler), false) == true
+            end
+        end
+        local signature = tab.key .. "|" .. (type(group) == "table"
+            and optionStateSignature(group, tab.path, inherited, tab.skipKeys)
+            or "unavailable")
+        local cached = p._tabRenderCache[signature]
+        if cached then return cached end
+
+        local canvas
+        if not p._tabCanvasSeedClaimed then
+            canvas = p._tabCanvasSeed
+            p._tabCanvasSeedClaimed = true
+        else
+            canvas = CreateFrame("Frame", nil, p.optionScroll)
+            canvas:SetWidth(650)
+            canvas:SetHeight(1)
+        end
+        local renderPage = {
+            optionCanvas = canvas,
+            _rendered = {},
+            _rangeControls = {},
+            _ownerPage = p,
+        }
+        cached = { canvas = canvas, renderPage = renderPage }
+        p._tabRenderCache[signature] = cached
+
+        if type(group) ~= "table" then
+            local unavailable = trackRendered(renderPage,
+                label(canvas, "This subsection is unavailable.", 12, C.danger, "TOPLEFT", 8, -8))
+            unavailable:SetWidth(620)
+            canvas:SetHeight(80)
+            return cached
+        end
+        local startY = tonumber(p._renderStartY) or -8
+        local y = renderOptions(renderPage, group, tab.path, inherited, startY, 0, tab.skipKeys)
+        canvas:SetHeight(math.max(520, -y + 24))
+        return cached
+    end
+
     function p:Rebuild()
-        hideRendered(self)
-        self._rangeControls = {}
         local tab = activeSpec()
         if not tab then self.optionCanvas:SetHeight(80); return end
         for key,b in pairs(self.tabButtons) do
@@ -1246,30 +1426,27 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
                 b:SetBackdropBorderColor(unpack(C.border))
             end
         end
-        local ok, model = pcall(D.GetV11OptionsTable, D)
-        if not ok or type(model) ~= "table" then self.optionCanvas:SetHeight(80); return end
-        local group = resolveOptionPath(model, tab.path)
-        if type(group) ~= "table" then
-            local e=trackRendered(self,label(self.optionCanvas,"This subsection is unavailable.",12,C.danger,"TOPLEFT",8,-8)); e:SetWidth(620)
-            self.optionCanvas:SetHeight(80); return
+        for _, cache in pairs(self._tabRenderCache) do
+            if cache.canvas then cache.canvas:Hide() end
         end
-        local inherited={handler=model.handler,get=model.get,set=model.set,disabled=false,hidden=false}
-        -- inherit handlers/get/set through ancestors
-        local node=model
-        for _, key in ipairs(tab.path or {}) do
-            node=node.args[key]
-            inherited.handler=node.handler or inherited.handler
-            inherited.get=inheritedSpec(node.get,inherited.get)
-            inherited.set=inheritedSpec(node.set,inherited.set)
-            inherited.disabled=inherited.disabled or optionValue(node.disabled,inherited.handler,optionInfo(tab.path,node,inherited.handler),false)==true
-        end
-        local startY = tonumber(self._renderStartY) or -8
-        local y=renderOptions(self,group,tab.path,inherited,startY,0,tab.skipKeys)
-        self.optionCanvas:SetHeight(math.max(520,-y+24))
-        self._needsRebuild=false
+        local cached = buildTabCache(tab)
+        self.optionCanvas = cached.canvas
+        self._activeRenderPage = cached.renderPage
+        self.optionScroll:SetScrollChild(cached.canvas)
+        cached.canvas:Show()
+        refreshRenderedValues(cached.canvas)
+        cached.renderPage._needsRebuild = false
+        self._needsRebuild = false
     end
-    function p:Refresh() if self._needsRebuild then self:Rebuild() end end
-    p:Rebuild()
+    function p:Refresh()
+        if self._needsRebuild or not self._activeRenderPage then
+            self:Rebuild()
+        elseif self._activeRenderPage then
+            refreshRenderedValues(self._activeRenderPage.optionCanvas)
+            self._activeRenderPage._needsRebuild = false
+        end
+    end
+    p._needsRebuild = true
     return p
 end
 
@@ -2442,39 +2619,68 @@ function ZD:BuildLists(parent)
     p.priorityCard = buildListCard("Priority List", "priority", 0)
     p.skipCard = buildListCard("Skip List", "skip", 330)
 
+    local function acquireListRow(card, index)
+        local row = card.rows[index]
+        if row then return row end
+
+        row = CreateFrame("Frame", nil, card.listChild, "BackdropTemplate")
+        row:SetSize(266, 36)
+        makeBackdrop(row, C.panel, C.border)
+        row.name = label(row, "", 10, C.text, "LEFT", 8, 0)
+        row.name:SetWidth(100)
+        row.name:SetJustifyH("LEFT")
+
+        local up = button(row, "Up", 28, 24, function() move(card.kind, row.index, "up") end)
+        up:SetPoint("LEFT", 112, 0)
+        local down = button(row, "Dn", 28, 24, function() move(card.kind, row.index, "down") end)
+        down:SetPoint("LEFT", 142, 0)
+        local top = button(row, "Top", 32, 24, function() move(card.kind, row.index, "top") end)
+        top:SetPoint("LEFT", 172, 0)
+        local bottom = button(row, "End", 32, 24, function() move(card.kind, row.index, "bottom") end)
+        bottom:SetPoint("LEFT", 206, 0)
+        local remove = button(row, "X", 22, 24, function()
+            if not ZD:CanConfigure() then return end
+            if card.kind == "priority" then
+                D:RemoveIDFromPriorityList(row.index)
+            else
+                D:RemoveIDFromSkipList(row.index)
+            end
+            ZD:SetStatus("List entry removed.")
+            p:Refresh()
+        end, "danger")
+        remove:SetPoint("LEFT", 240, 0)
+
+        card.rows[index] = row
+        return row
+    end
+
     local function rebuildCard(card)
-        for _, row in ipairs(card.rows) do row:Hide() end
-        card.rows = {}
         local list = card.kind == "priority" and D.profile.PriorityList or D.profile.SkipList
         list = list or {}
         local y = -2
         for i, value in ipairs(list) do
-            local rowIndex = i
-            local row = CreateFrame("Frame", nil, card.listChild, "BackdropTemplate")
-            row:SetPoint("TOPLEFT", 0, y); row:SetSize(266, 36)
-            makeBackdrop(row, C.panel, C.border)
-            local nm = label(row, format("%d. %s", i, listName(card.kind, value)), 10, C.text, "LEFT", 8, 0)
-            nm:SetWidth(100); nm:SetJustifyH("LEFT")
-            -- Plain ASCII labels (UTF-8 arrows were corrupted to mojibake in this file).
-            local up = button(row, "Up", 28, 24, function() move(card.kind, rowIndex, "up") end); up:SetPoint("LEFT", 112, 0)
-            local down = button(row, "Dn", 28, 24, function() move(card.kind, rowIndex, "down") end); down:SetPoint("LEFT", 142, 0)
-            local top = button(row, "Top", 32, 24, function() move(card.kind, rowIndex, "top") end); top:SetPoint("LEFT", 172, 0)
-            local bottom = button(row, "End", 32, 24, function() move(card.kind, rowIndex, "bottom") end); bottom:SetPoint("LEFT", 206, 0)
-            local remove = button(row, "X", 22, 24, function()
-                if not ZD:CanConfigure() then return end
-                if card.kind == "priority" then D:RemoveIDFromPriorityList(rowIndex) else D:RemoveIDFromSkipList(rowIndex) end
-                ZD:SetStatus("List entry removed.")
-                p:Refresh()
-            end, "danger"); remove:SetPoint("LEFT", 240, 0)
-            card.rows[#card.rows + 1] = row
+            local row = acquireListRow(card, i)
+            row.index = i
+            row.name:SetText(format("%d. %s", i, listName(card.kind, value)))
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", 0, y)
+            row:Show()
             y = y - 40
         end
+        for i = #list + 1, #card.rows do
+            card.rows[i]:Hide()
+        end
         if #list == 0 then
-            local empty = CreateFrame("Frame", nil, card.listChild)
-            empty:SetPoint("TOPLEFT", 0, -8); empty:SetSize(266, 40)
-            label(empty, "No units in this list.", 11, C.muted, "CENTER", 0, 0)
-            card.rows[#card.rows + 1] = empty
+            if not card.emptyRow then
+                card.emptyRow = CreateFrame("Frame", nil, card.listChild)
+                card.emptyRow:SetPoint("TOPLEFT", 0, -8)
+                card.emptyRow:SetSize(266, 40)
+                label(card.emptyRow, "No units in this list.", 11, C.muted, "CENTER", 0, 0)
+            end
+            card.emptyRow:Show()
             y = -54
+        elseif card.emptyRow then
+            card.emptyRow:Hide()
         end
         card.listChild:SetHeight(math.max(360, -y + 8))
     end
@@ -2494,6 +2700,8 @@ function ZD:BuildBindings(parent)
     p.optionScroll:SetPoint("TOPLEFT", 0, -78)
     p.optionScroll:SetPoint("BOTTOMRIGHT", -22, 0)
     p.expandedSpellID = nil
+    p._renderCache = {}
+    p._activeRenderKey = nil
 
     local function clearDynamic()
         hideRendered(p)
@@ -2584,40 +2792,60 @@ function ZD:BuildBindings(parent)
     end
 
     local function showChoicePopup(anchor, items, selectedKey, onSelect)
-        if ZD._choicePopup then ZD._choicePopup:Hide() end
-        local popup = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
-        popup:SetFrameStrata("TOOLTIP")
-        popup:SetFrameLevel(500)
-        popup:SetSize(270, math.min(430, 18 + (#items * 27)))
-        popup:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -4)
-        popup:SetClampedToScreen(true)
-        makeBackdrop(popup, C.bg, C.border)
-        ZD._choicePopup = popup
+        local popup = ZD._choicePopup
+        if not popup then
+            popup = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+            popup:SetFrameStrata("TOOLTIP")
+            popup:SetFrameLevel(500)
+            popup:SetClampedToScreen(true)
+            makeBackdrop(popup, C.bg, C.border)
+            popup.rows = {}
 
-        local scroll = CreateFrame("ScrollFrame", nil, popup, "UIPanelScrollFrameTemplate")
-        scroll:SetPoint("TOPLEFT", 8, -8)
-        scroll:SetPoint("BOTTOMRIGHT", -28, 8)
-        local child = CreateFrame("Frame", nil, scroll)
-        child:SetWidth(226)
-        child:SetHeight(math.max(1, #items * 27))
-        scroll:SetScrollChild(child)
+            local scroll = CreateFrame("ScrollFrame", nil, popup, "UIPanelScrollFrameTemplate")
+            scroll:SetPoint("TOPLEFT", 8, -8)
+            scroll:SetPoint("BOTTOMRIGHT", -28, 8)
+            local child = CreateFrame("Frame", nil, scroll)
+            child:SetWidth(226)
+            child:SetHeight(1)
+            scroll:SetScrollChild(child)
+            popup.child = child
+            ZD._choicePopup = popup
+        else
+            popup:Hide()
+        end
+
+        popup.onSelect = onSelect
+        popup:SetSize(270, math.min(430, 18 + (#items * 27)))
+        popup:ClearAllPoints()
+        popup:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -4)
+        popup.child:SetHeight(math.max(1, #items * 27))
 
         local y = 0
-        for _, item in ipairs(items) do
-            local choiceKey = item.key
-            local choice = button(child, item.name, 222, 24, function()
-                popup:Hide()
-                if onSelect then onSelect(choiceKey) end
-            end, choiceKey == selectedKey and "primary" or nil)
+        for index, item in ipairs(items) do
+            local choice = popup.rows[index]
+            if not choice then
+                choice = button(popup.child, "", 222, 24, function()
+                    local choiceKey = choice.choiceKey
+                    local callback = popup.onSelect
+                    popup:Hide()
+                    if callback then callback(choiceKey) end
+                end)
+                choice.text:SetJustifyH("LEFT")
+                choice.text:ClearAllPoints()
+                choice.text:SetPoint("LEFT", 8, 0)
+                popup.rows[index] = choice
+            end
+            choice.choiceKey = item.key
+            choice:SetLabel((item.key == selectedKey and "[x]  " or "[ ]  ") .. item.name)
+            choice:ClearAllPoints()
             choice:SetPoint("TOPLEFT", 0, -y)
-            choice.text:SetJustifyH("LEFT")
-            choice.text:ClearAllPoints()
-            choice.text:SetPoint("LEFT", 8, 0)
+            choice:Show()
             y = y + 27
         end
-        popup:SetScript("OnHide", function(self)
-            if ZD._choicePopup == self then ZD._choicePopup = nil end
-        end)
+        for index = #items + 1, #popup.rows do
+            popup.rows[index]:Hide()
+        end
+        popup:Show()
     end
 
     local function compactToggle(parentFrame, x, y, width, text, getter, setter)
@@ -2690,15 +2918,69 @@ function ZD:BuildBindings(parent)
         return ordered
     end
 
-    function p:Rebuild()
+    local function appendStableValue(parts, value, depth, seen)
+        local valueType = type(value)
+        if valueType ~= "table" or depth <= 0 then
+            local text = tostring(value)
+            parts[#parts + 1] = valueType .. ":" .. #text .. ":" .. text
+            return
+        end
+        if seen[value] then
+            parts[#parts + 1] = "cycle"
+            return
+        end
+        seen[value] = true
+        local keys = {}
+        for key in pairs(value) do keys[#keys + 1] = key end
+        table.sort(keys, function(a, b)
+            local aType, bType = type(a), type(b)
+            if aType ~= bType then return aType < bType end
+            return tostring(a) < tostring(b)
+        end)
+        parts[#parts + 1] = "table:" .. #keys
+        for _, key in ipairs(keys) do
+            appendStableValue(parts, key, depth - 1, seen)
+            appendStableValue(parts, value[key], depth - 1, seen)
+        end
+        seen[value] = nil
+    end
+
+    local function bindingRenderKey()
+        local parts = { "expanded:" .. tostring(p.expandedSpellID or 0) }
+        appendStableValue(parts, D.db and D.db.global and D.db.global.MouseButtons or {}, 2, {})
+        appendStableValue(parts, D.classprofile and D.classprofile.UserSpells or {}, 4, {})
+        appendStableValue(parts, assignmentSummary(), 2, {})
+        return table.concat(parts, "|")
+    end
+
+    local function restoreCachedRender(renderKey)
+        local cached = p._renderCache[renderKey]
+        if not cached then return false end
         clearDynamic()
+        p._rendered = cached.frames
+        p._activeRenderKey = renderKey
+        for _, frame in ipairs(cached.frames) do
+            frame:Show()
+            refreshRenderedValues(frame)
+        end
+        p.optionCanvas:SetHeight(cached.height)
+        p._needsRebuild = false
+        return true
+    end
+
+    function p:Rebuild()
         local model, group = getModel()
         if not model then
+            clearDynamic()
             local err = trackRendered(p, label(p.optionCanvas, "The spell/binding configuration model is unavailable.", 12, C.danger, "TOPLEFT", 8, -8))
             err:SetWidth(620)
             p.optionCanvas:SetHeight(90)
             return
         end
+
+        local renderKey = bindingRenderKey()
+        if restoreCachedRender(renderKey) then return end
+        clearDynamic()
 
         local y = -8
 
@@ -2808,9 +3090,14 @@ function ZD:BuildBindings(parent)
         local macroToggle = compactToggle(addCard, 16, -108, 270, "Create editable internal macro", function()
             return macroOpt and runGet(model, group, macroOpt, { "CustomSpells", "IsMacro" })
         end, function(v)
-            if macroOpt then runSet(model, group, macroOpt, { "CustomSpells", "IsMacro" }, v) end
+            if not DC.TWELVEONE and macroOpt then
+                runSet(model, group, macroOpt, { "CustomSpells", "IsMacro" }, v)
+            end
         end)
-        attachTooltip(macroToggle, "Editable internal macro", "For advanced users: when adding a spell, create Decursive's internal macro text so it can be customized. The macro must continue to contain UNITID.")
+        if DC.TWELVEONE then setDisabledVisual(macroToggle, true) end
+        attachTooltip(macroToggle, "Editable internal macro", DC.TWELVEONE
+            and "Unavailable on WoW 12.1: arbitrary SecureActionButton macrotext was removed. Decursive binds the underlying cure spell/item directly to the MUF unit."
+            or "For advanced users: when adding a spell, create Decursive's internal macro text so it can be customized. The macro must continue to contain UNITID.")
         y = y - addCard:GetHeight() - 12
 
         -- Existing spells ------------------------------------------------------------
@@ -3008,31 +3295,48 @@ function ZD:BuildBindings(parent)
                 local macroOpt = spellGroup.args.MacroEdition
                 if macroOpt and hasMacro then
                     label(card, "Internal Macro", 11, C.accent, "TOPLEFT", 16, afterTypesY)
-                    local macroHint = label(card, "Must contain UNITID. Changes update the secure MUF action for this spell.", 9, C.muted, "TOPLEFT", 16, afterTypesY - 20)
+                    local macroHint = label(card, DC.TWELVEONE
+                        and "Stored for legacy clients only. WoW 12.1 uses the native cure spell/item bound to this MUF unit."
+                        or "Must contain UNITID. Changes update the secure MUF action for this spell.",
+                        9, DC.TWELVEONE and C.warning or C.muted, "TOPLEFT", 16, afterTypesY - 20)
                     macroHint:SetWidth(590)
                     local macroBox = editBox(card, 590, 92, true)
                     macroBox:SetPoint("TOPLEFT", 16, afterTypesY - 40)
                     local currentMacro = runGet(model, group, macroOpt, { "CustomSpells", "CustomSpellsHolder", tostring(spellID), "MacroEdition" }) or spellData.MacroText or ""
                     macroBox.edit:SetHeight(80)
                     macroBox.edit:SetText(currentMacro)
-                    macroBox.edit:SetScript("OnEditFocusLost", function(self)
-                        local newText = self:GetText() or ""
-                        if newText ~= currentMacro and ZD:CanConfigure(true) then
-                            if runSet(model, group, macroOpt, { "CustomSpells", "CustomSpellsHolder", tostring(spellID), "MacroEdition" }, newText) then currentMacro = newText end
-                        end
-                    end)
+                    if DC.TWELVEONE then
+                        macroBox.edit:EnableMouse(false)
+                        macroBox.edit:SetTextColor(unpack(C.muted))
+                    else
+                        macroBox.edit:SetScript("OnEditFocusLost", function(self)
+                            local newText = self:GetText() or ""
+                            if newText ~= currentMacro and ZD:CanConfigure(true) then
+                                if runSet(model, group, macroOpt, { "CustomSpells", "CustomSpellsHolder", tostring(spellID), "MacroEdition" }, newText) then currentMacro = newText end
+                            end
+                        end)
+                    end
                 end
             end
 
             y = y - cardHeight - 10
         end
 
-        p.optionCanvas:SetHeight(math.max(560, -y + 24))
+        local canvasHeight = math.max(560, -y + 24)
+        p.optionCanvas:SetHeight(canvasHeight)
+        p._activeRenderKey = renderKey
+        p._renderCache[renderKey] = {
+            frames = p._rendered,
+            height = canvasHeight,
+        }
+        p._needsRebuild = false
     end
 
     function p:Refresh()
-        -- This page rebuilds only when its data model changes. Status-bar refreshes
-        -- must not recreate controls while the player is typing or dragging sliders.
+        if self._needsRebuild then
+            self._needsRebuild = false
+            self:Rebuild()
+        end
     end
 
     p:Rebuild()
@@ -3427,13 +3731,19 @@ end
 function ZD:MarkOptionsDirty()
     self.searchIndex = nil
     for _, page in pairs(self.pages or {}) do
-        if page and page.optionCanvas then page._needsRebuild = true end
+        -- Mark every option-backed page so dynamic hidden/disabled predicates
+        -- are re-evaluated. Only the visible page refreshes immediately; hidden
+        -- pages coalesce changes until navigation reaches them.
+        if page and page.optionCanvas then
+            page._needsRebuild = true
+        end
     end
-    self:RefreshUI()
+    if self.frame and self.frame.IsShown and self.frame:IsShown() then self:RefreshUI() end
 end
 
 function ZD:RefreshUI()
     if not self.frame then return end
+    if self.frame.IsShown and not self.frame:IsShown() then return end
     if self.frame.status then
         local color = self.lastStatusError and C.danger or C.muted
         self.frame.status.text:SetTextColor(unpack(color))
@@ -3457,7 +3767,9 @@ function ZD:RefreshUI()
         local _, envName = self:GetActiveEnvironment()
         self.frame.toolbar.context:SetText((self:GetUserProfileName() or "Default") .. "   /   " .. (envName or "Open World"))
     end
-    if self.currentPageFrame and self.currentPageFrame.Refresh then
+    if self.currentPageFrame and self.currentPageFrame.IsShown
+        and self.currentPageFrame:IsShown() and self.currentPageFrame.Refresh
+    then
         self.currentPageFrame:Refresh()
     end
 end

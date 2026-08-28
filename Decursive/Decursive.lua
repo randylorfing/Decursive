@@ -124,7 +124,9 @@ function D:ShowHideLiveList(hide) --{{{
         DcrLiveList:SetPoint("TOPLEFT", "DecursiveMainBar", "BOTTOMLEFT");
         DcrLiveList:Show();
 
-        D:ScheduleRepeatedCall("Dcr_LLupdate", D.LiveList.Update_Display, D.profile.ScanTime, D.LiveList);
+        if not DC.TWELVEONE then
+            D:ScheduleRepeatedCall("Dcr_LLupdate", D.LiveList.Update_Display, D.profile.ScanTime, D.LiveList)
+        end
     end
 
 end --}}}
@@ -906,6 +908,65 @@ function D:ClearProtectedAuraSounds(reason, isRemovalRetry)
     return removeFailed == 0;
 end
 
+local NativeAuraSoundShutdownFrame
+
+local function stopProtectedAuraSoundShutdownWatcher()
+    if not NativeAuraSoundShutdownFrame then return end
+    NativeAuraSoundShutdownFrame:UnregisterAllEvents()
+    NativeAuraSoundShutdownFrame:Hide()
+end
+
+local function tryProtectedAuraSoundShutdown(reason)
+    if not D._ProtectedAuraSoundShutdownRequested then
+        stopProtectedAuraSoundShutdownWatcher()
+        return true
+    end
+    if nativeAuraSoundMutationBlocked() then return false end
+
+    local cleared = D:ClearProtectedAuraSounds(reason or "addon disabled")
+    if cleared then stopProtectedAuraSoundShutdownWatcher() end
+    return cleared
+end
+
+local function startProtectedAuraSoundShutdownWatcher()
+    if not NativeAuraSoundShutdownFrame then
+        NativeAuraSoundShutdownFrame = _G.CreateFrame("Frame")
+        NativeAuraSoundShutdownFrame:SetScript("OnEvent", function(_, event)
+            tryProtectedAuraSoundShutdown("addon disabled: " .. tostring(event))
+        end)
+    end
+
+    NativeAuraSoundShutdownFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    NativeAuraSoundShutdownFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    if DC.MN then
+        NativeAuraSoundShutdownFrame:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
+    end
+    NativeAuraSoundShutdownFrame:Show()
+end
+
+function D:ShutdownProtectedAuraSoundRuntime()
+    self._ProtectedAuraSoundShutdownRequested = true
+    T._DispelNotificationIgnoreUntil = 0
+
+    if countNativeAuraSoundRegistrations() == 0 then
+        NativeAuraSoundRefreshPendingReason = nil
+        NativeAuraSoundPendingMode = nil
+        NativeAuraSoundPendingIsRemovalRetry = false
+        resetNativeAuraSoundRemovalRetry()
+        stopProtectedAuraSoundShutdownWatcher()
+        return true
+    end
+
+    if tryProtectedAuraSoundShutdown("addon disabled") then return true end
+    startProtectedAuraSoundShutdownWatcher()
+    return false
+end
+
+function D:ResumeProtectedAuraSoundRuntime()
+    self._ProtectedAuraSoundShutdownRequested = false
+    stopProtectedAuraSoundShutdownWatcher()
+end
+
 function D:IsProtectedAuraSoundRegistered(spellID, unitToken)
     local pairKey = protectedAuraSoundPairKey(unitToken, spellID);
     return pairKey and (NativeAuraSoundPairCounts[pairKey] or 0) > 0 or false;
@@ -1054,6 +1115,10 @@ end
 
 function D:RefreshProtectedAuraSounds(reason, isRemovalRetry)
     reason = isAccessiblePublicValue(reason) and reason ~= nil and tostring(reason) or "unknown";
+    if self._ProtectedAuraSoundShutdownRequested then
+        self:ClearProtectedAuraSounds("refresh suppressed while addon is disabled", isRemovalRetry)
+        return countNativeAuraSoundRegistrations()
+    end
     if nativeAuraSoundMutationBlocked() then
         if not isRemovalRetry then resetNativeAuraSoundRemovalRetry(); end
         if not isRemovalRetry or not NativeAuraSoundRefreshPendingReason then
@@ -1336,48 +1401,52 @@ end
 function D:PrintAuraSoundDiagnostics(querySpellID, queryUnitToken)
     local ids, key = getProtectedAuraSoundIDs();
     local diag = T._AuraSoundDiag or {};
+    local lines = {}
+    local function addLine(line)
+        lines[#lines + 1] = tostring(line or "")
+    end
     updateNativeAuraSoundDiagnosticHealth();
-    self:Println("--- Zhaohu Sound Diagnostics [Zhaohu-Decursive] ---");
-    self:Println("Build marker: Zhaohu-Decursive");
+    addLine("--- Zhaohu Sound Diagnostics [Zhaohu-Decursive] ---")
+    addLine("Build marker: Zhaohu-Decursive")
     local builtIns = getBuiltInProtectedAuraSoundIDs();
-    self:Println(("Spec context: %s | learned IDs: %d | eligible built-in IDs: %d"):format(tostring(key or "unknown"), type(ids) == "table" and #ids or 0, #builtIns));
+    addLine(("Spec context: %s | learned IDs: %d | eligible built-in IDs: %d"):format(tostring(key or "unknown"), type(ids) == "table" and #ids or 0, #builtIns))
     if self.GetDispelDBStats then
         local ds = self:GetDispelDBStats();
-        self:Println(("Local DispelDB: %d entries | %d friendly | %d enemy/purge"):format(ds.total or 0, ds.friendly or 0, ds.hostile or 0));
+        addLine(("Local DispelDB: %d entries | %d friendly | %d enemy/purge"):format(ds.total or 0, ds.friendly or 0, ds.hostile or 0))
     end
     if #builtIns > 0 then
         local bp = {}; for i = 1, #builtIns do bp[#bp + 1] = tostring(builtIns[i]); end
-        self:Println("Built-in IDs: " .. table.concat(bp, ", "));
+        addLine("Built-in IDs: " .. table.concat(bp, ", "))
     end
     if type(ids) == "table" and #ids > 0 then
         local parts = {};
         for i = 1, #ids do parts[#parts + 1] = tostring(ids[i]); end
-        self:Println("Spell IDs: " .. table.concat(parts, ", "));
+        addLine("Spell IDs: " .. table.concat(parts, ", "))
     end
     if self.Is121MUFVisibilitySoundDriverEnabled and self:Is121MUFVisibilitySoundDriverEnabled() then
-        self:Println("MUF visibility sound driver: active | global debounce: active | duplicate native registrations: disabled");
+        addLine("MUF visibility sound driver: active | global debounce: active | duplicate native registrations: disabled")
     else
-        self:Println(("Desired coverage: %d/%d exact | active total=%d | stale=%d | trigger=Added only"):format(
+        addLine(("Desired coverage: %d/%d exact | active total=%d | stale=%d | trigger=Added only"):format(
             tonumber(diag.exactMatches) or 0,
             tonumber(diag.desired or diag.attempted) or 0,
             tonumber(diag.registered) or 0,
-            tonumber(diag.stale) or 0));
+            tonumber(diag.stale) or 0))
     end
-    self:Println(("Context: group=%s | instance=%s (%s, %s) | raid scoped=%s"):format(
+    addLine(("Context: group=%s | instance=%s (%s, %s) | raid scoped=%s"):format(
         tostring(diag.groupMode or "unknown"),
         tostring(diag.instanceName or "unknown"),
         tostring(diag.instanceType or "unknown"),
         tostring(diag.instanceID or "unknown"),
-        diag.raidScoped and "yes" or "no"));
+        diag.raidScoped and "yes" or "no"))
     if diag.raidScoped then
-        self:Println(("Raid scope: matched content IDs=%d | learned bindings=%d | remote built-in bindings=%d"):format(
+        addLine(("Raid scope: matched content IDs=%d | learned bindings=%d | remote built-in bindings=%d"):format(
             tonumber(diag.matchedContentEntryCount) or 0,
             tonumber(diag.learnedDesiredCount) or 0,
-            tonumber(diag.builtInRemoteDesiredCount) or 0));
+            tonumber(diag.builtInRemoteDesiredCount) or 0))
     end
-    if diag.unitTokens and diag.unitTokens ~= "" then self:Println("Desired unit tokens: " .. tostring(diag.unitTokens)); end
+    if diag.unitTokens and diag.unitTokens ~= "" then addLine("Desired unit tokens: " .. tostring(diag.unitTokens)) end
     if diag.activeUnitTokens and diag.activeUnitTokens ~= "" and diag.activeUnitTokens ~= diag.unitTokens then
-        self:Println("Active unit tokens: " .. tostring(diag.activeUnitTokens));
+        addLine("Active unit tokens: " .. tostring(diag.activeUnitTokens))
     end
     if type(diag.activePerUnit) == "table" then
         local perUnit = {};
@@ -1389,46 +1458,46 @@ function D:PrintAuraSoundDiagnostics(querySpellID, queryUnitToken)
             local stale = type(diag.stalePerUnit) == "table" and tonumber(diag.stalePerUnit[unit]) or math.max(0, active - exact);
             perUnit[#perUnit + 1] = ("%s=%d/%d exact; %d active; %d stale"):format(unit, exact or 0, desired or 0, active, stale or 0);
         end
-        if #perUnit > 0 then self:Println("Per-unit coverage: " .. table.concat(perUnit, " | ")); end
+        if #perUnit > 0 then addLine("Per-unit coverage: " .. table.concat(perUnit, " | ")) end
     end
-    self:Println(("Last reconcile: retained=%d | add=%d/%d | remove=%d | add failures=%d | remove failures=%d"):format(
+    addLine(("Last reconcile: retained=%d | add=%d/%d | remove=%d | add failures=%d | remove failures=%d"):format(
         tonumber(diag.retained) or 0,
         tonumber(diag.added) or 0,
         tonumber(diag.addAttempted) or 0,
         tonumber(diag.removed) or 0,
         tonumber(diag.addFailed) or 0,
-        tonumber(diag.removeFailed) or 0));
-    self:Println("Replacement fallbacks retained: " .. tostring(tonumber(diag.replacementFallbacks) or 0));
+        tonumber(diag.removeFailed) or 0))
+    addLine("Replacement fallbacks retained: " .. tostring(tonumber(diag.replacementFallbacks) or 0))
     if diag.deferred then
-        self:Println("Native registry refresh: deferred; active handles retained until combat and addon restrictions end");
+        addLine("Native registry refresh: deferred; active handles retained until combat and addon restrictions end")
     end
     if diag.retryPending then
-        self:Println(("Removal retry: pending %d/%d"):format(tonumber(diag.retryAttempts) or 0, MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES));
+        addLine(("Removal retry: pending %d/%d"):format(tonumber(diag.retryAttempts) or 0, MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES))
     elseif diag.retryExhausted then
-        self:Println(("Removal retry: exhausted %d/%d%s"):format(
+        addLine(("Removal retry: exhausted %d/%d%s"):format(
             tonumber(diag.retryAttempts) or 0,
             MAX_NATIVE_AURA_SOUND_REMOVE_RETRIES,
-            diag.retryUnavailable and " (timer unavailable)" or ""));
+            diag.retryUnavailable and " (timer unavailable)" or ""))
     end
-    self:Println(("Explicit public SPELL_DISPEL samples: %d"):format(tonumber(diag.playerDispelEvents) or 0));
+    addLine(("Explicit public SPELL_DISPEL samples: %d"):format(tonumber(diag.playerDispelEvents) or 0))
     if (tonumber(diag.playerDispelEvents) or 0) > 0 then
-        self:Println(("Last dispelled-aura field: type=%s | accessible=%s | secret=%s"):format(
+        addLine(("Last dispelled-aura field: type=%s | accessible=%s | secret=%s"):format(
             tostring(diag.lastDispelExtraType or "nil"),
             diag.lastDispelExtraAccessible and "yes" or "no",
-            diag.lastDispelExtraSecret and "yes" or "no"));
+            diag.lastDispelExtraSecret and "yes" or "no"))
         if diag.lastDispelExtraPublicID then
-            self:Println("Public dispelled aura ID: " .. tostring(diag.lastDispelExtraPublicID));
+            addLine("Public dispelled aura ID: " .. tostring(diag.lastDispelExtraPublicID))
         else
-            self:Println("Public dispelled aura ID: unavailable");
+            addLine("Public dispelled aura ID: unavailable")
         end
     end
-    self:Println("Last request: " .. tostring(diag.lastRequestReason or diag.lastReason or "never"));
-    self:Println("Last successful reconcile: " .. tostring(diag.lastSuccessfulReason or "never"));
-    if diag.lastLearned then self:Println("Last learned: " .. tostring(diag.lastLearnedName or "spell") .. " (" .. tostring(diag.lastLearned) .. ")"); end
+    addLine("Last request: " .. tostring(diag.lastRequestReason or diag.lastReason or "never"))
+    addLine("Last successful reconcile: " .. tostring(diag.lastSuccessfulReason or "never"))
+    if diag.lastLearned then addLine("Last learned: " .. tostring(diag.lastLearnedName or "spell") .. " (" .. tostring(diag.lastLearned) .. ")") end
     if diag.lastError then
-        self:Println(("Last native registry error%s: %s"):format(
+        addLine(("Last native registry error%s: %s"):format(
             diag.lastErrorOperation and " (" .. tostring(diag.lastErrorOperation) .. ")" or "",
-            tostring(diag.lastError)));
+            tostring(diag.lastError)))
     end
     if type(querySpellID) == "number" and querySpellID > 0 then
         local unit = type(queryUnitToken) == "string" and queryUnitToken ~= "" and queryUnitToken or "player";
@@ -1438,12 +1507,17 @@ function D:PrintAuraSoundDiagnostics(querySpellID, queryUnitToken)
         local exactKey = protectedAuraSoundRegistrationKey(unit, querySpellID, trigger,
             self:GetDispelNotificationSoundFile(), self:GetSoundNotificationChannel());
         local exact = exactKey and NativeAuraSoundRegistrations[exactKey] ~= nil;
-        self:Println(("Query: %s:%d | exact current binding=%s | active pair bindings=%d"):format(unit, querySpellID, exact and "yes" or "no", active));
-        self:Println("Note: ApplicationsIncreased is intentionally not armed; a continuing stack is not a new clean-to-afflicted transition.");
+        addLine(("Query: %s:%d | exact current binding=%s | active pair bindings=%d"):format(unit, querySpellID, exact and "yes" or "no", active))
+        addLine("Note: ApplicationsIncreased is intentionally not armed; a continuing stack is not a new clean-to-afflicted transition.")
     else
-        self:Println("Pair query: /zdsound <spellID> [unitToken]");
+        addLine("Pair query: /zdsound <spellID> [unitToken]")
     end
-    self:Println("-------------------------------");
+    addLine("-------------------------------")
+    if T._ShowCopyableDiagnostic then
+        T._ShowCopyableDiagnostic("Decursive Aura Sound Diagnostic", table.concat(lines, "\n"))
+        return true
+    end
+    return false
 end
 
 SLASH_ZHAOHUSOUND1 = "/zdsound";
@@ -1482,36 +1556,45 @@ function D:PrintMUFStartupDiagnostics()
     local containerShown = safeMUFDiagnosticShown(self.MFContainer);
     local handleShown = safeMUFDiagnosticShown(self.MFContainerHandle);
     local existing = 0;
+    local lines = {}
+    local function addLine(line)
+        lines[#lines + 1] = tostring(line or "")
+    end
     if type(muf.ExistingPerUNIT) == "table" then
         for _ in pairs(muf.ExistingPerUNIT) do existing = existing + 1; end
     end
 
-    self:Println("--- Zhaohu MUF startup diagnostics ---");
-    self:Println(("Build: %s | initialized=%s | combat=%s"):format(
+    addLine("--- Zhaohu MUF startup diagnostics ---")
+    addLine(("Build: %s | initialized=%s | combat=%s"):format(
         tostring(self.version or "unknown"),
         self.DcrFullyInitialized and "yes" or "no",
-        (InCombatLockdown and InCombatLockdown()) and "yes" or "no"));
-    self:Println(("Settings: ShowDebuffsFrame=%s | AutoHideMUFs=%s"):format(
+        (InCombatLockdown and InCombatLockdown()) and "yes" or "no"))
+    addLine(("Settings: ShowDebuffsFrame=%s | AutoHideMUFs=%s"):format(
         profile.ShowDebuffsFrame == true and "true" or "false",
-        tostring(tonumber(profile.AutoHideMUFs) or "nil")));
-    self:Println(("Frames: container=%s | handle=%s | created=%d | marked shown=%d | existing=%d"):format(
+        tostring(tonumber(profile.AutoHideMUFs) or "nil")))
+    addLine(("Frames: container=%s | handle=%s | created=%d | marked shown=%d | existing=%d"):format(
         containerShown == nil and "unknown" or (containerShown and "shown" or "hidden"),
         handleShown == nil and "unknown" or (handleShown and "shown" or "hidden"),
-        tonumber(muf.Number) or 0, tonumber(muf.UnitShown) or 0, existing));
-    self:Println(("Roster: UnitNum=%d | party=%d | raid/group=%d | invalid=%s"):format(
+        tonumber(muf.Number) or 0, tonumber(muf.UnitShown) or 0, existing))
+    addLine(("Roster: UnitNum=%d | party=%d | raid/group=%d | invalid=%s"):format(
         tonumber(status.UnitNum) or 0, party, raid,
-        self.Groups_datas_are_invalid and "yes" or "no"));
-    self:Println(("Recovery: phase=%s | reason=%s | generation=%d | pass=%d | delay=%s"):format(
+        self.Groups_datas_are_invalid and "yes" or "no"))
+    addLine(("Recovery: phase=%s | reason=%s | generation=%d | pass=%d | delay=%s"):format(
         tostring(diag.phase or "never"), tostring(diag.reason or diag.scheduledReason or "never"),
         tonumber(diag.generation) or 0, tonumber(diag.pass) or 0,
-        tostring(diag.passDelay or "n/a")));
-    self:Println(("Recovery snapshot: setting=%s | container=%s | UnitNum=%d | marked=%d | actually shown=%d"):format(
+        tostring(diag.passDelay or "n/a")))
+    addLine(("Recovery snapshot: setting=%s | container=%s | UnitNum=%d | marked=%d | actually shown=%d"):format(
         diag.showSetting and "true" or "false",
         diag.containerShown and "shown" or "hidden",
         tonumber(diag.unitNum) or 0, tonumber(diag.unitShown) or 0,
-        tonumber(diag.actualShown) or 0));
-    self:Println("If MUFs are missing, run /zdmuf before /reload and send these lines.");
-    self:Println("--------------------------------------");
+        tonumber(diag.actualShown) or 0))
+    addLine("If MUFs are missing, run /zdmuf before /reload and copy this report.")
+    addLine("--------------------------------------")
+    if T._ShowCopyableDiagnostic then
+        T._ShowCopyableDiagnostic("Decursive MUF Startup Diagnostic", table.concat(lines, "\n"))
+        return true
+    end
+    return false
 end
 
 SLASH_ZHAOHUMUF1 = "/zdmuf";
@@ -2122,6 +2205,8 @@ do
     ]==]
     function D:ScanEveryBody()
 
+        if DC.TWELVEONE then return false end
+
         if not NoScanStatuses then
             NoScanStatuses = {[DC.ABSENT] = true, [DC.FAR] = true, [DC.BLACKLISTED] = true};
         end
@@ -2274,9 +2359,8 @@ do
 
         else
             for buff in pairs(BuffNamesToCheck) do
-
-                return UnitBuff(unit, buff)
-
+                local auraInstanceID = UnitBuff(unit, buff)
+                if auraInstanceID then return auraInstanceID end
             end
         end
 

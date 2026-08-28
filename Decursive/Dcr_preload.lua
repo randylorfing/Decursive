@@ -35,8 +35,6 @@ T._AddonName = addonName;
 T._AddonPath = "Interface\\AddOns\\" .. addonName .. "\\";
 T._AddonPathSlash = "Interface/AddOns/" .. addonName .. "/";
 
-TTT = 123;
-
 T._LoadedFiles = {};
 
 T._LoadedFiles["Dcr_preload.lua"] = false;

@@ -278,7 +278,7 @@ function D:GetDefaultsSettings()
                 DUNGEON = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = true, EnvironmentChat121Enabled = true },
                 -- PvP keeps the dungeon-sized visual tuning, but disables all
                 -- addon-owned center-screen text and profile chat by default.
-                PVP = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .60, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = false, EnvironmentChat121Enabled = false },
+                PVP = { OutOfRange121Enabled = true, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .65, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = false, EnvironmentChat121Enabled = false },
                 OPEN_WORLD = { OutOfRange121Enabled = false, OutOfRange121DimAmount = .60, OutOfRange121Color = {1,1,0}, CooldownOverlay121Enabled = true, CooldownOverlay121Opacity = .62, CooldownOverlay121Numbers = true, Detection121Mode = "STRICT_MANAGED", SecondaryAffliction121Enabled = true, SecondaryAffliction121Pulse = true, SharedPriorityCooldown121Enabled = true, ClearCleansedTarget121Enabled = true, TextAlerts121Enabled = true, EnvironmentChat121Enabled = true },
             },
 
@@ -573,7 +573,14 @@ local OptionsPostSetActions = { -- {{{
     end,
     ["AfflictionTooltips"] = function(v) for id,lvitem in ipairs(D.LiveList.ExistingPerID) do lvitem.Frame:EnableMouse(v); end end,
     ["Amount_Of_Afflicted"] = function(v) D.LiveList:RestAllPosition(); end,
-    ["ScanTime"] = function(v) D:ScheduleRepeatedCall("Dcr_LLupdate", D.LiveList.Update_Display, v, D.LiveList); D:Debug("LV scan delay changed:", v); end,
+    ["ScanTime"] = function(v)
+        if DC.TWELVEONE then
+            D:CancelDelayedCall("Dcr_LLupdate")
+        elseif D.profile and not D.profile.HideLiveList then
+            D:ScheduleRepeatedCall("Dcr_LLupdate", D.LiveList.Update_Display, v, D.LiveList)
+        end
+        D:Debug("LV scan delay changed:", v)
+    end,
     ["ReverseLiveDisplay"] = function(v) D.LiveList:RestAllPosition(); end,
     ["LiveListScale"] = function(v) D:SetLLScale(v); end,
     ["AutoHideMUFs"] = function(v) D:AutoHideShowMUFs(); end,
@@ -615,7 +622,9 @@ local OptionsPostSetActions = { -- {{{
     end,
     ["DebuffsFrameRefreshRate"] = function(v) D:ScheduleRepeatedCall("Dcr_MUFupdate", D.DebuffsFrame_Update, D.db.global.DebuffsFrameRefreshRate, D); D:Debug("MUFs refresh rate changed:", D.db.global.DebuffsFrameRefreshRate, v); end,
     ["MFScanEverybodyTimer"] = function(v)
-        if v > 0 then
+        if DC.TWELVEONE then
+            D:CancelDelayedCall("Dcr_ScanEverybody")
+        elseif v > 0 then
             D:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.db.global.MFScanEverybodyTimer, D);
             D:Debug("MUFs scan every body timer changed:", D.db.global.MFScanEverybodyTimer, v);
         else
@@ -624,7 +633,9 @@ local OptionsPostSetActions = { -- {{{
         end
     end,
     ["MFScanEverybodyReport"] = function(v)
-        if D.db.global.MFScanEverybodyTimer > 0 then
+        if DC.TWELVEONE then
+            D:CancelDelayedCall("Dcr_ScanEverybody")
+        elseif D.db.global.MFScanEverybodyTimer > 0 then
             D:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.db.global.MFScanEverybodyTimer, D);
         end
         D:Debug("MUFs scan every body reporting changed:", D.db.global.MFScanEverybodyReport, v);
@@ -980,7 +991,9 @@ function D:SetCureOrder (ToChange)
     D:Debug("Spell changed");
     D.Status.SpellsChanged = GetTime();
     D.Status.delayedDebuffReportDisabled = true;
-    if self.db.global.MFScanEverybodyTimer == 0 or self.db.global.MFScanEverybodyTimer > 1 then
+    if DC.TWELVEONE then
+        D:CancelDelayedCall("scanEverybodyAfterSpellChanged")
+    elseif self.db.global.MFScanEverybodyTimer == 0 or self.db.global.MFScanEverybodyTimer > 1 then
         D:Debug("ScanEveryBody delayed call scheduled by SetCureOrder")
         D:ScheduleDelayedCall("scanEverybodyAfterSpellChanged", D.ScanEveryBody, 1, D)
     end
@@ -1039,7 +1052,7 @@ function D:SetDebuffsFrameEnabled(enabled)
     else
         D:ScheduleRepeatedCall("Dcr_MUFupdate", D.DebuffsFrame_Update, D.db.global.DebuffsFrameRefreshRate, D);
 
-        if D.db.global.MFScanEverybodyTimer > 0 then
+        if not DC.TWELVEONE and D.db.global.MFScanEverybodyTimer > 0 then
             self:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.db.global.MFScanEverybodyTimer, D);
         end
 

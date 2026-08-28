@@ -53,12 +53,18 @@ local GetSpecializationInfo = _G.GetSpecializationInfo
 local GetBuildInfo = _G.GetBuildInfo
 local GetTime = _G.GetTime
 local IsInInstance = _G.IsInInstance
+local modernSecureUIRunning = true
 
 local PATCH_VERSION = "@project-version@"
 
 local function isAccessiblePublicValue(value)
+    if issecretvalue and issecretvalue(value) then return false end
     if not canaccessvalue(value) then return false end
-    return not issecretvalue or not issecretvalue(value)
+    if type(value) == "table" then
+        if _G.issecrettable and _G.issecrettable(value) then return false end
+        if _G.canaccesstable and not _G.canaccesstable(value) then return false end
+    end
+    return true
 end
 
 -- AuraContainer topology is not the same restriction boundary as aura data.
@@ -538,6 +544,10 @@ end
 local cooldownMUFs = setmetatable({}, { __mode = "k" })
 local rangeMUFs = setmetatable({}, { __mode = "k" })
 local lineOfSightMUFs = setmetatable({}, { __mode = "k" })
+T._MUFDeath121 = {
+    frames = setmetatable({}, { __mode = "k" }),
+    UnitIsDeadOrGhost = _G.UnitIsDeadOrGhost,
+}
 local managedCooldownDurationObjects = { [1] = nil, [2] = nil, [3] = nil }
 
 local function getAlertColor()
@@ -603,6 +613,7 @@ auraSoundRegistryEventFrame:RegisterEvent("SPELLS_CHANGED")
 auraSoundRegistryEventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 auraSoundRegistryEventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 auraSoundRegistryEventFrame:SetScript("OnEvent", function(_, event)
+    if not modernSecureUIRunning then return end
     if not D.DcrFullyInitialized or type(D.RefreshProtectedAuraSounds) ~= "function" then return end
     -- VuhDo's reliable lifecycle synchronizes a unit as soon as its roster
     -- event frame is registered. Do the equivalent reconciliation immediately
@@ -617,7 +628,7 @@ auraSoundRegistryEventFrame:SetScript("OnEvent", function(_, event)
             or (event == "SPELLS_CHANGED" or event == "PLAYER_TALENT_UPDATE" or event == "TRAIT_CONFIG_UPDATED") and 0.50
             or 0.20
         C_Timer.After(delay, function()
-            if D.DcrFullyInitialized then D:RefreshProtectedAuraSounds(event) end
+            if modernSecureUIRunning and D.DcrFullyInitialized then D:RefreshProtectedAuraSounds(event) end
         end)
     else
         D:RefreshProtectedAuraSounds(event)
@@ -975,6 +986,7 @@ local function refreshOneMUFStatusLight(MF, now)
 end
 
 local function refreshMUFStatusLights()
+    if not modernSecureUIRunning then return end
     local now = GetTime and GetTime() or 0
     for MF in pairs(statusLightMUFs) do
         refreshOneMUFStatusLight(MF, now)
@@ -982,6 +994,11 @@ local function refreshMUFStatusLights()
     if D.Refresh121DispelAlertWarning then
         D:Refresh121DispelAlertWarning()
     end
+end
+
+function T._MUFDeath121.RefreshManagedStates()
+    refreshMUFStatusLights()
+    if T._MUFDeath121.RefreshAll then T._MUFDeath121.RefreshAll() end
 end
 
 function D:Mark121MUFStatusRange(unitOrMF)
@@ -1113,7 +1130,7 @@ end
 
 local mufStatusLightTicker
 if C_Timer and C_Timer.NewTicker then
-    mufStatusLightTicker = C_Timer.NewTicker(.10, refreshMUFStatusLights)
+    mufStatusLightTicker = C_Timer.NewTicker(.10, T._MUFDeath121.RefreshManagedStates)
 end
 
 -- The original Decursive MUF is a 20x20 click frame with a 16x16 visual
@@ -1155,6 +1172,259 @@ local function syncOwnedOverlayToMUFInner(MF, overlay)
     local size = getMUFInnerBaseSize(MF)
     overlay:SetSize(size, size)
     return true
+end
+
+-- ---------------------------------------------------------------------------
+-- Public death-state layer
+-- ---------------------------------------------------------------------------
+-- DCR_MUF_DEAD_STATE_OVERLAY_V1
+--
+-- A dead or ghost unit gets a solid inner MUF with a small white skull. Its
+-- base is black; when the exact smart-left Emergency Soul Link item action is
+-- ready, the middle fill is green in range or yellow out of range.
+-- This anonymous, mouse-disabled frame belongs to the ordinary MUF container,
+-- not the secure click button. It therefore cannot intercept clicks or alter
+-- target/focus/cure/battle-rez/Soul Link secure actions. Its high visual layer
+-- deliberately wins over aura, range, line-of-sight, cooldown and identity
+-- fills while leaving the external status light (including Soul Link range)
+-- visible. Hiding it restores those existing layers without mutating them.
+T._MUFDeath121.backdropColor = CreateColor and CreateColor(0, 0, 0, 1) or nil
+T._MUFDeath121.backdropClearColor = CreateColor and CreateColor(0, 0, 0, 0) or nil
+T._MUFDeath121.soulLinkInRangeColor = CreateColor and CreateColor(0, .82, .18, 1) or nil
+T._MUFDeath121.soulLinkOutOfRangeColor = CreateColor and CreateColor(1, .82, 0, 1) or nil
+T._MUFDeath121.skullColor = CreateColor and CreateColor(1, 1, 1, 1) or nil
+T._MUFDeath121.skullClearColor = CreateColor and CreateColor(1, 1, 1, 0) or nil
+T._MUFDeath121.skullTexture = 137008 -- Interface\TargetingFrame\UI-RaidTargetingIcon_8
+
+function T._MUFDeath121.Sync(MF)
+    local overlay = MF and MF.Decursive121DeadStateOverlay
+    if not overlay then return end
+    local synced = syncOwnedOverlayToMUFInner(MF, overlay)
+    if synced and overlay.SetFrameLevel and MF.Frame and MF.Frame.GetFrameLevel then
+        overlay:SetFrameLevel(MF.Frame:GetFrameLevel() + 140)
+    end
+    return synced
+end
+
+function T._MUFDeath121.GetSkullBaseSize(MF)
+    local innerSize = getMUFInnerBaseSize(MF)
+    -- The built-in skull contains transparent padding and needs a little more
+    -- room than the original six-pixel square proposal to remain recognizable.
+    return math.max(6, math.floor(innerSize * .50 + .5))
+end
+
+function T._MUFDeath121.Clear(MF)
+    if not MF then return end
+    MF.Decursive121DeadState = nil
+    MF.Decursive121DeadStateUnit = nil
+    MF.Decursive121DeadStateGUID = nil
+    if MF.Decursive121DeadStateBackdrop then
+        MF.Decursive121DeadStateBackdrop:SetVertexColor(0, 0, 0, 0)
+    end
+    if MF.Decursive121DeadStateSoulLinkFill then
+        MF.Decursive121DeadStateSoulLinkFill:SetVertexColor(0, 0, 0, 0)
+        MF.Decursive121DeadStateSoulLinkFill:SetAlpha(0)
+    end
+    if MF.Decursive121DeadStateSkull then
+        MF.Decursive121DeadStateSkull:SetVertexColor(1, 1, 1, 0)
+    end
+    if MF.Decursive121DeadStateOverlay then
+        MF.Decursive121DeadStateOverlay:Hide()
+    end
+end
+
+function T._MUFDeath121.Initialize(MF)
+    if not MF or not MF.Frame or MF.Decursive121DeadStateOverlay or not D.MFContainer then return end
+    if nativeConfigurationBlocked() then
+        if D.AddDelayedFunctionCall then
+            D:AddDelayedFunctionCall(
+                "Dcr121_DeadStateOverlay_" .. tostring(MF.FrameNum or MF.ID or 0),
+                T._MUFDeath121.Initialize,
+                MF
+            )
+        end
+        return false
+    end
+
+    local overlay = CreateFrame("Frame", nil, D.MFContainer)
+    local innerSize = getMUFInnerBaseSize(MF)
+    overlay:SetSize(innerSize, innerSize)
+    if overlay.EnableMouse then overlay:EnableMouse(false) end
+    if overlay.SetMouseClickEnabled then overlay:SetMouseClickEnabled(false) end
+    if overlay.SetMouseMotionEnabled then overlay:SetMouseMotionEnabled(false) end
+    if overlay.SetFrameStrata then overlay:SetFrameStrata("HIGH") end
+    if overlay.SetFrameLevel and MF.Frame.GetFrameLevel then
+        overlay:SetFrameLevel(MF.Frame:GetFrameLevel() + 140)
+    end
+    overlay:Hide()
+
+    local backdrop = overlay:CreateTexture(nil, "BACKGROUND")
+    backdrop:SetAllPoints(overlay)
+    backdrop:SetColorTexture(1, 1, 1, 1)
+    backdrop:SetVertexColor(0, 0, 0, 0)
+
+    -- Soul Link readiness owns only this middle layer. The death refresh gates
+    -- its alpha, while the one-second Soul Link ticker supplies the raw range
+    -- boolean for green/yellow. Keeping both operations native means neither a
+    -- secret death value nor a secret range value is inspected by Lua.
+    local soulLinkFill = overlay:CreateTexture(nil, "ARTWORK")
+    soulLinkFill:SetAllPoints(overlay)
+    soulLinkFill:SetColorTexture(1, 1, 1, 1)
+    soulLinkFill:SetVertexColor(0, 0, 0, 0)
+    soulLinkFill:SetAlpha(0)
+
+    local skull = overlay:CreateTexture(nil, "OVERLAY")
+    local skullSize = T._MUFDeath121.GetSkullBaseSize(MF)
+    skull:SetSize(skullSize, skullSize)
+    skull:SetPoint("CENTER", overlay, "CENTER", 0, 0)
+    skull:SetTexture(T._MUFDeath121.skullTexture)
+    skull:SetVertexColor(1, 1, 1, 0)
+
+    MF.Decursive121DeadStateOverlay = overlay
+    MF.Decursive121DeadStateBackdrop = backdrop
+    MF.Decursive121DeadStateSoulLinkFill = soulLinkFill
+    MF.Decursive121DeadStateSkull = skull
+    T._MUFDeath121.frames[MF] = true
+    T._MUFDeath121.Sync(MF)
+end
+
+function T._MUFDeath121.ApplyBoolean(MF, value)
+    local backdrop = MF and MF.Decursive121DeadStateBackdrop
+    local soulLinkFill = MF and MF.Decursive121DeadStateSoulLinkFill
+    local skull = MF and MF.Decursive121DeadStateSkull
+    if not backdrop or not soulLinkFill or not skull then return false end
+    if not backdrop.SetVertexColorFromBoolean or not skull.SetVertexColorFromBoolean
+        or not soulLinkFill.SetAlphaFromBoolean
+        or not T._MUFDeath121.backdropColor or not T._MUFDeath121.backdropClearColor
+        or not T._MUFDeath121.skullColor or not T._MUFDeath121.skullClearColor
+    then
+        return false
+    end
+    -- `value` may be a secret boolean. Pass it directly into Blizzard's
+    -- secret-aware widget method without comparing, converting or branching.
+    backdrop:SetVertexColorFromBoolean(
+        value,
+        T._MUFDeath121.backdropColor,
+        T._MUFDeath121.backdropClearColor
+    )
+    skull:SetVertexColorFromBoolean(
+        value,
+        T._MUFDeath121.skullColor,
+        T._MUFDeath121.skullClearColor
+    )
+    soulLinkFill:SetAlphaFromBoolean(value, 1, 0)
+    return true
+end
+
+function D:Clear121MUFDeathSoulLinkRange(MF)
+    local soulLinkFill = MF and MF.Decursive121DeadStateSoulLinkFill
+    if not soulLinkFill then return false end
+    -- Vertex alpha clears the readiness color without changing the separate
+    -- death alpha gate. The black death backdrop and white skull remain.
+    soulLinkFill:SetVertexColor(0, 0, 0, 0)
+    return true
+end
+
+function D:Set121MUFDeathSoulLinkRange(MF, inRange)
+    local soulLinkFill = MF and MF.Decursive121DeadStateSoulLinkFill
+    if not soulLinkFill or not soulLinkFill.SetVertexColorFromBoolean
+        or not T._MUFDeath121.soulLinkInRangeColor
+        or not T._MUFDeath121.soulLinkOutOfRangeColor
+    then
+        self:Clear121MUFDeathSoulLinkRange(MF)
+        return false
+    end
+
+    if issecretvalue and issecretvalue(inRange) then
+        soulLinkFill:SetVertexColorFromBoolean(
+            inRange,
+            T._MUFDeath121.soulLinkInRangeColor,
+            T._MUFDeath121.soulLinkOutOfRangeColor
+        )
+        return true
+    end
+    if not isAccessiblePublicValue(inRange)
+        or (inRange ~= true and inRange ~= false)
+    then
+        self:Clear121MUFDeathSoulLinkRange(MF)
+        return false
+    end
+
+    soulLinkFill:SetVertexColorFromBoolean(
+        inRange,
+        T._MUFDeath121.soulLinkInRangeColor,
+        T._MUFDeath121.soulLinkOutOfRangeColor
+    )
+    return true
+end
+
+function T._MUFDeath121.RefreshOne(MF)
+    if not MF then return end
+    T._MUFDeath121.Initialize(MF)
+    local overlay = MF.Decursive121DeadStateOverlay
+    if not overlay then return end
+    local backdrop = MF.Decursive121DeadStateBackdrop
+    local soulLinkFill = MF.Decursive121DeadStateSoulLinkFill
+    local skull = MF.Decursive121DeadStateSkull
+    if not backdrop or not soulLinkFill or not skull then return end
+
+    T._MUFDeath121.Sync(MF)
+    local unit = MF.CurrUnit
+    if MF.Shown ~= true or type(unit) ~= "string" then
+        T._MUFDeath121.Clear(MF)
+        return
+    end
+
+    local unitGUID = MF.UnitGUID
+    if isAccessiblePublicValue(unitGUID) and type(unitGUID) == "string" then
+        if MF.Decursive121DeadStateGUID and MF.Decursive121DeadStateGUID ~= unitGUID then
+            -- The same party/raid token can be reassigned to a different
+            -- player without changing CurrUnit. Never carry the old member's
+            -- last public death state onto the replacement.
+            T._MUFDeath121.Clear(MF)
+        end
+        MF.Decursive121DeadStateGUID = unitGUID
+    end
+
+    overlay:Show()
+    if type(T._MUFDeath121.UnitIsDeadOrGhost) ~= "function" then return end
+    local ok, value = pcall(T._MUFDeath121.UnitIsDeadOrGhost, unit)
+    if not ok then return end
+
+    if issecretvalue and issecretvalue(value) then
+        T._MUFDeath121.ApplyBoolean(MF, value)
+        return
+    end
+    if not isAccessiblePublicValue(value)
+        or (value ~= true and value ~= false and value ~= 1 and value ~= 0)
+    then
+        return
+    end
+
+    local dead = value == true or value == 1
+    MF.Decursive121DeadState = dead
+    MF.Decursive121DeadStateUnit = unit
+    if not T._MUFDeath121.ApplyBoolean(MF, dead) then
+        if dead then
+            backdrop:SetVertexColor(0, 0, 0, 1)
+            skull:SetVertexColor(1, 1, 1, 1)
+        else
+            backdrop:SetVertexColor(0, 0, 0, 0)
+            skull:SetVertexColor(1, 1, 1, 0)
+        end
+        soulLinkFill:SetAlpha(dead and 1 or 0)
+    end
+end
+
+function T._MUFDeath121.RefreshAll()
+    if not modernSecureUIRunning then return end
+    for MF in pairs(T._MUFDeath121.frames) do
+        T._MUFDeath121.RefreshOne(MF)
+    end
+end
+
+function D:Refresh121MUFDeathStates()
+    T._MUFDeath121.RefreshAll()
 end
 
 -- ---------------------------------------------------------------------------
@@ -1214,19 +1484,24 @@ function D:Apply121RangeAppearance()
 end
 
 local function refreshRangeOverlays()
+    if not modernSecureUIRunning then return end
     local enabled = shouldTrackRange121()
     for MF in pairs(rangeMUFs) do
         local overlay = MF.Decursive121RangeOverlay
         if overlay then
             syncRangeOverlayToMUF(MF)
-            local outOfRange = false
+            local outOfRange = MF.Decursive121OutOfRange == true
+            local rangeKnown = false
             -- Range overlays are parented to the shared MUF container rather
             -- than the secure MUF itself.  Explicitly hide inactive slots so a
             -- stale CurrUnit cannot leave a yellow ghost after a roster/zone
             -- rebuild.
             local shown = MF.Shown == true
             local unit = shown and MF.CurrUnit or nil
-            if shown and enabled and unit and unit ~= "player" then
+            if not shown or not enabled or not unit or unit == "player" then
+                outOfRange = false
+                rangeKnown = true
+            else
                 -- Prefer the actual friendly cure spells Decursive has configured.
                 -- This is more useful than generic UnitInRange(), particularly in PvP,
                 -- and does not inspect protected aura data. If every configured cure
@@ -1265,24 +1540,38 @@ local function refreshRangeOverlays()
 
                 if anyCureInRange then
                     outOfRange = false
+                    rangeKnown = true
                 elseif relevantSpellCount > 0 then
                     -- An unknown result from even one relevant cure keeps the
                     -- aggregate state unknown. Yellow requires every distinct
                     -- configured friendly cure to report explicit out of range.
+                    -- DCR_RANGE_KNOWN_RESULT_GUARD_V1
                     outOfRange = knownSpellCount == relevantSpellCount
+                    if outOfRange then
+                        rangeKnown = true
+                    end
                 elseif UnitInRange then
                     -- Generic fallback only when there is no relevant configured
                     -- friendly cure spell. It too must report an explicit check.
                     local ok, value, checked = pcall(UnitInRange, unit)
-                    local rangeKnown = ok
+                    local fallbackKnown = ok
                         and isAccessiblePublicValue(value)
                         and isAccessiblePublicValue(checked)
                         and (checked == true or checked == 1)
                         and (value == true or value == false or value == 1 or value == 0)
-                    if rangeKnown and (value == false or value == 0) then outOfRange = true end
+                    if fallbackKnown then
+                        outOfRange = value == false or value == 0
+                        rangeKnown = true
+                    end
                 end
             end
-            MF.Decursive121OutOfRange = outOfRange and true or false
+            if rangeKnown then
+                MF.Decursive121OutOfRange = outOfRange and true or false
+            else
+                -- A secret/unknown result is not evidence of a state change.
+                -- Retain the last public observation and avoid secret branching.
+                outOfRange = MF.Decursive121OutOfRange == true
+            end
             if shown and outOfRange then overlay:Show() else overlay:Hide() end
         end
     end
@@ -1349,6 +1638,7 @@ function D:Apply121LineOfSightAppearance()
 end
 
 local function refreshLineOfSightOverlays()
+    if not modernSecureUIRunning then return end
     local now = GetTime and GetTime() or 0
     local enabled = not D.profile or D.profile.LineOfSight121Enabled ~= false
     for MF in pairs(lineOfSightMUFs) do
@@ -1424,6 +1714,57 @@ local lastClickedMUF = nil
 local lastClickedPriority = nil
 local lastClickedAt = 0
 local clickHookedFrames = setmetatable({}, { __mode = "k" })
+local secureActionAttempt = nil
+local clickDiagGeneration = 0
+
+-- PreClick records the exact secure cure action before SecureActionButtonTemplate
+-- executes. UI_ERROR_MESSAGE itself has no spell/item/target identity, so only
+-- this short-lived attempt may consume a whitelisted error.
+function D:Begin121SecureActionAttempt(MF, button, requestedPriority)
+    secureActionAttempt = nil
+    if type(MF) ~= "table" or type(requestedPriority) ~= "number"
+        or requestedPriority < 1 or requestedPriority > 3
+    then
+        return false
+    end
+
+    local configured = false
+    local priorities = self.Status and self.Status.CuringSpellsPrio
+    if type(priorities) == "table" then
+        for _, priority in pairs(priorities) do
+            if priority == requestedPriority then
+                configured = true
+                break
+            end
+        end
+    end
+    if not configured then return false end
+
+    local now = GetTime and GetTime() or 0
+    lastClickedMUF = MF
+    lastClickedPriority = requestedPriority
+    lastClickedAt = now
+    secureActionAttempt = {
+        MF = MF,
+        priority = requestedPriority,
+        button = isAccessiblePublicValue(button) and button or nil,
+        startedAt = now,
+    }
+    if self.AlertDiag then
+        clickDiagGeneration = clickDiagGeneration + 1
+        local generation = clickDiagGeneration
+        self:AlertDiag("CLICK priority=%s button=%s", tostring(requestedPriority), tostring(button))
+        if C_Timer and C_Timer.After then
+            C_Timer.After(1.3, function()
+                if modernSecureUIRunning and clickDiagGeneration == generation then
+                    D:AlertDiag("CLICK priority=%s -> no success/failure/range event observed within 1.3s (likely silently blocked, e.g. GCD)",
+                        tostring(requestedPriority))
+                end
+            end)
+        end
+    end
+    return true
+end
 
 
 -- v10.28 forbidden-object safety boundary.
@@ -1799,6 +2140,7 @@ local function initializePriorityCooldownVisuals(MF)
     initializeMUFStatusLight(MF)
     initializeRangeOverlay(MF)
     initializeLineOfSightOverlay(MF)
+    T._MUFDeath121.Initialize(MF)
     D:Apply121CooldownAppearance()
     D:Apply121RangeAppearance()
     D:Apply121LineOfSightAppearance()
@@ -1846,6 +2188,7 @@ local function updatePriorityBorderPulseDriver()
 end
 
 function D:Apply121CooldownAppearance()
+    if not modernSecureUIRunning then return end
     local profile = D.profile or {}
     local opacity = profile.CooldownOverlay121Opacity or .62
     local showNumbers = profile.CooldownOverlay121Numbers ~= false
@@ -2132,6 +2475,7 @@ finishPriorityCooldown = function(priority, generation)
 end
 
 local function armPriorityCooldown(priority, spellID, targetMF)
+    if not modernSecureUIRunning then return false end
     if not isAccessiblePublicValue(spellID) or type(spellID) ~= "number"
         or not C_Spell or not C_Spell.GetSpellCooldownDuration
     then
@@ -2170,6 +2514,7 @@ local function armPriorityCooldown(priority, spellID, targetMF)
 end
 
 local function refreshCooldownOverlay()
+    if not modernSecureUIRunning then return end
     if D.profile and D.profile.CooldownOverlay121Enabled == false then
         cooldownActive = false
         priorityCooldownActive[1] = false
@@ -2247,6 +2592,7 @@ local function getReadableRemainingDuration(durationObject)
 end
 
 local function reconcilePriorityCooldown(priority)
+    if not modernSecureUIRunning then return end
     if not priorityCooldownActive[priority] then return end
 
     local spellID = trackedPrioritySpellIDs[priority]
@@ -2273,7 +2619,9 @@ local function reconcilePriorityCooldown(priority)
     if not C_Spell or not C_Spell.GetSpellCooldownDuration then return end
     local durationOK, durationObject = pcall(C_Spell.GetSpellCooldownDuration, spellID, true)
     if not durationOK or not durationObject then
-        finishPriorityCooldown(priority, cooldownGeneration[priority])
+        -- Failure/unknown is not proof that the cooldown ended. Preserve the
+        -- last safe DurationObject until a public zero span, charge, or
+        -- remaining-duration observation confirms completion.
         return
     end
 
@@ -2295,17 +2643,6 @@ local function reconcileActivePriorityCooldowns()
     D:Apply121CooldownAppearance()
 end
 
--- Confirmed live via BugGrabber: this MUST be declared before cooldownEvents
--- below, which references it starting at its very first event branch.
--- Originally declared much further down the file (near attachClickTracking)
--- -- a Lua local only exists for code AFTER its declaration in the same
--- chunk, so every earlier use here was silently resolving to a nonexistent
--- GLOBAL instead, throwing "attempt to perform arithmetic on ... a nil
--- value" on literally every click outcome (success, failure, and range
--- alike) this entire session, aborting Decursive's own post-cast
--- confirmation/cooldown-arming logic right after the real spell cast fired.
-local clickDiagGeneration = 0
-
 local cooldownEvents = CreateFrame("Frame")
 cooldownEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 cooldownEvents:RegisterEvent("ZONE_CHANGED_NEW_AREA")
@@ -2321,43 +2658,56 @@ cooldownEvents:RegisterEvent("UNIT_SPELLCAST_FAILED")
 pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UNIT_SPELLCAST_FAILED_QUIET")
 pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UNIT_SPELLCAST_INTERRUPTED")
 pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UI_ERROR_MESSAGE")
-cooldownEvents:RegisterEvent("UNIT_AURA")
 cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
-    if event == "UNIT_AURA" then
-        -- Aura details may be secret; ignore the payload entirely. Blizzard's
-        -- AuraContainer updates the active priority slots itself.
-        return
-    end
-
     if event == "UI_ERROR_MESSAGE" then
-        -- Args are (errorType, message) here, so `unit` is the public error id
-        -- and `castGUID` is the localized message.  Use this only immediately
-        -- after a MUF secure click; it is a fallback for instant-cast failures
-        -- such as line of sight that may not reach the old CLEU result path.
-        if lastClickedMUF and lastClickedPriority and (GetTime() - (lastClickedAt or 0)) <= 1.0 then
-            local msg = castGUID
-            if not isAccessiblePublicValue(msg) or not isAccessiblePublicValue(unit) then return end
-            local isRangeError = (SPELL_FAILED_OUT_OF_RANGE and msg == SPELL_FAILED_OUT_OF_RANGE)
-                or (ERR_OUT_OF_RANGE and msg == ERR_OUT_OF_RANGE)
-            if isRangeError then
+        -- Args are (errorType, localizedMessage). Consume only a concrete
+        -- PreClick action that is still executing, and only errors that can be
+        -- meaningfully attributed to a friendly cure.
+        local attempt = secureActionAttempt
+        local now = GetTime and GetTime() or 0
+        local msg = castGUID
+        if attempt and attempt.MF and attempt.priority
+            and now - (attempt.startedAt or 0) <= 0.80
+            and isAccessiblePublicValue(msg) and type(msg) == "string"
+            and isAccessiblePublicValue(unit)
+        then
+            local errorKind
+            if (_G.SPELL_FAILED_OUT_OF_RANGE and msg == _G.SPELL_FAILED_OUT_OF_RANGE)
+                or (_G.ERR_OUT_OF_RANGE and msg == _G.ERR_OUT_OF_RANGE)
+            then
+                errorKind = "range"
+            elseif _G.SPELL_FAILED_LINE_OF_SIGHT and msg == _G.SPELL_FAILED_LINE_OF_SIGHT then
+                errorKind = "line-of-sight"
+            elseif (_G.SPELL_FAILED_NOTHING_TO_DISPEL and msg == _G.SPELL_FAILED_NOTHING_TO_DISPEL)
+                or (_G.SPELL_FAILED_BAD_TARGETS and msg == _G.SPELL_FAILED_BAD_TARGETS)
+                or (_G.SPELL_FAILED_TARGETS_DEAD and msg == _G.SPELL_FAILED_TARGETS_DEAD)
+                or (_G.SPELL_FAILED_TARGET_NOT_DEAD and msg == _G.SPELL_FAILED_TARGET_NOT_DEAD)
+            then
+                errorKind = "failure"
+            end
+
+            if not errorKind then return end
+            secureActionAttempt = nil
+            lastClickedMUF = attempt.MF
+            lastClickedPriority = attempt.priority
+
+            if errorKind == "range" then
                 -- User rule: yellow owns out-of-range.  Do not retain a hidden
                 -- red failure that could surface if the player steps back into
                 -- range before the three-second result window ends.
-                lastClickedMUF.Decursive121SuppressFailureUntil = GetTime() + 1.0
-                D:Clear121MUFStatusAttempt(lastClickedMUF)
-                D:Mark121MUFStatusRange(lastClickedMUF)
+                attempt.MF.Decursive121SuppressFailureUntil = now + 1.0
+                D:Clear121MUFStatusAttempt(attempt.MF)
+                D:Mark121MUFStatusRange(attempt.MF)
                 clickDiagGeneration = clickDiagGeneration + 1
-                -- Logs the raw errorType/message verbatim too -- classified
-                -- as "range" here, but a report that the player was
-                -- actually in range means this classification itself may
-                -- be catching something else (e.g. line of sight) that
-                -- isn't really a range problem. Ground truth beats the
-                -- classification next time this fires.
                 if D.AlertDiag then
                     D:AlertDiag("CLICK outcome: OUT OF RANGE (raw errorType=%s msg=%s)",
                         tostring(unit), tostring(msg))
                 end
-            elseif (lastClickedMUF.Decursive121SuppressFailureUntil or 0) > GetTime() then
+            elseif errorKind == "line-of-sight" then
+                D:Mark121LineOfSightBlocked(attempt.MF)
+                clickDiagGeneration = clickDiagGeneration + 1
+                if D.AlertDiag then D:AlertDiag("CLICK outcome: LINE OF SIGHT") end
+            elseif (attempt.MF.Decursive121SuppressFailureUntil or 0) > now then
                 -- A cure just succeeded on this MUF (see the post-cure debounce
                 -- set below). A spam-click re-cast against an already-cleared
                 -- target commonly errors instantly (e.g. "Nothing to Dispel")
@@ -2367,7 +2717,7 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
                 clickDiagGeneration = clickDiagGeneration + 1
                 if D.AlertDiag then D:AlertDiag("CLICK outcome: suppressed (recent success debounce), msg=%s", tostring(msg)) end
             else
-                D:Mark121MUFStatusFailure(lastClickedMUF, msg or unit or event)
+                D:Mark121MUFStatusFailure(attempt.MF, msg)
                 clickDiagGeneration = clickDiagGeneration + 1
                 if D.AlertDiag then D:AlertDiag("CLICK outcome: FAILED (UI_ERROR_MESSAGE), msg=%s", tostring(msg)) end
             end
@@ -2397,6 +2747,7 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
             return
         end
         if lastClickedMUF and (GetTime() - (lastClickedAt or 0)) <= 2.0 then
+            secureActionAttempt = nil
             -- Modern 12.1 failure path.  The legacy CLEU ClickedMF path is not
             -- available in Midnight, so result feedback must follow the secure
             -- click tracker + UNIT_SPELLCAST events instead.  The yellow range
@@ -2412,6 +2763,7 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
         if not isAccessiblePublicValue(unit) or unit ~= "player" then return end
         if isFriendlyConfiguredDispelSpellID(spellID) then
+            secureActionAttempt = nil
             trackedDispelSpellID = trackedDispelSpellID or spellID
 
             local priority
@@ -2753,8 +3105,12 @@ function D:Test121MUFVisuals(mode, requestedIndex)
         local cd2 = MF.Decursive121Priority2Cooldown
         local cd3 = MF.Decursive121Priority3Cooldown
         if selected then
-            if cd1 and cd1.SetCooldown then
-                cd1:SetCooldown(now, 8)
+            if cd1 and cd1.SetCooldownFromDurationObject
+                and C_DurationUtil and C_DurationUtil.CreateDuration
+            then
+                local durationObject = C_DurationUtil.CreateDuration()
+                durationObject:SetTimeFromStart(now, 8, 1)
+                cd1:SetCooldownFromDurationObject(durationObject)
                 cd1:Show()
             end
             if cd2 then cd2:Hide() end
@@ -2780,30 +3136,6 @@ end
 -- ---------------------------------------------------------------------------
 -- Attach compatibility UI to original MUFs
 -- ---------------------------------------------------------------------------
-
-local function getClickedCurePriority(button)
-    if not button or not D.db or not D.db.global or not D.db.global.MouseButtons then return nil end
-    local base
-    if button == "LeftButton" then base = "*%s1"
-    elseif button == "RightButton" then base = "*%s2"
-    elseif button == "MiddleButton" then base = "*%s3"
-    elseif button == "Button4" then base = "*%s4"
-    elseif button == "Button5" then base = "*%s5"
-    else return nil end
-
-    local modifier
-    if IsControlKeyDown() then modifier = "ctrl-"
-    elseif IsAltKeyDown() then modifier = "alt-"
-    elseif IsShiftKeyDown() then modifier = "shift-" end
-
-    local key = modifier and (modifier .. base:sub(-3)) or base
-    if D.tGiveValueIndex then
-        local p = D:tGiveValueIndex(D.db.global.MouseButtons, key)
-        if type(p) == "number" and p >= 1 and p <= 3 then return p end
-    end
-    return nil
-end
-
 
 local sharedCooldownFormatter
 local function getSharedCooldownFormatter()
@@ -3030,34 +3362,13 @@ end
 local pendingNativeAttach = setmetatable({}, { __mode = "k" })
 local attachManagedAura
 
--- Diagnostic-only click-outcome tracker: logs what actually happens after a
--- MUF click (success / range-blocked / other failure / no event at all,
--- e.g. a silently-ignored GCD-blocked click) so a real "click didn't work"
--- report can be root-caused from /dcralertdiag instead of guessed at.
--- clickDiagGeneration itself is declared once, near cooldownEvents above --
--- NOT re-declared here, since that would shadow it with a second, separate
--- counter unsynchronized with the one cooldownEvents reads/writes.
-
 local function attachClickTracking(MF)
     if MF.Frame and MF.Frame.HookScript and not clickHookedFrames[MF.Frame] then
         clickHookedFrames[MF.Frame] = true
-        MF.Frame:HookScript("PostClick", function(_, button)
-            lastClickedMUF = MF
-            lastClickedPriority = getClickedCurePriority(button)
-            lastClickedAt = GetTime()
-
-            if D.AlertDiag then
-                clickDiagGeneration = clickDiagGeneration + 1
-                local myGen = clickDiagGeneration
-                D:AlertDiag("CLICK priority=%s button=%s", tostring(lastClickedPriority), tostring(button))
-                if C_Timer and C_Timer.After then
-                    C_Timer.After(1.3, function()
-                        if clickDiagGeneration == myGen then
-                            D:AlertDiag("CLICK priority=%s -> no success/failure/range event observed within 1.3s (likely silently blocked, e.g. GCD)",
-                                tostring(lastClickedPriority))
-                        end
-                    end)
-                end
+        MF.Frame:HookScript("PostClick", function()
+            local attempt = secureActionAttempt
+            if attempt and attempt.MF == MF then
+                attempt.postClickAt = GetTime and GetTime() or attempt.startedAt
             end
         end)
     end
@@ -3173,6 +3484,7 @@ local originalInit = MicroUnitF.prototype.init
 MicroUnitF.prototype.init = function(self, Container, Unit, FrameNum, ID)
     originalInit(self, Container, Unit, FrameNum, ID)
     attachManagedAura(self, Unit)
+    T._MUFDeath121.Initialize(self)
     D:Refresh121MUFStateSoundUnit(self.CurrUnit or Unit, true)
 end
 
@@ -3223,8 +3535,10 @@ MicroUnitF.MFsDisplay_Update = function(self, ...)
             -- Blizzard/Decursive visibility automatically. Never Show/Hide it.
             syncCooldownOverlayToMUF(MF)
             syncRangeOverlayToMUF(MF)
+            T._MUFDeath121.Sync(MF)
         end
         D:Apply121CooldownAppearance()
+        T._MUFDeath121.RefreshAll()
     end
     return ret
 end
@@ -3285,6 +3599,26 @@ end
 
 local ZONE_REINIT_GENERATION = 0
 local ZONE_REINIT_DELAYS = { 0.15, 0.50, 1.00, 2.00, 4.00, 7.00 }
+local modernSecureUIDirty = {
+    pending = false,
+    roster = false,
+    fullWorld = false,
+    reason = nil,
+}
+
+function D:MarkModernSecureUIDirty(reason, needsRoster, needsFullWorld)
+    modernSecureUIDirty.pending = true
+    modernSecureUIDirty.roster = modernSecureUIDirty.roster or needsRoster == true
+    modernSecureUIDirty.fullWorld = modernSecureUIDirty.fullWorld or needsFullWorld == true
+    if isAccessiblePublicValue(reason) and type(reason) == "string" then
+        modernSecureUIDirty.reason = reason:sub(1, 120)
+    end
+    return false
+end
+
+function D:IsModernSecureUIDirty()
+    return modernSecureUIDirty.pending == true
+end
 
 local function resetMUFsForZoneReinit()
     local muf = D.MicroUnitF
@@ -3303,6 +3637,7 @@ local function resetMUFsForZoneReinit()
             MF.PrevDebuff1Prio = false
             MF.UnitStatus = 0
             MF.UpdateCountDown = 0
+            T._MUFDeath121.Clear(MF)
             if MF.Frame and MF.Frame.Hide then
                 safe("Post-zone reset MUF Hide", MF.Frame.Hide, MF.Frame)
             end
@@ -3318,9 +3653,7 @@ local function rebuildMUFsAfterZone(reason, updatePasses)
     end
     if nativeConfigurationBlocked() then
         recordMUFStartupState(reason, "blocked: combat lockdown")
-        if D.AddDelayedFunctionCall then
-            D:AddDelayedFunctionCall("Dcr_PostZoneFullReinit", rebuildMUFsAfterZone, reason, updatePasses)
-        end
+        D:MarkModernSecureUIDirty(reason or "protected MUF rebuild", true, updatePasses == nil)
         return false
     end
 
@@ -3391,7 +3724,13 @@ function D:ReinitializeDecursiveAfterZone(reason)
     MUF_STARTUP_DIAG.pass = 0
     recordMUFStartupState(reason, "scheduled")
 
-    if not nativeConfigurationBlocked() then resetMUFsForZoneReinit() end
+    if nativeConfigurationBlocked() then
+        self:MarkModernSecureUIDirty(reason or "world transition", true, true)
+        recordMUFStartupState(reason, "deferred: world transition in combat")
+        return false
+    end
+
+    resetMUFsForZoneReinit()
     self.Groups_datas_are_invalid = true
 
     local function pass(delay, passIndex)
@@ -3414,33 +3753,51 @@ function D:ReinitializeDecursiveAfterZone(reason)
     return true
 end
 
--- Short roster-only recovery. This preserves visible MUFs while the group list
--- settles and performs six updater passes total instead of the full zone path's
--- 72. It still repairs follower-dungeon roster changes that do not fire
--- PLAYER_ENTERING_WORLD.
+-- Short roster-only recovery. It preserves visible MUFs and coalesces repeated
+-- roster edges into one protected-work pass. The six settling passes remain
+-- reserved for a true world transition.
 local ROSTER_REFRESH_GENERATION = 0
-local ROSTER_REFRESH_DELAYS = { 0.20, 1.00 }
+local ROSTER_REFRESH_DELAY = 0.20
 
 function D:RefreshDecursiveAfterRoster(reason)
     ROSTER_REFRESH_GENERATION = ROSTER_REFRESH_GENERATION + 1
     local generation = ROSTER_REFRESH_GENERATION
     self.Groups_datas_are_invalid = true
 
+    if nativeConfigurationBlocked() then
+        self:MarkModernSecureUIDirty(reason or "roster", true, false)
+        return false
+    end
+
     local function pass(delay)
         if generation ~= ROSTER_REFRESH_GENERATION or not D.DcrFullyInitialized then return end
         D.Groups_datas_are_invalid = true
-        rebuildMUFsAfterZone((reason or "roster") .. " @" .. tostring(delay), 3)
+        rebuildMUFsAfterZone((reason or "roster") .. " @" .. tostring(delay), 1)
     end
 
     if C_Timer and C_Timer.After then
-        for i = 1, #ROSTER_REFRESH_DELAYS do
-            local delay = ROSTER_REFRESH_DELAYS[i]
-            C_Timer.After(delay, function() pass(delay) end)
-        end
+        C_Timer.After(ROSTER_REFRESH_DELAY, function() pass(ROSTER_REFRESH_DELAY) end)
     else
         pass(0)
     end
     return true
+end
+
+function D:FlushModernSecureUIDirty(reason)
+    if not modernSecureUIDirty.pending then return false end
+    if nativeConfigurationBlocked() then return false end
+
+    local fullWorld = modernSecureUIDirty.fullWorld
+    local dirtyReason = modernSecureUIDirty.reason or reason or "deferred protected work"
+    modernSecureUIDirty.pending = false
+    modernSecureUIDirty.roster = false
+    modernSecureUIDirty.fullWorld = false
+    modernSecureUIDirty.reason = nil
+
+    if fullWorld then
+        return self:ReinitializeDecursiveAfterZone(dirtyReason)
+    end
+    return rebuildMUFsAfterZone(dirtyReason, 1)
 end
 
 -- Backward-compatible name used by earlier square-sound test builds.
@@ -3702,7 +4059,11 @@ local function normalizeSoundPath(path)
 end
 
 function D:Refresh121DispelAlertSoundCache()
-    T._DispelAlertSoundFileIDs = T._DispelAlertSoundFileIDs or {}
+    -- Rebuild, do not append: a profile sound change must not leave the old
+    -- numeric FileID recognized for the rest of the session.
+    T._DispelAlertSoundFileIDs = {}
+    T._DispelAlertSoundPathNorm = nil
+    T._DispelAlertSoundBase = nil
     if not self.GetDispelNotificationSoundFile then return end
     local path = self:GetDispelNotificationSoundFile()
     if not path then return end
@@ -3978,6 +4339,7 @@ function D:Hide121AlertWarning()
 end
 
 function D:Show121AlertWarning(message, durationSeconds, bypassEnvironmentProfile)
+    if not modernSecureUIRunning then return false end
     if not isAccessiblePublicValue(message) or type(message) ~= "string" or message == "" then return false end
     if not bypassEnvironmentProfile and self.Are121TextAlertsEnabled
         and not self:Are121TextAlertsEnabled() then
@@ -4017,6 +4379,7 @@ end
 
 -- Options test + explicit public-ID + Decursive-played sound assist.
 function D:Show121DispelAlertWarning(reason, bypassIgnoreWindow)
+    if not modernSecureUIRunning then return false end
     if not isDispelAlertEnabled() then return false end
 
     local now = GetTime and GetTime() or 0
@@ -4060,12 +4423,13 @@ end
 -- combat by Decursive.
 if C_Timer and C_Timer.After then
     C_Timer.After(0, function()
-        if D and D.Get121AlertAnchor then ensureAlert121Banner() end
+        if modernSecureUIRunning and D and D.Get121AlertAnchor then ensureAlert121Banner() end
     end)
 end
 
 -- AddAuraSound has no Lua callback; hook PlaySoundFile for live TIMED/flash assist.
 local function maybePulseFromDispelSound(sound)
+    if not modernSecureUIRunning then return end
     if not isDispelAlertEnabled() then return end
     if not D.profile or not D.profile.PlaySound then return end
     if not soundMatchesDispelAlert(sound) then return end
@@ -4118,10 +4482,10 @@ if D.RegisterChatCommand then
     D:RegisterChatCommand("dcralerts", function(msg)
         if msg == "move" then
             D:Set121AlertMoveMode(not alert121MoveMode)
-            print(("|cFF29B8A8[Decursive]|r Alert position %s. Drag the purple box to move it, then run this again to lock it."):format(
+            D:Println(("Alert position %s. Drag the purple box to move it, then run this again to lock it."):format(
                 alert121MoveMode and "unlocked" or "locked"))
         else
-            print("|cFF29B8A8[Decursive]|r /dcralerts move to reposition Alert warnings (DISPEL + Soul Link). Not the notification text anchor.")
+            D:Println("/dcralerts move to reposition Alert warnings (DISPEL + Soul Link). Not the notification text anchor.")
         end
     end)
 end
@@ -4132,14 +4496,9 @@ end
 -- doesn't require guessing/round-tripping every time something doesn't
 -- fire. Piggybacks D.db.global (a fresh top-level SavedVariables entry was
 -- confirmed NOT to persist reliably this session; DecursiveDB already
--- does). Always uses plain print() to the single default chat frame, never
--- D:Println -- that one fans out to TWO possible windows (default chat
--- frame vs. Decursive's separate custom message frame, per Print_ChatFrame/
--- Print_CustomFrame), which is exactly the kind of "which window did it go
--- to" ambiguity a diagnostic tool must not have.
+-- does). Multiline output is routed to Dcr_DIAG's scrollable, selectable
+-- EditBox so the complete log can be copied without chat-frame truncation.
 ----------------------------------------------------------------
-
-local MAX_ALERT_DIAG_LINES = 150
 
 function D:AlertDiag(fmt, ...)
     if not D.db or not D.db.global then return end
@@ -4157,7 +4516,7 @@ function D:AlertDiag(fmt, ...)
     D.db.global.DcrAlertDiag = D.db.global.DcrAlertDiag or {}
     local log = D.db.global.DcrAlertDiag
     table.insert(log, ("[%s] %s"):format(date("%H:%M:%S"), message))
-    while #log > MAX_ALERT_DIAG_LINES do
+    while #log > 150 do
         table.remove(log, 1)
     end
 end
@@ -4165,21 +4524,33 @@ end
 function D:PrintAlertDiag(count)
     local log = D.db and D.db.global and D.db.global.DcrAlertDiag
     if not log or #log == 0 then
-        print("|cFF29B8A8[Decursive]|r Alert diagnostic log is empty.")
-        return
+        if T._ShowCopyableDiagnostic then
+            T._ShowCopyableDiagnostic("Decursive Alert Diagnostic", "Alert diagnostic log is empty.")
+        end
+        return false
     end
-    count = math.min(count or 25, #log)
-    print(("|cFF29B8A8[Decursive]|r Last %d alert diagnostic lines (default chat frame only):"):format(count))
+    count = math.min(math.max(1, tonumber(count) or 25), #log)
+    local lines = {
+        ("Last %d alert diagnostic lines:"):format(count),
+        "",
+    }
     for i = #log - count + 1, #log do
-        print("|cFF6B7686" .. log[i] .. "|r")
+        lines[#lines + 1] = log[i]
     end
+    if T._ShowCopyableDiagnostic then
+        T._ShowCopyableDiagnostic("Decursive Alert Diagnostic", table.concat(lines, "\n"))
+        return true
+    end
+    return false
 end
 
 if D.RegisterChatCommand then
     D:RegisterChatCommand("dcralertdiag", function(msg)
         if msg == "clear" then
             if D.db and D.db.global then D.db.global.DcrAlertDiag = {} end
-            print("|cFF29B8A8[Decursive]|r Alert diagnostic log cleared.")
+            if T._ShowCopyableDiagnostic then
+                T._ShowCopyableDiagnostic("Decursive Alert Diagnostic", "Alert diagnostic log cleared.")
+            end
             return
         end
         D:PrintAlertDiag(tonumber(msg) or 25)
@@ -4193,11 +4564,192 @@ end
 -- D:AlertDiag directly here always silently no-op'd (D.db.global didn't
 -- exist yet) -- confirmed live: the marker never once appeared in the saved
 -- log across several reload cycles.
-local alertDiagLoadMarker = CreateFrame("Frame")
-alertDiagLoadMarker:RegisterEvent("PLAYER_ENTERING_WORLD")
-alertDiagLoadMarker:SetScript("OnEvent", function(self)
+T._AlertDiagLoadMarker121 = CreateFrame("Frame")
+T._AlertDiagLoadMarker121:RegisterEvent("PLAYER_ENTERING_WORLD")
+T._AlertDiagLoadMarker121:SetScript("OnEvent", function(self)
     if D.AlertDiag then D:AlertDiag("===== addon loaded/reloaded =====") end
     self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+end)
+
+-- ---------------------------------------------------------------------------
+-- Stable modern-runtime lifecycle used by AceAddon's OnEnable/OnDisable.
+-- ---------------------------------------------------------------------------
+T._ModernLifecyclePending121 = nil
+T._ModernLifecycleFrame121 = CreateFrame("Frame")
+T._ModernLifecycleFrame121:RegisterEvent("PLAYER_REGEN_ENABLED")
+
+function T._RegisterModernSecureUIEvents121()
+    auraSoundRegistryEventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+    auraSoundRegistryEventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    auraSoundRegistryEventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    auraSoundRegistryEventFrame:RegisterEvent("PLAYER_ROLES_ASSIGNED")
+    auraSoundRegistryEventFrame:RegisterEvent("SPELLS_CHANGED")
+    auraSoundRegistryEventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
+    auraSoundRegistryEventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
+
+    cooldownEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
+    cooldownEvents:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "PVP_MATCH_ACTIVE")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "PVP_MATCH_COMPLETE")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "CHALLENGE_MODE_START")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "CHALLENGE_MODE_COMPLETED")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "CHALLENGE_MODE_RESET")
+    cooldownEvents:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+    cooldownEvents:RegisterEvent("SPELL_UPDATE_CHARGES")
+    cooldownEvents:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+    cooldownEvents:RegisterEvent("UNIT_SPELLCAST_FAILED")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UNIT_SPELLCAST_FAILED_QUIET")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UNIT_SPELLCAST_INTERRUPTED")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "UI_ERROR_MESSAGE")
+    cooldownEvents:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    cooldownEvents:RegisterEvent("SPELLS_CHANGED")
+    cooldownEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "ADDON_RESTRICTION_STATE_CHANGED")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "PLAYER_ROLES_ASSIGNED")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "PLAYER_TALENT_UPDATE")
+    pcall(cooldownEvents.RegisterEvent, cooldownEvents, "TRAIT_CONFIG_UPDATED")
+
+    providerRetryFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    pcall(providerRetryFrame.RegisterEvent, providerRetryFrame, "ADDON_RESTRICTION_STATE_CHANGED")
+    dispelAlertRefreshFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    dispelAlertRefreshFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    pcall(dispelAlertRefreshFrame.RegisterEvent, dispelAlertRefreshFrame, "ADDON_RESTRICTION_STATE_CHANGED")
+end
+
+function T._StopModernTickers121()
+    if mufStatusLightTicker and mufStatusLightTicker.Cancel then mufStatusLightTicker:Cancel() end
+    if rangeTicker and rangeTicker.Cancel then rangeTicker:Cancel() end
+    if lineOfSightTicker and lineOfSightTicker.Cancel then lineOfSightTicker:Cancel() end
+    mufStatusLightTicker = nil
+    rangeTicker = nil
+    lineOfSightTicker = nil
+end
+
+function T._StartModernTickers121()
+    if not C_Timer or not C_Timer.NewTicker then return end
+    if not mufStatusLightTicker then
+        mufStatusLightTicker = C_Timer.NewTicker(.10, T._MUFDeath121.RefreshManagedStates)
+    end
+    if not rangeTicker then rangeTicker = C_Timer.NewTicker(.20, refreshRangeOverlays) end
+    if not lineOfSightTicker then lineOfSightTicker = C_Timer.NewTicker(.10, refreshLineOfSightOverlays) end
+end
+
+function T._SetNativeContainerEnabled121(container, enabled)
+    if not container then return end
+    if enabled then
+        if container.Show then safe("Lifecycle native Show", container.Show, container) end
+        if container.SetEnabled then safe("Lifecycle native enable", container.SetEnabled, container, true) end
+    else
+        if container.SetEnabled then safe("Lifecycle native disable", container.SetEnabled, container, false) end
+        if container.Hide then safe("Lifecycle native Hide", container.Hide, container) end
+    end
+end
+
+function T._ApplyModernSecureUIEnabled121(enabled)
+    if nativeConfigurationBlocked() then return false end
+    local existing = D.MicroUnitF and D.MicroUnitF.ExistingPerUNIT
+    if type(existing) == "table" then
+        for unit, MF in pairs(existing) do
+            if MF then
+                T._SetNativeContainerEnabled121(MF.ManagedAuraContainer, enabled)
+                for priority = 1, 3 do
+                    T._SetNativeContainerEnabled121(MF.Decursive121PriorityGateContainers
+                        and MF.Decursive121PriorityGateContainers[priority], enabled)
+                    T._SetNativeContainerEnabled121(MF.Decursive121VerificationNativeContainers
+                        and MF.Decursive121VerificationNativeContainers[priority], enabled)
+                end
+
+                if enabled then
+                    T._MUFDeath121.Initialize(MF)
+                    attachNativeManagedAura(MF, MF.CurrUnit or unit)
+                else
+                    if MF.Decursive121CooldownOverlay then MF.Decursive121CooldownOverlay:Hide() end
+                    if MF.Decursive121RangeOverlay then MF.Decursive121RangeOverlay:Hide() end
+                    if MF.Decursive121LineOfSightOverlay then MF.Decursive121LineOfSightOverlay:Hide() end
+                    if MF.Decursive121StatusLight then MF.Decursive121StatusLight:Hide() end
+                    T._MUFDeath121.Clear(MF)
+                    MF.Decursive121OutOfRange = false
+                    MF.Decursive121StatusRangeUntil = 0
+                    MF.Decursive121StatusFailureUntil = 0
+                    MF.Decursive121StatusSuccessUntil = 0
+                end
+            end
+        end
+    end
+    return true
+end
+
+function D:ShutdownModernSecureUI()
+    modernSecureUIRunning = false
+    T._ModernLifecyclePending121 = nil
+    secureActionAttempt = nil
+    lastClickedMUF = nil
+    lastClickedPriority = nil
+    lastClickedAt = 0
+    clickDiagGeneration = clickDiagGeneration + 1
+    ZONE_REINIT_GENERATION = ZONE_REINIT_GENERATION + 1
+    ROSTER_REFRESH_GENERATION = ROSTER_REFRESH_GENERATION + 1
+    modernSecureUIDirty.pending = false
+    modernSecureUIDirty.roster = false
+    modernSecureUIDirty.fullWorld = false
+    modernSecureUIDirty.reason = nil
+
+    auraSoundRegistryEventFrame:UnregisterAllEvents()
+    cooldownEvents:UnregisterAllEvents()
+    providerRetryFrame:UnregisterAllEvents()
+    dispelAlertRefreshFrame:UnregisterAllEvents()
+    T._StopModernTickers121()
+    priorityBorderPulseDriver:Hide()
+    previewActive = false
+    previewAll = false
+    previewMUF = nil
+    cooldownActive = false
+    for priority = 1, 3 do
+        cooldownGeneration[priority] = cooldownGeneration[priority] + 1
+        priorityCooldownActive[priority] = false
+        managedCooldownDurationObjects[priority] = nil
+        activePriorityMUF[priority] = nil
+    end
+    if self.Hide121AlertWarning then self:Hide121AlertWarning() end
+    local soulLinkStopped = not self.Shutdown121SoulLink or self:Shutdown121SoulLink() ~= false
+    if self.ClearProtectedAuraSounds then self:ClearProtectedAuraSounds("modern secure UI shutdown") end
+
+    if not T._ApplyModernSecureUIEnabled121(false) then
+        T._ModernLifecyclePending121 = "shutdown"
+        return false
+    end
+    return soulLinkStopped
+end
+
+function D:StartupModernSecureUI()
+    if nativeConfigurationBlocked() then
+        T._ModernLifecyclePending121 = "startup"
+        return false
+    end
+    T._ModernLifecyclePending121 = nil
+    modernSecureUIRunning = true
+    T._RegisterModernSecureUIEvents121()
+    T._StartModernTickers121()
+    T._ApplyModernSecureUIEnabled121(true)
+    if self.Startup121SoulLink then self:Startup121SoulLink() end
+    if self.Refresh121DispelAlertSoundCache then self:Refresh121DispelAlertSoundCache() end
+    if self.RefreshProtectedAuraSounds then self:RefreshProtectedAuraSounds("modern secure UI startup") end
+    resetTrackedDispelSpell()
+    refreshCooldownOverlay()
+    refreshRangeOverlays()
+    refreshLineOfSightOverlays()
+    T._MUFDeath121.RefreshManagedStates()
+    return true
+end
+
+T._ModernLifecycleFrame121:SetScript("OnEvent", function()
+    local pending = T._ModernLifecyclePending121
+    T._ModernLifecyclePending121 = nil
+    if pending == "startup" then
+        D:StartupModernSecureUI()
+    elseif pending == "shutdown" then
+        T._ApplyModernSecureUIEnabled121(false)
+    end
 end)
 
 D:Debug("WoW 12.1 managed-aura + cooldown compatibility adapter loaded")

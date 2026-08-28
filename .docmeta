@@ -1,30 +1,30 @@
 # vim:syntax=YAML:expandtab
 -
     type: markdown
-    input-file: "doc/Description.md"
+    input-file: "docs/Description.md"
     output-page: "Main"
 
 -
     type: markdown
-    input-file: "doc/faq.md"
+    input-file: "docs/faq.md"
     output-page: "Main/faq"
 
 -
     type: markdown
-    input-file: "doc/MUFs.md"
+    input-file: "docs/MUFs.md"
     output-page: "Main/mufs"
 
 -
     type: markdown
-    input-file: "doc/user-actions.md"
+    input-file: "docs/user-actions.md"
     output-page: "Main/user-actions"
 
 -
     type: markdown
-    input-file: "doc/macro.md"
+    input-file: "docs/macro.md"
     output-page: "Main/macro"
 
 -
     type: markdown
-    input-file: "doc/commands.md"
+    input-file: "docs/commands.md"
     output-page: "Main/commands"

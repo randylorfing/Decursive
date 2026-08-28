@@ -94,12 +94,19 @@ end
 
 function D:PrintDispelDBDiagnostics()
     local stats = self:GetDispelDBStats()
-    self:Println(("--- Zhaohu DispelDB: %d entries | %d friendly | %d enemy/purge ---"):format(stats.total or 0, stats.friendly or 0, stats.hostile or 0))
+    local lines = {
+        ("--- Zhaohu DispelDB: %d entries | %d friendly | %d enemy/purge ---"):format(stats.total or 0, stats.friendly or 0, stats.hostile or 0),
+    }
     local list = self:GetDispelDBExpansionList()
     for i = 1, #list do
         local row = list[i]
         local s = row.stats or {}
-        self:Println(("%s: %d total | %d friendly | %d enemy | %s"):format(row.key, s.total or 0, s.friendly or 0, s.hostile or 0, s.coverage or "unknown"))
+        lines[#lines + 1] = ("%s: %d total | %d friendly | %d enemy | %s"):format(row.key, s.total or 0, s.friendly or 0, s.hostile or 0, s.coverage or "unknown")
     end
-    self:Println("Use /zdsound for current-spec aura-sound registration counts.")
+    lines[#lines + 1] = "Use /zdsound for current-spec aura-sound registration counts."
+    if T._ShowCopyableDiagnostic then
+        T._ShowCopyableDiagnostic("Decursive Dispel Database Diagnostic", table.concat(lines, "\n"))
+        return true
+    end
+    return false
 end

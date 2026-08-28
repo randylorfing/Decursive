@@ -210,12 +210,6 @@ local function NiceTime()
     return tonumber(("%.4f"):format(GetTime() - DC.StartTime));
 end
 
-local function print(t)
-    if DEFAULT_CHAT_FRAME then
-        DEFAULT_CHAT_FRAME:AddMessage(t);
-    end
-end
-
 -- taken from AceConsole-2.0
 local function tostring_args(a1, ...)
         if select('#', ...) < 1 then
@@ -282,6 +276,37 @@ function T._DebugFrameOnTextChanged(frame) -- {{{
         DecursiveDebuggingFrameScrollScrollBar:SetValue(0)
     end
 end -- }}}
+
+-- Reuse Decursive's scrollable, selectable report window for focused runtime
+-- diagnostics. Callers provide already assembled text. This function never
+-- emits multi-line diagnostic data to a chat frame.
+function T._ShowCopyableDiagnostic(title, text)
+    local canaccessvalue = _G.canaccessvalue
+    local issecretvalue = _G.issecretvalue
+    local function publicString(value, fallback)
+        if canaccessvalue and not canaccessvalue(value) then return fallback end
+        if issecretvalue and issecretvalue(value) then return fallback end
+        if type(value) ~= "string" then return fallback end
+        return value
+    end
+
+    title = publicString(title, "Decursive Diagnostic")
+    text = publicString(text, "<restricted diagnostic data>")
+    if #text > 250000 then
+        text = text:sub(1, 250000) .. "\n\n[diagnostic truncated]"
+    end
+    T._DebugText = text
+
+    if _G.DecursiveDebuggingFrameText and _G.DecursiveDEBUGtext and _G.DecursiveDebuggingFrame then
+        _G.DecursiveDebuggingFrameText:SetText(T._DebugText)
+        _G.DecursiveDEBUGtext:SetText(title)
+        _G.DecursiveDebuggingFrame:Show()
+        return true
+    end
+
+    T._FatalError(title .. "\n\n" .. text)
+    return false
+end
 
 do
     local DebugHeader = false;
@@ -793,7 +818,7 @@ function T._TooManyErrors()
     if (NiceTime() > 10) then
 
         -- if tainting accusation and Blizzard's UI errors represent more than 90% of errors then yield and don't display anything
-        if not ((T._NDRTaintingAccusations + T._BlizzardUIErrors) > T._NonDecursiveErrors * 0.9) then
+        if T._NDRTaintingAccusations + T._BlizzardUIErrors <= T._NonDecursiveErrors * 0.9 then
             if not WarningDisplayed and T.Dcr and T.Dcr.L and not (#DebugTextTable > 0 or T._TaintingAccusations > 10) then -- if we can and should display the alert
                 _Print(T.Dcr:ColorText((T.Dcr.L["TOO_MANY_ERRORS_ALERT"]):format(T._NonDecursiveErrors), "FFFF0000"));
                 _Print(T.Dcr:ColorText(T.Dcr.L["DONT_SHOOT_THE_MESSENGER"], "FFFF9955"));
@@ -820,15 +845,9 @@ function T._RegisterBugGrabberCallBacks()
         EventRegistry:RegisterCallback("BugGrabber.BugGrabbed", T._onError)
         -- necessary to hide the message printed by buggrabber
 		EventRegistry:TriggerEvent("BugGrabber.DisplayRegistered")
-        --[==[
-        print("dcr: new BG registered")
-        ]==]
     else
         -- there is no way to know which version of Buggraber the user might have so stay compatible with older versions
         pcall (BugGrabber.RegisterCallback, T, "BugGrabber_BugGrabbed", T._onError)
-        --[==[
-        print("dcr: old BG registered")
-        ]==]
     end
 
     return true

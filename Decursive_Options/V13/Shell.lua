@@ -310,6 +310,7 @@ function UI:CreateShell()
     frame:RegisterEvent("PLAYER_REGEN_ENABLED")
     frame:RegisterEvent("PLAYER_ENTERING_WORLD")
     frame:SetScript("OnEvent", function()
+        if not frame:IsShown() then return end
         updateContext(frame)
         UI:RefreshStatus()
         local page = UI.pages[UI.currentPage]
@@ -407,16 +408,22 @@ function UI:InstallAsPrimary()
         ZD.searchIndex = nil
         local settings = UI.pages.SETTINGS
         if settings then
+            local activeRoutePage = settings.routePages
+                and settings.routePages[settings.currentRoute or "general"]
             for _, page in pairs(settings.routePages or {}) do
-                if page and page.optionCanvas then page._needsRebuild = true end
+                if page and page ~= activeRoutePage and page.optionCanvas then
+                    page._needsRebuild = true
+                end
             end
         end
         ZD:RefreshUI()
     end
     ZD.RefreshUI = function()
+        local frame = UI.frame
+        if not frame or not frame:IsShown() then return end
         UI:RefreshStatus()
         local page = UI.pages[UI.currentPage]
-        if page and page.Refresh then page:Refresh() end
+        if page and page.IsShown and page:IsShown() and page.Refresh then page:Refresh() end
     end
 end
 

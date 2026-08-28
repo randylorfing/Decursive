@@ -529,13 +529,17 @@ end
 
 if D.RegisterChatCommand then
     D:RegisterChatCommand("dcridentity", function(msg)
+        local text
         if msg == "alldebuffs" then
             D.profile.DcrIdentityShowAllDebuffs = not D.profile.DcrIdentityShowAllDebuffs
-            print(("|cFF29B8A8[Decursive]|r Native tooltip will show %s. /reload to apply."):format(
-                D.profile.DcrIdentityShowAllDebuffs and "ALL harmful debuffs" or "dispellable debuffs only"))
+            text = ("Native tooltip will show %s.\n\n/reload to apply."):format(
+                D.profile.DcrIdentityShowAllDebuffs and "ALL harmful debuffs" or "dispellable debuffs only")
         else
-            print(("|cFF29B8A8[Decursive]|r Currently showing %s. /dcridentity alldebuffs to toggle."):format(
-                (D.profile and D.profile.DcrIdentityShowAllDebuffs) and "ALL harmful debuffs" or "dispellable debuffs only"))
+            text = ("Currently showing %s.\n\n/dcridentity alldebuffs toggles the mode."):format(
+                (D.profile and D.profile.DcrIdentityShowAllDebuffs) and "ALL harmful debuffs" or "dispellable debuffs only")
+        end
+        if T._ShowCopyableDiagnostic then
+            T._ShowCopyableDiagnostic("Decursive Aura Tooltip Mode", text)
         end
     end)
 end

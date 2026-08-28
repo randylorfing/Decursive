@@ -7,12 +7,27 @@
 # releases -- v11.0.46, v12.0.4 and v12.0.5 -- passed lint, uploaded
 # successfully, and shipped a LibQTip-1.0.lua that would not parse in game.
 #
-# Run against the packager's output directory, e.g.
-#   .github/scripts/validate-package.sh .release
+# Run against an assembled packager output directory, not a source checkout or
+# zip archive, e.g.
+#   bash .github/scripts/validate-package.sh .release
 #
 set -euo pipefail
 
-releasedir="${1:-.release}"
+if [ "$#" -ne 1 ]; then
+    echo "Usage: bash .github/scripts/validate-package.sh <assembled-release-directory>" >&2
+    exit 2
+fi
+
+releasedir="$1"
+case "$releasedir" in
+    [A-Za-z]:[\\/]* )
+        if command -v cygpath >/dev/null 2>&1; then
+            releasedir=$(cygpath -u "$releasedir")
+        fi
+        ;;
+esac
+releasedir="${releasedir//\\//}"
+releasedir="${releasedir%/}"
 
 status=0
 fail() { echo "ERROR: $*" >&2; status=1; }
@@ -54,8 +69,9 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Unsubstituted package tokens. Source keeps these; a shipped build must not.
 # ---------------------------------------------------------------------------
-if grep -rln --include='*.lua' --include='*.xml' --include='*.toc' \
-        -e '@project-version@' -e '@project-date-iso@' "$releasedir"; then
+if grep -rlnE --include='*.lua' --include='*.xml' --include='*.toc' \
+        --include='*.md' --include='*.txt' \
+        '@project-[[:alnum:]-]+@' "$releasedir"; then
     fail "unsubstituted package tokens in packaged output (see above)."
 else
     note "all package tokens substituted"
@@ -74,8 +90,18 @@ if [ -n "$luabin" ]; then
     parsed=0
     while IFS= read -r f; do
         case "$luabin" in
-            luac*) "$luabin" -p "$f" >/dev/null 2>&1 || fail "Lua syntax error in ${f#"$releasedir/"}" ;;
-            *)     "$luabin" -e "assert(loadfile([[$f]]))" >/dev/null 2>&1 || fail "Lua syntax error in ${f#"$releasedir/"}" ;;
+            luac*)
+                if ! parser_output=$("$luabin" -p "$f" 2>&1); then
+                    fail "Lua syntax error in ${f#"$releasedir/"}"
+                    printf '    %s\n' "$parser_output" >&2
+                fi
+                ;;
+            *)
+                if ! parser_output=$("$luabin" -e "assert(loadfile([[$f]]))" 2>&1); then
+                    fail "Lua syntax error in ${f#"$releasedir/"}"
+                    printf '    %s\n' "$parser_output" >&2
+                fi
+                ;;
         esac
         parsed=$((parsed + 1))
     done < <(find "$releasedir" -name '*.lua' -type f)
@@ -99,12 +125,25 @@ for addon in Decursive Decursive_Options; do
 done
 
 # ---------------------------------------------------------------------------
-# 6. Licence must ship with the package.
+# 6. Each top-level addon must ship the licence.
 # ---------------------------------------------------------------------------
-if find "$releasedir" -maxdepth 2 -name 'LICENSE.txt' | grep -q .; then
-    note "LICENSE.txt present"
-else
-    fail "LICENSE.txt is missing from the package; check license-output in .pkgmeta."
+for addon in Decursive Decursive_Options; do
+    if [ -f "$releasedir/$addon/LICENSE.txt" ]; then
+        note "$addon/LICENSE.txt present"
+    else
+        fail "$addon/LICENSE.txt is missing; check license-output and move-folders in .pkgmeta."
+    fi
+done
+if [ -f "$releasedir/Decursive/LICENSE.txt" ] \
+    && [ -f "$releasedir/Decursive_Options/LICENSE.txt" ]; then
+    if ! cmp -s "$releasedir/Decursive/LICENSE.txt" "$releasedir/Decursive_Options/LICENSE.txt"; then
+        fail "the two packaged LICENSE.txt files differ."
+    elif ! grep -q 'GNU GENERAL PUBLIC LICENSE' "$releasedir/Decursive/LICENSE.txt" \
+        || ! grep -q 'Version 3, 29 June 2007' "$releasedir/Decursive/LICENSE.txt"; then
+        fail "the packaged LICENSE.txt files are not the GNU GPL version 3 text."
+    else
+        note "both addon licenses contain identical GPLv3 text"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -164,6 +203,7 @@ V11_*.md
 .editorconfig
 .docmeta
 .pkgmeta
+LICENSE
 PATTERNS
 [ "$leaked" -eq 0 ] && note "no source-only files leaked into the package"
 
@@ -172,9 +212,13 @@ if [ -d "$releasedir/Decursive/docs" ] || [ -d "$releasedir/docs" ]; then
     fail "the docs/ tree was packaged; it is repository-only."
 fi
 
+if [ -n "$(find "$releasedir" -type d -name .github -print -quit)" ]; then
+    fail ".github/ was packaged; release automation is repository-only."
+fi
+
 # The branding asset is source-only and is 612 KB, ~30% of an otherwise clean
 # download. It has shipped by accident before.
-if find "$releasedir" -type d -name branding | grep -q .; then
+if [ -n "$(find "$releasedir" -type d -name branding -print -quit)" ]; then
     fail "branding/ was packaged; it is source-only and no code references it."
 fi
 

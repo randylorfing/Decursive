@@ -1,7 +1,10 @@
 Decursive prior versions change logs
 ====================================
-***
-(For the latest version changes see WhatsNew.md.txt)
+
+This historical changelog is retained for project provenance. For current fork
+release notes, see [Zhaohu's Decursive v12.1.3](RELEASE_NOTES_v12.1.3.md). For
+current support, use [GitHub Issues](https://github.com/randylorfing/Decursive/issues).
+
 ***
 
 
@@ -61,7 +64,7 @@ Decursive 2.7.8.7 (2022-09-04)
 
 - TOC updates
 
-- Compatible with WotLK (if you find any issue, please create a [ticket](ticket).
+- Compatible with WotLK (if you find any issue, please create a [ticket][ticket]).
 
 
 Decursive 2.7.8.6 (2022-06-12)
@@ -1997,6 +2000,5 @@ localisation is not correct in Decursive 1.9.4)
 
 
 [ticket]: https://www.wowace.com/projects/decursive/issues
-[GithubReleasess]: https://github.com/2072/Decursive/releases
+[GithubReleases]: https://github.com/2072/Decursive/releases
 [BigwigsPackager]: https://github.com/BigWigsMods/packager
-

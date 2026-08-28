@@ -82,17 +82,17 @@ HAS THE SAME SIZE AS A MUF AND HIGHLIGHTS WHEN YOUR MOUSE POINTER IS OVER IT).
 
 
 
-[MUFs]: http://www.wowace.com/projects/decursive/pages/main/mufs "Micro Unit Frames"
-[MUF]: http://www.wowace.com/projects/decursive/pages/main/mufs "Micro Unit Frame"
-[FAQ]: http://www.wowace.com/projects/decursive/pages/main/faq "F.A.Q section"
-[mouse-over macro]: http://www.wowace.com/projects/decursive/pages/main/macro "Decursive's mouse-over macro documentation"
-[commands]: http://www.wowace.com/projects/decursive/pages/main/commands "Command lines"
-[user-actions]: http://www.wowace.com/projects/decursive/pages/main/user-actions "Decursive, user possible actions"
+[MUFs]: MUFs.md "Micro Unit Frames"
+[MUF]: MUFs.md "Micro Unit Frame"
+[FAQ]: faq.md "Frequently Asked Questions"
+[mouse-over macro]: macro.md "Decursive's mouse-over macro documentation"
+[commands]: commands.md "Command lines"
+[user-actions]: user-actions.md "Decursive user actions"
 
-[cureopts]: http://www.wowace.com/addons/decursive/images/12-decursives-option-panels-curing/
-[filteropts]: http://www.wowace.com/addons/decursive/images/11-decursives-option-panels-affliction-filtering/
-[prioskipopts]: http://www.wowace.com/addons/decursive/images/22-priority-and-skip-list-management-interface/
-[curseexemple1]: http://www.wowace.com/addons/decursive/images/7-curse-affliction-1/
-[mufsdisplayopts]: http://www.wowace.com/addons/decursive/images/19-decursives-option-panels-mufs-display/
-[mufscolors]: http://www.wowace.com/addons/decursive/images/18-decursives-option-panels-mufs-colors/
-[mufsmousebuttons]: http://www.wowace.com/addons/decursive/images/20-decursives-option-panels-mufs-mouse-buttons/
+[cureopts]: ../README.md#cure-priorities-and-mouse-bindings
+[filteropts]: ../README.md#priority-and-skip-lists
+[prioskipopts]: ../README.md#priority-and-skip-lists
+[curseexemple1]: ../README.md#micro-unit-frames-mufs
+[mufsdisplayopts]: ../README.md#micro-unit-frames-mufs
+[mufscolors]: ../README.md#micro-unit-frames-mufs
+[mufsmousebuttons]: ../README.md#cure-priorities-and-mouse-bindings
