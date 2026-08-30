@@ -25,7 +25,6 @@ local V13 = T.ZhaohuV13
 local UI = V13.Options
 local Controls = UI.Controls
 local Theme = V13.Theme
-local D = T.Dcr
 local RuntimeStatus = V13:GetModule("RuntimeStatus")
 
 UI:RegisterPage("ADVANCED", "Advanced", function(parent)
@@ -75,23 +74,23 @@ UI:RegisterPage("ADVANCED", "Advanced", function(parent)
     end)
 
     local tools = Controls:Card(page, "Safe tools",
-        "Diagnostics print public configuration and lifecycle state to chat.")
+        "Diagnostics open in Decursive's scrollable, copyable report window.")
     tools:SetPoint("TOPLEFT", runtime, "BOTTOMLEFT", 0, -12)
     tools:SetPoint("TOPRIGHT", runtime, "BOTTOMRIGHT", 0, -12)
     tools:SetHeight(175)
     local selfTest = Controls:Button(tools, "Run Self-Diagnostic", 175, function()
-        if T._SelfDiagnostic then
-            T._SelfDiagnostic(true, true)
-            UI:SetStatus("Self-diagnostic sent to chat.", "success")
+        if ZD and ZD.RunCopyableSelfDiagnostic and ZD:RunCopyableSelfDiagnostic() then
+            UI:SetStatus("Self-diagnostic opened in the copyable report window.", "success")
         else
-            UI:SetStatus("Self-diagnostic is unavailable.", "error")
+            UI:SetStatus("Copyable self-diagnostic is unavailable.", "error")
         end
     end, "primary")
     selfTest:SetPoint("TOPLEFT", 16, -68)
-    local status = Controls:Button(tools, "Print 12.1 Status", 160, function()
-        if D.Get121CompatibilityStatusText and D.Println then
-            D:Println(D:Get121CompatibilityStatusText())
-            UI:SetStatus("12.1 status sent to chat.", "success")
+    local status = Controls:Button(tools, "Open 12.1 Status", 160, function()
+        if ZD and ZD.ShowCopyableCompatibilityReport and ZD:ShowCopyableCompatibilityReport("Decursive 12.1 Status") then
+            UI:SetStatus("12.1 status opened in the copyable report window.", "success")
+        else
+            UI:SetStatus("Copyable 12.1 status is unavailable.", "error")
         end
     end)
     status:SetPoint("LEFT", selfTest, "RIGHT", 8, 0)

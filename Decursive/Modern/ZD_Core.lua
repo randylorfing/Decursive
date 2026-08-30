@@ -209,10 +209,220 @@ function ZD:GetProfiles()
     return profiles
 end
 
+local function validProfileName(name)
+    return type(name) == "string"
+        and name ~= ""
+        and #name <= 48
+        and name:find("[%z\1-\31\127]") == nil
+end
+
+local function profileExists(name)
+    if type(name) ~= "string" or name == "" then return false end
+    for _, profileName in ipairs(ZD:GetProfiles()) do
+        if profileName == name then return true end
+    end
+    return false
+end
+
+local function getProfileManager()
+    local saved = D.db and D.db.sv
+    if type(saved) ~= "table" then return nil end
+    saved.profileManager = type(saved.profileManager) == "table" and saved.profileManager or {
+        schemaVersion = 1,
+        accountDefault = "Default",
+        characterAssignments = {},
+    }
+    local manager = saved.profileManager
+    manager.characterAssignments = type(manager.characterAssignments) == "table" and manager.characterAssignments or {}
+    manager.specializationAssignments = type(manager.specializationAssignments) == "table"
+        and manager.specializationAssignments or {}
+    if not profileExists(manager.accountDefault) then manager.accountDefault = "Default" end
+    return manager
+end
+
+local function getCharacterKey()
+    return D.db and D.db.keys and D.db.keys.char or nil
+end
+
+local function dualSpecEnabled()
+    return D.db and D.db.IsDualSpecEnabled and D.db:IsDualSpecEnabled() == true
+end
+
+local function getCurrentSpecIndex()
+    local getSpecialization = _G.GetSpecialization
+    if type(getSpecialization) == "function" then
+        local spec = getSpecialization()
+        if type(spec) == "number" and spec > 0 then return spec end
+    end
+    local specializationAPI = _G.C_SpecializationInfo
+    local getActiveSpecGroup = type(specializationAPI) == "table" and specializationAPI.GetActiveSpecGroup
+    if type(getActiveSpecGroup) == "function" then
+        local spec = getActiveSpecGroup()
+        if type(spec) == "number" and spec > 0 then return spec end
+    end
+    return nil
+end
+
+local function getDualSpecCharacters()
+    local namespaces = D.db and D.db.sv and D.db.sv.namespaces
+    local dualSpec = type(namespaces) == "table" and namespaces["LibDualSpec-1.0"] or nil
+    local characters = type(dualSpec) == "table" and dualSpec.char or nil
+    return type(characters) == "table" and characters or nil
+end
+
+local function getCharacterSpecAssignments(manager, characterKey, create)
+    if not manager or not characterKey then return nil end
+    local assignments = manager.specializationAssignments[characterKey]
+    if type(assignments) ~= "table" and create then
+        assignments = {}
+        manager.specializationAssignments[characterKey] = assignments
+    end
+    return type(assignments) == "table" and assignments or nil
+end
+
+local function replaceDualSpecAssignments(profileName, replacementName)
+    local manager = getProfileManager()
+    local function replaceIn(characters)
+        if type(characters) == "table" then
+            for _, record in pairs(characters) do
+                if type(record) == "table" then
+                    for spec, assigned in pairs(record) do
+                        if type(spec) == "number" and assigned == profileName then
+                            record[spec] = replacementName
+                        end
+                    end
+                end
+            end
+        end
+    end
+    replaceIn(getDualSpecCharacters())
+    replaceIn(manager and manager.specializationAssignments)
+end
+
+local function cleanDeletedDualSpecAssignments(profileName)
+    replaceDualSpecAssignments(profileName, nil)
+end
+
+function ZD:GetProfileAssignments()
+    local manager = getProfileManager()
+    local characterKey = getCharacterKey()
+    local characterProfile = manager and characterKey and manager.characterAssignments[characterKey] or nil
+    local spec = getCurrentSpecIndex()
+    local specAssignments = getCharacterSpecAssignments(manager, characterKey, false)
+    local specProfile = specAssignments and spec and specAssignments[spec] or nil
+    local runtimeCharacters = getDualSpecCharacters()
+    local runtimeRecord = runtimeCharacters and characterKey and runtimeCharacters[characterKey] or nil
+    if dualSpecEnabled() and type(runtimeRecord) == "table" and spec then
+        specProfile = runtimeRecord[spec]
+    end
+    return {
+        account = manager and manager.accountDefault or "Default",
+        character = characterProfile,
+        characterKey = characterKey,
+        perSpecEnabled = dualSpecEnabled(),
+        spec = specProfile,
+        active = self:GetUserProfileName(),
+    }
+end
+
+function ZD:SetAccountProfile(name)
+    if not self:CanConfigure() or not profileExists(name) then return false end
+    local manager = getProfileManager()
+    if not manager then return false end
+    local characterKey = getCharacterKey()
+    local inheritsAccount = characterKey and manager.characterAssignments[characterKey] == nil
+    manager.accountDefault = name
+    if inheritsAccount and not dualSpecEnabled() then D.db:SetProfile(name) end
+    self:SetStatus("Account default profile set to " .. name .. ".")
+    return true
+end
+
+function ZD:SetCharacterProfile(name)
+    if not self:CanConfigure() then return false end
+    local manager = getProfileManager()
+    local characterKey = getCharacterKey()
+    if not manager or not characterKey then return false end
+    if name ~= nil and not profileExists(name) then return false end
+    manager.characterAssignments[characterKey] = name
+    if not dualSpecEnabled() then D.db:SetProfile(name or manager.accountDefault) end
+    self:SetStatus(name and ("Character profile set to " .. name .. ".") or "Character now uses the account default profile.")
+    return true
+end
+
+function ZD:SetSpecProfilesEnabled(enabled)
+    if not self:CanConfigure() or not D.db or not D.db.SetDualSpecEnabled then return false end
+    local requested = enabled == true
+    if requested == dualSpecEnabled() then return true end
+    local manager = getProfileManager()
+    local characterKey = getCharacterKey()
+    local savedSpecs = getCharacterSpecAssignments(manager, characterKey, true)
+    if not manager or not characterKey or not savedSpecs then return false end
+    local characters = getDualSpecCharacters()
+    local runtimeRecord = characters and characterKey and characters[characterKey] or nil
+    if not requested and type(runtimeRecord) == "table" then
+        for spec in pairs(savedSpecs) do
+            if type(spec) == "number" then savedSpecs[spec] = nil end
+        end
+        for spec, profileName in pairs(runtimeRecord) do
+            if type(spec) == "number" and profileExists(profileName) then savedSpecs[spec] = profileName end
+        end
+    end
+    D.db:SetDualSpecEnabled(requested)
+    if requested then
+        runtimeRecord = characters and characterKey and characters[characterKey] or nil
+        if type(runtimeRecord) == "table" then
+            for spec in pairs(runtimeRecord) do
+                if type(spec) == "number" then runtimeRecord[spec] = nil end
+            end
+            for spec, profileName in pairs(savedSpecs) do
+                if type(spec) == "number" and profileExists(profileName) then runtimeRecord[spec] = profileName end
+            end
+        end
+        if D.db.CheckDualSpecState then D.db:CheckDualSpecState() end
+    else
+        local profileName = manager and characterKey and manager.characterAssignments[characterKey]
+            or manager and manager.accountDefault
+            or "Default"
+        D.db:SetProfile(profileName)
+    end
+    self:SetStatus(requested and "Specialization profiles enabled." or "Specialization profiles disabled.")
+    return true
+end
+
+function ZD:SetCurrentSpecProfile(name)
+    if not self:CanConfigure() or (name ~= nil and not profileExists(name))
+        or not D.db or not D.db.SetDualSpecProfile
+    then
+        return false
+    end
+    local manager = getProfileManager()
+    local characterKey = getCharacterKey()
+    local spec = getCurrentSpecIndex()
+    local savedSpecs = getCharacterSpecAssignments(manager, characterKey, true)
+    if not spec or not savedSpecs then return false end
+    savedSpecs[spec] = name
+    D.db:SetDualSpecProfile(name)
+    if name == nil then
+        local fallbackName = manager.characterAssignments[characterKey] or manager.accountDefault
+        D.db:SetProfile(fallbackName)
+        self:SetStatus("Current specialization now uses its character or account fallback.")
+    else
+        self:SetStatus("Current specialization profile set to " .. name .. ".")
+    end
+    return true
+end
+
 function ZD:SetUserProfile(name)
     if not self:CanConfigure() then return false end
-    if type(name) ~= "string" or name == "" then return false end
-    D.db:SetProfile(name)
+    if not profileExists(name) then return false end
+    if dualSpecEnabled() and D.db.SetDualSpecProfile then
+        if not self:SetCurrentSpecProfile(name) then return false end
+    else
+        local manager = getProfileManager()
+        local characterKey = getCharacterKey()
+        if manager and characterKey then manager.characterAssignments[characterKey] = name end
+        D.db:SetProfile(name)
+    end
     self:SetStatus("Profile switched to " .. name .. ".")
     return true
 end
@@ -220,11 +430,16 @@ end
 function ZD:CreateUserProfile(name)
     if not self:CanConfigure() then return false end
     name = type(name) == "string" and name:gsub("^%s+", ""):gsub("%s+$", "") or ""
-    if name == "" then
-        self:SetStatus("Enter a profile name first.", true)
+    if not validProfileName(name) then
+        self:SetStatus("Enter a profile name from 1 to 48 characters without control characters.", true)
         return false
     end
-    D.db:SetProfile(name)
+    if not profileExists(name) and #self:GetProfiles() >= 50 then
+        self:SetStatus("The account profile limit of 50 has been reached.", true)
+        return false
+    end
+    if not profileExists(name) then D.db:SetProfile(name) end
+    self:SetUserProfile(name)
     self:SetStatus("Created profile " .. name .. ".")
     return true
 end
@@ -233,8 +448,8 @@ end
 function ZD:CloneCurrentProfile(newName)
     if not self:CanConfigure() then return false end
     newName = type(newName) == "string" and newName:gsub("^%s+", ""):gsub("%s+$", "") or ""
-    if newName == "" then
-        self:SetStatus("Enter a new profile name first.", true)
+    if not validProfileName(newName) then
+        self:SetStatus("Enter a new profile name from 1 to 48 characters.", true)
         return false
     end
     local source = self:GetUserProfileName()
@@ -242,9 +457,20 @@ function ZD:CloneCurrentProfile(newName)
         self:SetStatus("Choose a different name for the copy.", true)
         return false
     end
+    if profileExists(newName) then
+        self:SetStatus("A profile with that name already exists.", true)
+        return false
+    end
+    if #self:GetProfiles() >= 50 then
+        self:SetStatus("The account profile limit of 50 has been reached.", true)
+        return false
+    end
     D.db:SetProfile(newName)
+    self:SetUserProfile(newName)
     local ok, err = pcall(D.db.CopyProfile, D.db, source)
     if not ok then
+        self:SetUserProfile(source)
+        pcall(D.db.DeleteProfile, D.db, newName)
         self:SetStatus("Could not copy profile: " .. tostring(err), true)
         return false
     end
@@ -268,6 +494,104 @@ function ZD:ResetUserProfile()
     if not self:CanConfigure() then return false end
     D.db:ResetProfile()
     self:SetStatus("Current profile reset to defaults.")
+    return true
+end
+
+function ZD:RenameCurrentProfile(newName)
+    if not self:CanConfigure() then return false end
+    newName = type(newName) == "string" and newName:gsub("^%s+", ""):gsub("%s+$", "") or ""
+    if not validProfileName(newName) then
+        self:SetStatus("Enter a new profile name from 1 to 48 characters.", true)
+        return false
+    end
+
+    local sourceName = self:GetUserProfileName()
+    if sourceName == "Default" then
+        self:SetStatus("The built-in Default profile cannot be renamed.", true)
+        return false
+    end
+    if profileExists(newName) then
+        self:SetStatus("A profile with that name already exists.", true)
+        return false
+    end
+
+    D.db:SetProfile(newName)
+    local copied, copyError = pcall(D.db.CopyProfile, D.db, sourceName)
+    if not copied then
+        D.db:SetProfile(sourceName)
+        pcall(D.db.DeleteProfile, D.db, newName)
+        self:SetStatus("Could not rename profile: " .. tostring(copyError), true)
+        return false
+    end
+
+    local manager = getProfileManager()
+    if not manager then
+        D.db:SetProfile(sourceName)
+        pcall(D.db.DeleteProfile, D.db, newName)
+        return false
+    end
+    if manager.accountDefault == sourceName then manager.accountDefault = newName end
+    for characterKey, assigned in pairs(manager.characterAssignments) do
+        if assigned == sourceName then manager.characterAssignments[characterKey] = newName end
+    end
+    replaceDualSpecAssignments(sourceName, newName)
+
+    local deleted, deleteError = pcall(D.db.DeleteProfile, D.db, sourceName)
+    if not deleted then
+        if manager.accountDefault == newName then manager.accountDefault = sourceName end
+        for characterKey, assigned in pairs(manager.characterAssignments) do
+            if assigned == newName then manager.characterAssignments[characterKey] = sourceName end
+        end
+        replaceDualSpecAssignments(newName, sourceName)
+        D.db:SetProfile(sourceName)
+        pcall(D.db.DeleteProfile, D.db, newName)
+        self:SetStatus("Could not rename profile: " .. tostring(deleteError), true)
+        return false
+    end
+
+    self:SetStatus("Renamed profile " .. sourceName .. " to " .. newName .. ".")
+    return true
+end
+
+function ZD:HandleDeletedProfileAssignments(name)
+    if type(name) ~= "string" or name == "" then return false end
+    local manager = getProfileManager()
+    if not manager then return false end
+    if manager.accountDefault == name then manager.accountDefault = "Default" end
+    for characterKey, assigned in pairs(manager.characterAssignments) do
+        if assigned == name then manager.characterAssignments[characterKey] = nil end
+    end
+    cleanDeletedDualSpecAssignments(name)
+    return true
+end
+
+function ZD:DeleteUserProfile(name)
+    if not self:CanConfigure() then return false end
+    if name == "Default" then
+        self:SetStatus("The built-in Default profile cannot be deleted.", true)
+        return false
+    end
+    if not profileExists(name) then
+        self:SetStatus("The selected profile no longer exists.", true)
+        return false
+    end
+
+    if not self:HandleDeletedProfileAssignments(name) then return false end
+    local manager = getProfileManager()
+
+    if self:GetUserProfileName() == name then
+        local characterKey = getCharacterKey()
+        local fallbackName = characterKey and manager.characterAssignments[characterKey]
+            or manager.accountDefault
+        D.db:SetProfile(fallbackName)
+    end
+
+    local ok, err = pcall(D.db.DeleteProfile, D.db, name)
+    if not ok then
+        self:SetStatus("Could not delete profile: " .. tostring(err), true)
+        return false
+    end
+    self:SetStatus("Deleted profile " .. name .. ". Assignments using it now use their fallback.")
     return true
 end
 

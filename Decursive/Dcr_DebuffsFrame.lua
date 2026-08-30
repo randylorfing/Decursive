@@ -31,6 +31,12 @@
 -------------------------------------------------------------------------------
 
 local addonName, T = ...;
+local function StartupMarkerState(fileName)
+    local marker = T._LoadedFiles and T._LoadedFiles[fileName]
+    if marker == nil then return fileName .. "=not-started" end
+    if marker == false then return fileName .. "=started-not-completed" end
+    return fileName .. "=completed"
+end
 
 -- big ugly scary fatal error message display function {{{
 if not T._FatalError then
@@ -52,11 +58,13 @@ end
 -- }}}
 
 if not T._LoadedFiles or not T._LoadedFiles["Dcr_lists.xml"] or not T._LoadedFiles["Dcr_lists.lua"] then -- XML are loaded even if LUA syntax errors exixts
-    if not DecursiveInstallCorrupted then T._FatalError("Decursive installation is corrupted! (Dcr_lists.xml or Dcr_lists.lua not loaded)"); end;
+    T._StartupFailureDetails = "Startup markers: " .. StartupMarkerState("Dcr_lists.lua") .. ", " .. StartupMarkerState("Dcr_lists.xml")
+    if not DecursiveInstallCorrupted then T._FatalError("Decursive installation is corrupted! (Dcr_lists.xml or Dcr_lists.lua not loaded)\n\n" .. T._StartupFailureDetails); end;
     DecursiveInstallCorrupted = true;
     return;
 end
 T._LoadedFiles["Dcr_DebuffsFrame.lua"] = false;
+T._StartupActiveFile = "Dcr_DebuffsFrame.lua"
 
 local D   = T.Dcr;
 
@@ -2320,5 +2328,6 @@ local MF_Textures = { -- unused
 -- }}}
 
 T._LoadedFiles["Dcr_DebuffsFrame.lua"] = "@project-version@";
+if T._StartupActiveFile == "Dcr_DebuffsFrame.lua" then T._StartupActiveFile = nil end
 
 -- Heresy

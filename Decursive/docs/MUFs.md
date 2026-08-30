@@ -36,6 +36,12 @@ manages the button mapping automatically.
  - **Black**: the unit has been blacklisted because it was *out of line of sight* when you
    tried to cure it, the time in blacklist can be change in the options.
 
+ - **Black with a white skull**: the player is dead. If Emergency Soul Link is
+   the active resurrection fallback and ready, the square becomes **green** in
+   range or **yellow** out of range. The item must be in carried bags, and the
+   item itself or a simple `/use item:269586` macro must occupy any real action
+   bar slot for passive range colors. Hidden and unselected bar pages work.
+
 *The information above are also indicated by tool-tips in the game when you hover the MUFs.*
 
 *MUFs display is done according to your settings*, **you can change every aspects

@@ -1,17 +1,19 @@
 name: Check and build addon
 
-# Verification runs for pull requests, master, version tags, and manual
+# Verification runs for pull requests, master, alpha, version tags, and manual
 # rehearsals. Publishing is still driven only by version tags, and the
 # credential-carrying job remains behind a tag-only gate.
 on:
   push:
     branches:
       - master
+      - alpha
     tags:
       - 'v*'
   pull_request:
     branches:
       - master
+      - alpha
   # Manual rehearsal. Running this from the Actions tab executes `verify` only:
   # the `release` job requires a pushed tag below, so a dispatch can lint,
   # package and validate without any possibility of publishing, even when its

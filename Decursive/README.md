@@ -193,11 +193,17 @@ Both lists can be managed from **All Settings > Priority & Skip** or with slash 
 
 ## Optional battle resurrection
 
-When **Battle rez on dead allies** is enabled, clicking a dead ally's MUF tries a known class battle-resurrection spell first. If no class battle rez is available, it can fall back to the Midnight Engineering **Emergency Soul Link** item when usable.
+When **Battle rez on dead allies** is enabled, clicking a dead ally's MUF tries a known class battle-resurrection spell first. If no class battle rez is available, it can fall back to the Midnight Engineering **Emergency Soul Link** item when the item is physically present in your carried bags.
+
+For passive Soul Link range colors, put the item itself or a simple `/use item:269586` macro in any real action-bar slot. The slot may be on a hidden or currently unselected action-bar page and does not need a key binding. Decursive never creates a macro, moves an action, or takes over a slot. A ready Soul Link colors a dead player's MUF green within range and yellow outside range; no qualifying slot, an unavailable item, or a real cooldown leaves the normal black square and white skull.
 
 Soulstone is not used because it is a pre-placement effect. Combat-resurrection charges remain governed by WoW.
 
 Use `/dcrsoullink` to toggle this feature.
+
+If the passive colors do not appear, use `/dcrsoullinkstatus` after reproducing
+the problem. Its copyable window reports only unit tokens and safe state
+categories; it never includes player names, GUIDs, macro text, or secret values.
 
 ## Slash commands
 

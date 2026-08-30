@@ -3383,6 +3383,30 @@ function ZD:BuildCompatibility121(parent)
     return self:BuildOptionGroupPage(parent, "Compatibility121", "12.1 Status", "Managed-aura status, dispel resolver refresh and safe MUF visual test controls.")
 end
 
+function ZD:ShowCopyableCompatibilityReport(title, prefix)
+    local report = "12.1 compatibility status is unavailable."
+    if D.Get121CompatibilityStatusText then
+        local ok, value = pcall(D.Get121CompatibilityStatusText, D)
+        if ok and type(value) == "string" then report = value end
+    end
+    if type(prefix) == "string" and prefix ~= "" then report = prefix .. "\n\n" .. report end
+    if T._ShowCopyableDiagnostic then
+        local ok, shown = pcall(T._ShowCopyableDiagnostic, title or "Decursive Compatibility Report", report)
+        if ok and shown == true then return true end
+    end
+    return false, report
+end
+
+function ZD:RunCopyableSelfDiagnostic()
+    if type(T._SelfDiagnostic) ~= "function" then return false end
+    local ok, status = pcall(T._SelfDiagnostic, true, false)
+    if not ok then return false end
+    local summary = status == 0 and "Self-diagnostic completed without installation errors."
+        or status == 1 and "Self-diagnostic completed with non-fatal installation warnings."
+        or "Self-diagnostic found a fatal installation problem."
+    return self:ShowCopyableCompatibilityReport("Decursive Self-Diagnostic", summary)
+end
+
 function ZD:BuildDiagnostics(parent)
     local p = pageFrame(parent)
     self:PageTitle(p, "Diagnostics", "Check the compatibility state without reading protected aura details.")
@@ -3393,11 +3417,11 @@ function ZD:BuildDiagnostics(parent)
 
     local actions = section(p, "Tools", -316, 150)
     local a1 = button(actions, "Run Self-Diagnostic", 180, 30, function()
-        if T._SelfDiagnostic then T._SelfDiagnostic(true, true) end
+        ZD:RunCopyableSelfDiagnostic()
     end, "primary")
     a1:SetPoint("TOPLEFT", 18, -50)
-    local a2 = button(actions, "Print 12.1 Status", 170, 30, function()
-        if D.Get121CompatibilityStatusText then D:Println(D:Get121CompatibilityStatusText()) end
+    local a2 = button(actions, "Open 12.1 Status", 170, 30, function()
+        ZD:ShowCopyableCompatibilityReport("Decursive 12.1 Status")
     end)
     a2:SetPoint("LEFT", a1, "RIGHT", 12, 0)
     local a3 = button(actions, "Reload UI", 120, 30, function() ReloadUI() end)

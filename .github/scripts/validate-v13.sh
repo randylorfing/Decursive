@@ -48,6 +48,16 @@ fi
     || fail 'The smart resurrection behavior harness is missing.'
 [ -f .github/scripts/test-soul-link-visual.lua ] \
     || fail 'The Emergency Soul Link visual behavior harness is missing.'
+[ -f .github/scripts/test-muf-aura-binding.lua ] \
+    || fail 'The MUF native-owner binding behavior harness is missing.'
+[ -f .github/scripts/test-muf-state-safety.lua ] \
+    || fail 'The MUF state-safety behavior harness is missing.'
+[ -f .github/scripts/test-live-list-startup-sentinels.lua ] \
+    || fail 'The LiveList startup sentinel behavior harness is missing.'
+[ -f .github/scripts/test-dcr-12-1-local-budget.lua ] \
+    || fail 'The Dcr_12_1 local-budget regression harness is missing.'
+[ -f .github/scripts/test-profile-manager.lua ] \
+    || fail 'The profile migration and assignment regression harness is missing.'
 
 verify_block=$(sed -n '/^  verify:/,/^  release:/p' "$release_workflow")
 release_block=$(sed -n '/^  release:/,$p' "$release_workflow")
@@ -232,7 +242,7 @@ if [ ! -f LICENSE ] \
     || ! rg -q --fixed-strings 'Version 3, 29 June 2007' LICENSE; then
     fail 'The repository-root LICENSE must be the complete GPLv3 text shipped in Decursive/LICENSE.txt.'
 fi
-if ! rg -q '^[[:space:]]+- LICENSE$' .pkgmeta; then
+if ! rg -q '^[[:space:]]+- LICENSE\r?$' .pkgmeta; then
     fail 'The repository-root LICENSE must be ignored from addon packages.'
 fi
 
@@ -280,6 +290,28 @@ if ! rg -q --fixed-strings 'function Controls:Apply(labelText, setter, value)' D
     || ! rg -q --fixed-strings 'if result == false then' Decursive_Options/Modern/ZD_UI.lua \
     || ! rg -q --fixed-strings 'return apply()' Decursive_Options/Modern/ZD_UI.lua; then
     fail 'V13 controls do not report backend rejection or apply failure.'
+fi
+if ! rg -q --fixed-strings 'local MAX_SEARCH_RESULTS = 6' Decursive_Options/V13/Shell.lua \
+    || ! rg -q --fixed-strings 'ZD:FindSearchResults(query, MAX_SEARCH_RESULTS)' Decursive_Options/V13/Shell.lua \
+    || ! rg -q --fixed-strings 'UI:OpenLegacyRoute(result.page)' Decursive_Options/V13/Shell.lua \
+    || ! rg -q --fixed-strings 'if key == "UP" then UI:MoveSearchSelection(-1) end' Decursive_Options/V13/Shell.lua \
+    || ! rg -q --fixed-strings 'key == "F" and IsControlKeyDown and IsControlKeyDown()' Decursive_Options/V13/Shell.lua; then
+    fail 'The V13 search dropdown is missing bounded result routing or keyboard navigation.'
+fi
+if ! rg -q --fixed-strings 'function Controls:Toggle(card, labelText, description, getter, setter, enabledGetter)' Decursive_Options/V13/Controls.lua \
+    || ! rg -q --fixed-strings 'function Controls:Cycle(card, labelText, valuesGetter, getter, setter, enabledGetter)' Decursive_Options/V13/Controls.lua \
+    || ! rg -q --fixed-strings 'if self.controlEnabled == false then return end' Decursive_Options/V13/Controls.lua \
+    || ! rg -q --fixed-strings 'end, soundEnabled)' Decursive_Options/V13/Pages/Alerts.lua \
+    || ! rg -q --fixed-strings 'cooldownOverlayEnabled)' Decursive_Options/V13/Pages/Alerts.lua; then
+    fail 'V13 dependent alert controls are not visibly disabled or mutation-safe.'
+fi
+if rg -n --fixed-strings 'D:Println' Decursive_Options/V13/Pages/Advanced.lua Decursive_Options/Modern/ZD_UI.lua; then
+    fail 'Options diagnostics must use the copyable diagnostic window, never chat output.'
+fi
+if ! rg -q --fixed-strings 'function ZD:ShowCopyableCompatibilityReport(title, prefix)' Decursive_Options/Modern/ZD_UI.lua \
+    || ! rg -q --fixed-strings 'T._ShowCopyableDiagnostic' Decursive_Options/Modern/ZD_UI.lua \
+    || ! rg -q --fixed-strings 'ZD:RunCopyableSelfDiagnostic()' Decursive_Options/V13/Pages/Advanced.lua; then
+    fail 'V13 diagnostics no longer route through the copyable report window.'
 fi
 
 protected_pattern='CreateUnitAuraContainer|CreateUnitAuraSlots|AddAuraGroup|AddAuraSlot|SetDispelTypeText|SetDurationText'
@@ -386,6 +418,13 @@ if ! rg -q --fixed-strings 'local function nativeConfigurationBlocked()' Decursi
     || ! rg -q --fixed-strings 'local function nativeAuraDisplayMutationBlocked()' Decursive/Dcr_12_1.lua \
     || ! rg -q --fixed-strings 'return D.HasActiveAddonRestriction and D:HasActiveAddonRestriction() or false' Decursive/Dcr_12_1.lua; then
     fail 'AuraContainer lifecycle and post-initialization display restrictions are not separated.'
+fi
+
+if ! rg -q --fixed-strings 'DCR_NATIVE_MUF_BINDING_V1_BEGIN' Decursive/Dcr_12_1.lua \
+    || ! rg -q --fixed-strings 'rebindNativeManagedAuraOwners(MF, expectedUnit, true)' Decursive/Dcr_12_1.lua \
+    || ! rg -q --fixed-strings 'refreshNativeCarrierFilters(MF)' Decursive/Dcr_12_1.lua \
+    || ! rg -q --fixed-strings 'Native owner binding issues (public addon-owned tokens only):' Decursive/Dcr_12_1.lua; then
+    fail 'The MUF native-owner binding, lifecycle restore, or copyable diagnostic invariant is missing.'
 fi
 
 if ! rg -q --fixed-strings 'if not DC.TWELVEONE and debuffs[1] then' Decursive/Dcr_DebuffsFrame.lua; then
@@ -539,6 +578,11 @@ done
 if [ -n "$lua_runner" ]; then
     "$lua_runner" .github/scripts/test-smart-rez.lua || status=1
     "$lua_runner" .github/scripts/test-soul-link-visual.lua || status=1
+    "$lua_runner" .github/scripts/test-muf-aura-binding.lua || status=1
+    "$lua_runner" .github/scripts/test-muf-state-safety.lua || status=1
+    "$lua_runner" .github/scripts/test-live-list-startup-sentinels.lua || status=1
+    "$lua_runner" .github/scripts/test-dcr-12-1-local-budget.lua || status=1
+    "$lua_runner" .github/scripts/test-profile-manager.lua || status=1
 else
     echo 'INFO: no local Lua runtime is available; CI installs Lua 5.4 for behavior harnesses.'
 fi

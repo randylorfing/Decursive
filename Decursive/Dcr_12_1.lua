@@ -38,24 +38,17 @@ local CreateFrame = _G.CreateFrame
 local InCombatLockdown = _G.InCombatLockdown
 local C_Timer = _G.C_Timer
 local C_Spell = _G.C_Spell
-local C_UnitAuras = _G.C_UnitAuras
 local unpack = _G.unpack
 local pairs = _G.pairs
 local type = _G.type
 local tostring = _G.tostring
-local UnitClass = _G.UnitClass
 local UnitInRange = _G.UnitInRange
 local canaccessvalue = _G.canaccessvalue or function(_) return true end
 local issecretvalue = _G.issecretvalue
 local CreateColor = _G.CreateColor
-local GetSpecialization = _G.GetSpecialization
-local GetSpecializationInfo = _G.GetSpecializationInfo
-local GetBuildInfo = _G.GetBuildInfo
 local GetTime = _G.GetTime
 local IsInInstance = _G.IsInInstance
 local modernSecureUIRunning = true
-
-local PATCH_VERSION = "@project-version@"
 
 local function isAccessiblePublicValue(value)
     if issecretvalue and issecretvalue(value) then return false end
@@ -93,11 +86,132 @@ local function safe(label, fn, ...)
     return true, a, b, c
 end
 
+-- DCR_NATIVE_MUF_BINDING_V1_BEGIN
+-- MUFs are allocated for fixed public unit tokens. Keep that token authoritative
+-- for every Blizzard-managed carrier owned by the MUF. Aura membership remains
+-- entirely native and is never read back into addon Lua.
+local function publicUnitToken(value)
+    if not isAccessiblePublicValue(value) or type(value) ~= "string" or value == "" then return nil end
+    return value
+end
+
+local function establishExpectedMUFUnit(MF, candidate)
+    if not MF then return nil end
+    local current = publicUnitToken(MF.CurrUnit)
+    local recorded = publicUnitToken(MF.Decursive121ExpectedUnit)
+    local requested = publicUnitToken(candidate)
+    -- CurrUnit is assigned by the original fixed-token MUF constructor. The
+    -- stored value is diagnostic metadata, never a second source of truth.
+    local expected = current or recorded or requested
+    if recorded and expected and recorded ~= expected then MF.Decursive121RejectedUnit = recorded end
+    if requested and expected and requested ~= expected then MF.Decursive121RejectedUnit = requested end
+    if expected then MF.Decursive121ExpectedUnit = expected end
+    return expected
+end
+
+local function collectNativeManagedCarriers(MF)
+    local carriers = {}
+    if not MF then return carriers end
+    if MF.ManagedAuraContainer then
+        carriers[#carriers + 1] = { container = MF.ManagedAuraContainer, role = "detector" }
+    end
+    for priority = 1, 3 do
+        local gate = MF.Decursive121PriorityGateContainers
+            and MF.Decursive121PriorityGateContainers[priority]
+        if gate then
+            carriers[#carriers + 1] = { container = gate, role = "cooldown-" .. tostring(priority) }
+        end
+        local verifier = MF.Decursive121VerificationNativeContainers
+            and MF.Decursive121VerificationNativeContainers[priority]
+        if verifier then
+            carriers[#carriers + 1] = { container = verifier, role = "verification-" .. tostring(priority) }
+        end
+    end
+    return carriers
+end
+
+local function setNativeContainerEnabled(container, enabled)
+    if not container then return true end
+    if enabled then
+        -- Restore native processing before making the carrier subtree visible.
+        if container.SetEnabled and not safe("Lifecycle native enable", container.SetEnabled, container, true) then
+            return false
+        end
+        if container.Show and not safe("Lifecycle native Show", container.Show, container) then return false end
+    else
+        if container.SetEnabled then safe("Lifecycle native disable", container.SetEnabled, container, false) end
+        if container.Hide then safe("Lifecycle native Hide", container.Hide, container) end
+    end
+    return true
+end
+
+local function bindNewNativeContainer(MF, container, candidate, role)
+    local expected = establishExpectedMUFUnit(MF, candidate)
+    if not expected or not container or not container.SetUnit then
+        if MF then MF.Decursive121NativeBindingValid = false end
+        return false
+    end
+    if not safe("Native " .. role .. " SetUnit", container.SetUnit, container, expected) then
+        MF.Decursive121NativeBindingValid = false
+        return false
+    end
+    container.Decursive121ExpectedUnit = expected
+    container.Decursive121BindingRole = role
+    return true
+end
+
+local function rebindNativeManagedAuraOwners(MF, candidate, force)
+    if not MF or nativeConfigurationBlocked() then return false end
+    local expected = establishExpectedMUFUnit(MF, candidate)
+    if not expected then
+        MF.Decursive121NativeBindingValid = false
+        return false
+    end
+
+    local carriers = collectNativeManagedCarriers(MF)
+    local rebound = {}
+    local valid = true
+    local repairInvalidBank = MF.Decursive121NativeBindingValid == false
+    for i = 1, #carriers do
+        local item = carriers[i]
+        local container = item.container
+        local bound = publicUnitToken(container.Decursive121ExpectedUnit)
+        local needsBinding = force == true or repairInvalidBank or bound ~= expected
+        if needsBinding then
+            if not container.SetUnit
+                or not safe("Native " .. item.role .. " atomic SetUnit", container.SetUnit, container, expected)
+            then
+                valid = false
+                break
+            end
+            rebound[#rebound + 1] = item
+        end
+    end
+
+    if not valid then
+        -- SetUnit cannot be rolled back reliably. Fail closed across the whole
+        -- owner so a partially rebound carrier bank cannot fan one aura out.
+        for i = 1, #carriers do setNativeContainerEnabled(carriers[i].container, false) end
+        MF.Decursive121NativeBindingValid = false
+        return false
+    end
+
+    for i = 1, #carriers do
+        local item = carriers[i]
+        item.container.Decursive121ExpectedUnit = expected
+        item.container.Decursive121BindingRole = item.role
+    end
+    MF.Decursive121NativeBindingValid = true
+    if #rebound > 0 then
+        MF.Decursive121NativeBindingGeneration = (MF.Decursive121NativeBindingGeneration or 0) + 1
+    end
+    return true
+end
+-- DCR_NATIVE_MUF_BINDING_V1_END
+
 -- ---------------------------------------------------------------------------
 -- Dispel detection provider (native Blizzard-managed AuraContainer only)
 -- ---------------------------------------------------------------------------
-local PROVIDER_NATIVE = "NATIVE"
-
 function D:Get121DispelDetectionProviderStatus()
     return {
         configuredEnabled = false,
@@ -105,7 +219,7 @@ function D:Get121DispelDetectionProviderStatus()
         automaticSelection = false,
         userSet = false,
         configuredAtLatch = false,
-        sessionProvider = PROVIDER_NATIVE,
+        sessionProvider = "NATIVE",
         available = true,
         active = true,
         reloadRequired = false,
@@ -119,8 +233,6 @@ end
 -- ---------------------------------------------------------------------------
 -- Environment profiles (Raid / Mythic+ / Dungeon / PvP / Open World)
 -- ---------------------------------------------------------------------------
-
-local C_ChallengeMode = _G.C_ChallengeMode
 
 local ENVIRONMENT_NAMES = {
     RAID = "Raid",
@@ -335,8 +447,9 @@ local function detectAutomaticEnvironment()
                 return "RAID"
             end
             if instanceType == "party" then
-                if C_ChallengeMode and C_ChallengeMode.GetActiveChallengeMapID then
-                    local ok, mapID = pcall(C_ChallengeMode.GetActiveChallengeMapID)
+                local challengeMode = _G.C_ChallengeMode
+                if challengeMode and challengeMode.GetActiveChallengeMapID then
+                    local ok, mapID = pcall(challengeMode.GetActiveChallengeMapID)
                     if ok and isAccessiblePublicValue(mapID) and type(mapID) == "number" and mapID > 0 then
                         return "MYTHIC_PLUS"
                     end
@@ -549,14 +662,6 @@ T._MUFDeath121 = {
     UnitIsDeadOrGhost = _G.UnitIsDeadOrGhost,
 }
 local managedCooldownDurationObjects = { [1] = nil, [2] = nil, [3] = nil }
-
-local function getAlertColor()
-    local c = D.profile and D.profile.MF_colors and D.profile.MF_colors[1]
-    if type(c) == "table" then
-        return c[1] or .8, c[2] or 0, c[3] or 0, c[4] or 1
-    end
-    return .8, 0, 0, 1
-end
 
 -- ---------------------------------------------------------------------------
 -- WoW 12.1 protected-aura sound trigger
@@ -1774,6 +1879,7 @@ end
 -- after initialization because secret aura state can make the entire branch
 -- forbidden.
 local refreshPriorityGateFilters
+local refreshNativeCarrierFilters
 
 local DISPEL_TYPE_NAME_BY_DT = {
     [DC.MAGIC] = "Magic",
@@ -1921,6 +2027,8 @@ end
 
 local function attachNativeVerificationCarriers(MF, Unit)
     if not MF or not MF.Frame or nativeConfigurationBlocked() then return end
+    local expectedUnit = establishExpectedMUFUnit(MF, Unit)
+    if not expectedUnit then return false end
     if not D:Is121MUFStatusLightEnabled() then return end
     initializeMUFStatusLight(MF)
     local light = MF.Decursive121StatusLight
@@ -1943,7 +2051,10 @@ local function attachNativeVerificationCarriers(MF, Unit)
             if ok and container then
                 container:SetAllPoints(holder)
                 if container.EnableMouse then safe("Native verification AuraContainer EnableMouse", container.EnableMouse, container, false) end
-                if container.SetUnit then safe("Native verification AuraContainer SetUnit", container.SetUnit, container, Unit) end
+                if not bindNewNativeContainer(MF, container, expectedUnit, "verification-" .. tostring(p)) then
+                    setNativeContainerEnabled(container, false)
+                    return false
+                end
                 local key = "zhaohu-native-verify-priority-" .. tostring(p)
                 local options = {
                     initializeFrame = function(btn) initializeNativeVerificationButton(btn, MF, holder) end,
@@ -2409,31 +2520,7 @@ local function resetTrackedDispelSpell()
             end
             attachNativeVerificationCarriers(MF, MF.CurrUnit)
 
-            refreshPriorityGateFilters(MF)
-            local detector = MF.ManagedAuraContainer
-            local keys = MF.Decursive121NativeDetectionKeys
-            if detector and keys and detector.SetAuraSlotCandidateFilters and detector.AddAuraSlot then
-                for priority = 1, 3 do
-                    local include = getPriorityDispelTypeFilter(priority)
-                    local key = keys[priority]
-                    if key then
-                        safe("Native refresh detection filter", detector.SetAuraSlotCandidateFilters, detector, key,
-                            { includeDispelTypes = include })
-                    elseif tableHasAnyKey(include) then
-                        local p = priority
-                        key = "zhaohu-native-priority-" .. tostring(p)
-                        local options = {
-                            initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, getMUFInnerAnchor(MF)) end,
-                            candidateFilters = { includeDispelTypes = include },
-                        }
-                        local ok, slotButton = safe("Native add detection priority after reconfigure", detector.AddAuraSlot, detector, key,
-                            "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
-                        if ok then
-                            keys[p] = key
-                        end
-                    end
-                end
-            end
+            refreshNativeCarrierFilters(MF)
         end
     end
     return true
@@ -2948,18 +3035,77 @@ function D:Get121CooldownDispelSpell()
     return id, name
 end
 
+function D:Get121NativeMUFBindingStatus()
+    local result = {
+        ok = true,
+        owners = 0,
+        carriers = 0,
+        mismatches = 0,
+        inaccessible = 0,
+        invalid = 0,
+        issues = {},
+    }
+    local existing = self.MicroUnitF and self.MicroUnitF.ExistingPerUNIT
+    if type(existing) ~= "table" then return result end
+
+    for tableUnit, MF in pairs(existing) do
+        if MF and MF.ManagedAuraContainer then
+            result.owners = result.owners + 1
+            local expected = publicUnitToken(MF.Decursive121ExpectedUnit)
+            local current = publicUnitToken(MF.CurrUnit)
+            local indexed = publicUnitToken(tableUnit)
+            local ownerOK = expected and current and indexed
+                and expected == current and expected == indexed
+            if not expected or not current or not indexed then
+                result.inaccessible = result.inaccessible + 1
+            elseif not ownerOK then
+                result.mismatches = result.mismatches + 1
+            end
+            if MF.Decursive121NativeBindingValid == false then result.invalid = result.invalid + 1 end
+
+            local carriers = collectNativeManagedCarriers(MF)
+            local carrierOK = true
+            for i = 1, #carriers do
+                local item = carriers[i]
+                result.carriers = result.carriers + 1
+                local bound = publicUnitToken(item.container.Decursive121ExpectedUnit)
+                local role = publicUnitToken(item.container.Decursive121BindingRole)
+                if not expected or bound ~= expected or role ~= item.role then
+                    carrierOK = false
+                    result.mismatches = result.mismatches + 1
+                end
+            end
+
+            if not ownerOK or not carrierOK or MF.Decursive121NativeBindingValid == false then
+                if #result.issues < 12 then
+                    result.issues[#result.issues + 1] = "  owner=" .. (indexed or "inaccessible")
+                        .. " expected=" .. (expected or "inaccessible")
+                        .. " current=" .. (current or "inaccessible")
+                        .. " carriers=" .. tostring(#carriers)
+                        .. " valid=" .. tostring(MF.Decursive121NativeBindingValid ~= false)
+                end
+            end
+        end
+    end
+    result.ok = result.mismatches == 0 and result.inaccessible == 0 and result.invalid == 0
+    return result
+end
+
 function D:Get121CompatibilityStatusText()
     local className = "Unknown"
-    if UnitClass then
-        local ok, _, value = pcall(UnitClass, "player")
+    local unitClass = _G.UnitClass
+    if unitClass then
+        local ok, _, value = pcall(unitClass, "player")
         if ok and isAccessiblePublicValue(value) and type(value) == "string" then className = value end
     end
 
     local specName = "Unknown"
-    if GetSpecialization and GetSpecializationInfo then
-        local spec = GetSpecialization()
+    local getSpecialization = _G.GetSpecialization
+    local getSpecializationInfo = _G.GetSpecializationInfo
+    if getSpecialization and getSpecializationInfo then
+        local spec = getSpecialization()
         if isAccessiblePublicValue(spec) and type(spec) == "number" then
-            local ok, _, n = pcall(GetSpecializationInfo, spec)
+            local ok, _, n = pcall(getSpecializationInfo, spec)
             if ok and isAccessiblePublicValue(n) and type(n) == "string" then specName = n end
         end
     end
@@ -2987,17 +3133,19 @@ function D:Get121CompatibilityStatusText()
 
     local providerStatus = D:Get121DispelDetectionProviderStatus()
     local providerText = providerStatus and providerStatus.displayName or "Native Blizzard-managed"
+    local bindingStatus = D:Get121NativeMUFBindingStatus()
 
     local interfaceVersion = DC and DC.TOC_VERSION or nil
-    if not interfaceVersion and GetBuildInfo then
-        local _, _, _, toc = GetBuildInfo()
+    local getBuildInfo = _G.GetBuildInfo
+    if not interfaceVersion and getBuildInfo then
+        local _, _, _, toc = getBuildInfo()
         interfaceVersion = toc
     end
 
-    return table.concat({
+    local lines = {
         "|cFFFFFFFFDecursive WoW 12.1 Compatibility Status|r",
         "",
-        "Patch version: |cFF55DDDD" .. PATCH_VERSION .. "|r",
+        "Patch version: |cFF55DDDD@project-version@|r",
         "AceDB profile: |cFFFFFFFF" .. tostring((D.db and D.db.GetCurrentProfile and D.db:GetCurrentProfile()) or "Unknown") .. "|r",
         "Environment setting: |cFFFFFFFF" .. getEnvironmentModeSetting() .. "|r",
         "Active environment: |cFFFFFFFF" .. select(3, D:Get121EnvironmentMode()) .. "|r",
@@ -3014,6 +3162,12 @@ function D:Get121CompatibilityStatusText()
         "Managed aura filter: |cFF55FF55HARMFUL|RAID_PLAYER_DISPELLABLE|r",
         "Native Decursive carriers: |cFFFFFFFF" .. tostring(managed) .. "|r",
         "Native verification carriers: |cFFFFFFFF" .. tostring(nativeVerificationCarriers) .. "|r",
+        "Native owner binding: |cFFFFFFFF" .. (bindingStatus.ok and "PASS" or "FAIL")
+            .. " owners=" .. tostring(bindingStatus.owners)
+            .. " carriers=" .. tostring(bindingStatus.carriers)
+            .. " mismatches=" .. tostring(bindingStatus.mismatches)
+            .. " inaccessible=" .. tostring(bindingStatus.inaccessible)
+            .. " invalid=" .. tostring(bindingStatus.invalid) .. "|r",
         "Per-square cooldown widgets: |cFFFFFFFF" .. tostring(overlays) .. "|r",
         "MUFs currently shown: |cFFFFFFFF" .. tostring(shown) .. "|r",
         "Cooldown display enabled: |cFFFFFFFF" .. ((D.profile and D.profile.CooldownOverlay121Enabled == false) and "No" or "Yes") .. "|r",
@@ -3027,7 +3181,13 @@ function D:Get121CompatibilityStatusText()
         "Combat lockdown: |cFFFFFFFF" .. ((D.Status and D.Status.Combat) and "Yes" or "No") .. "|r",
         "",
         "This page intentionally does not inspect aura names, types, durations, stacks, or other protected aura details."
-    }, "\n")
+    }
+    if #bindingStatus.issues > 0 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "Native owner binding issues (public addon-owned tokens only):"
+        for i = 1, #bindingStatus.issues do lines[#lines + 1] = bindingStatus.issues[i] end
+    end
+    return table.concat(lines, "\n")
 end
 
 local function getShownCooldownMUFs()
@@ -3235,6 +3395,8 @@ end
 attachPriorityCooldownGate = function(MF, Unit, priority)
     if not MF or not MF.Frame or not D.MFContainer then return end
     if nativeConfigurationBlocked() then return false end
+    local expectedUnit = establishExpectedMUFUnit(MF, Unit)
+    if not expectedUnit then return false end
     MF.Decursive121PriorityGateContainers = MF.Decursive121PriorityGateContainers or {}
     MF.Decursive121PriorityGateHolders = MF.Decursive121PriorityGateHolders or {}
     MF.Decursive121PriorityGateFrames = MF.Decursive121PriorityGateFrames or {}
@@ -3305,17 +3467,19 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
 
     local ok, container = safe("Create priority AuraContainer", CreateFrame, "AuraContainer", nil, holder, "CustomAuraContainerTemplate")
     if not ok or not container then return end
-    MF.Decursive121PriorityGateContainers[priority] = container
-    MF.Decursive121PriorityGateHolders[priority] = holder
     container:SetAllPoints(holder)
-    if container.Show then safe("Priority AuraContainer initial Show", container.Show, container) end
     if container.EnableMouse then safe("Priority AuraContainer EnableMouse", container.EnableMouse, container, false) end
 
     -- Blizzard's required standing-container order is SetUnit -> AddAuraSlot ->
     -- anchor returned slot -> SetEnabled LAST. Alpha 22 added the slot before
     -- SetUnit and never anchored it, which could leave native cooldown feedback
     -- invisible even when Blizzard matched the aura correctly.
-    if container.SetUnit then safe("Priority AuraContainer SetUnit", container.SetUnit, container, Unit) end
+    if not bindNewNativeContainer(MF, container, expectedUnit, "cooldown-" .. tostring(priority)) then
+        setNativeContainerEnabled(container, false)
+        return false
+    end
+    MF.Decursive121PriorityGateContainers[priority] = container
+    MF.Decursive121PriorityGateHolders[priority] = holder
 
     local key = "decursive-priority-" .. tostring(priority)
     local options = {
@@ -3333,6 +3497,7 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
     end
     MF.Decursive121PriorityGateFrames[priority] = gateFrame
     if container.SetEnabled then safe("Priority AuraContainer SetEnabled", container.SetEnabled, container, true) end
+    if container.Show then safe("Priority AuraContainer initial Show", container.Show, container) end
 end
 
 refreshPriorityGateFilters = function(MF)
@@ -3359,6 +3524,35 @@ refreshPriorityGateFilters = function(MF)
     end
 end
 
+refreshNativeCarrierFilters = function(MF)
+    if not MF or nativeConfigurationBlocked() then return false end
+    refreshPriorityGateFilters(MF)
+    local detector = MF.ManagedAuraContainer
+    local keys = MF.Decursive121NativeDetectionKeys
+    if not detector or not keys or not detector.SetAuraSlotCandidateFilters or not detector.AddAuraSlot then
+        return detector ~= nil
+    end
+    for priority = 1, 3 do
+        local include = getPriorityDispelTypeFilter(priority)
+        local key = keys[priority]
+        if key then
+            safe("Native refresh detection filter", detector.SetAuraSlotCandidateFilters, detector, key,
+                { includeDispelTypes = include })
+        elseif tableHasAnyKey(include) then
+            local p = priority
+            key = "zhaohu-native-priority-" .. tostring(p)
+            local options = {
+                initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, getMUFInnerAnchor(MF)) end,
+                candidateFilters = { includeDispelTypes = include },
+            }
+            local ok = safe("Native add detection priority after reconfigure", detector.AddAuraSlot, detector, key,
+                "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+            if ok then keys[p] = key end
+        end
+    end
+    return true
+end
+
 local pendingNativeAttach = setmetatable({}, { __mode = "k" })
 local attachManagedAura
 
@@ -3376,35 +3570,19 @@ end
 
 local function attachNativeManagedAura(MF, Unit)
     if not MF or not MF.Frame or not D.MFContainer then return end
+    local expectedUnit = establishExpectedMUFUnit(MF, Unit)
+    if not expectedUnit then return false end
     if nativeConfigurationBlocked() then
-        pendingNativeAttach[MF] = Unit or MF.CurrUnit
+        pendingNativeAttach[MF] = expectedUnit
         return
     end
     if MF.ManagedAuraContainer then
-        local resolvedUnit = Unit or MF.CurrUnit
-        if MF.ManagedAuraContainer.SetUnit and resolvedUnit then
-            safe("Native detector SetUnit deferred update", MF.ManagedAuraContainer.SetUnit, MF.ManagedAuraContainer, resolvedUnit)
-        end
-        if MF.Decursive121PriorityGateContainers then
-            for priority = 1, 3 do
-                local gate = MF.Decursive121PriorityGateContainers[priority]
-                if gate and gate.SetUnit and resolvedUnit then
-                    safe("Priority AuraContainer deferred SetUnit", gate.SetUnit, gate, resolvedUnit)
-                end
-            end
-        end
-        if MF.Decursive121VerificationNativeContainers then
-            for priority = 1, 3 do
-                local verifier = MF.Decursive121VerificationNativeContainers[priority]
-                if verifier and verifier.SetUnit and resolvedUnit then
-                    safe("Native verification deferred SetUnit", verifier.SetUnit, verifier, resolvedUnit)
-                end
-            end
-        end
-        attachPriorityCooldownGate(MF, Unit, 1)
-        attachPriorityCooldownGate(MF, Unit, 2)
-        attachPriorityCooldownGate(MF, Unit, 3)
-        attachNativeVerificationCarriers(MF, Unit or MF.CurrUnit)
+        if not rebindNativeManagedAuraOwners(MF, expectedUnit, false) then return false end
+        attachPriorityCooldownGate(MF, expectedUnit, 1)
+        attachPriorityCooldownGate(MF, expectedUnit, 2)
+        attachPriorityCooldownGate(MF, expectedUnit, 3)
+        attachNativeVerificationCarriers(MF, expectedUnit)
+        if not rebindNativeManagedAuraOwners(MF, expectedUnit, false) then return false end
         attachCooldownOverlay(MF)
         attachClickTracking(MF)
         pendingNativeAttach[MF] = nil
@@ -3417,12 +3595,15 @@ local function attachNativeManagedAura(MF, Unit)
     local ok, container = safe("Create native dispel AuraContainer", CreateFrame, "AuraContainer", nil, MF.Frame, "CustomAuraContainerTemplate")
     if not ok or not container then return end
 
-    MF.ManagedAuraContainer = container
-    MF.Decursive121NativeDetectionKeys = {}
     container:SetAllPoints(MF.Frame)
     if container.EnableMouse then safe("Native detector EnableMouse", container.EnableMouse, container, false) end
     if container.SetFrameLevel and MF.Frame.GetFrameLevel then container:SetFrameLevel(MF.Frame:GetFrameLevel() + 20) end
-    if container.SetUnit then safe("Native detector SetUnit", container.SetUnit, container, Unit) end
+    if not bindNewNativeContainer(MF, container, expectedUnit, "detector") then
+        setNativeContainerEnabled(container, false)
+        return false
+    end
+    MF.ManagedAuraContainer = container
+    MF.Decursive121NativeDetectionKeys = {}
 
     if container.AddAuraSlot then
         for priority = 3, 1, -1 do
@@ -3447,10 +3628,11 @@ local function attachNativeManagedAura(MF, Unit)
     if container.SetEnabled then safe("Native detector SetEnabled", container.SetEnabled, container, true) end
     if container.Show then safe("Native detector Show", container.Show, container) end
 
-    attachPriorityCooldownGate(MF, Unit, 1)
-    attachPriorityCooldownGate(MF, Unit, 2)
-    attachPriorityCooldownGate(MF, Unit, 3)
-    attachNativeVerificationCarriers(MF, Unit)
+    attachPriorityCooldownGate(MF, expectedUnit, 1)
+    attachPriorityCooldownGate(MF, expectedUnit, 2)
+    attachPriorityCooldownGate(MF, expectedUnit, 3)
+    attachNativeVerificationCarriers(MF, expectedUnit)
+    if not rebindNativeManagedAuraOwners(MF, expectedUnit, false) then return false end
     attachCooldownOverlay(MF)
     attachClickTracking(MF)
     pendingNativeAttach[MF] = nil
@@ -3494,27 +3676,11 @@ end
 local originalUpdateAttributes = MicroUnitF.prototype.UpdateAttributes
 MicroUnitF.prototype.UpdateAttributes = function(self, Unit, DoNotDelay)
     local ret = originalUpdateAttributes(self, Unit, DoNotDelay)
-    local resolvedUnit = self.CurrUnit or Unit
+    local resolvedUnit = establishExpectedMUFUnit(self, self.CurrUnit or Unit)
     if not nativeConfigurationBlocked() then
         D:Refresh121MUFStateSoundUnit(resolvedUnit, true)
-        if self.ManagedAuraContainer and self.ManagedAuraContainer.SetUnit then
-            safe("AuraContainer SetUnit update", self.ManagedAuraContainer.SetUnit, self.ManagedAuraContainer, resolvedUnit)
-            if self.Decursive121PriorityGateContainers then
-                for priority = 1, 3 do
-                    local gateContainer = self.Decursive121PriorityGateContainers[priority]
-                    if gateContainer and gateContainer.SetUnit then
-                        safe("Priority AuraContainer SetUnit update", gateContainer.SetUnit, gateContainer, resolvedUnit)
-                    end
-                end
-            end
-            if self.Decursive121VerificationNativeContainers then
-                for priority = 1, 3 do
-                    local verifyContainer = self.Decursive121VerificationNativeContainers[priority]
-                    if verifyContainer and verifyContainer.SetUnit then
-                        safe("Native verification AuraContainer SetUnit update", verifyContainer.SetUnit, verifyContainer, resolvedUnit)
-                    end
-                end
-            end
+        if self.ManagedAuraContainer then
+            rebindNativeManagedAuraOwners(self, resolvedUnit, false)
             if D.Refresh121IdentityTooltipUnit then
                 D:Refresh121IdentityTooltipUnit(self)
             end
@@ -3695,9 +3861,7 @@ local function rebuildMUFsAfterZone(reason, updatePasses)
                     safe("Post-zone MUF UpdateAttributes", MF.UpdateAttributes, MF, resolvedUnit, true)
                 end
                 if MF.ManagedAuraContainer then
-                    if MF.ManagedAuraContainer.SetUnit then
-                        safe("Post-zone native SetUnit", MF.ManagedAuraContainer.SetUnit, MF.ManagedAuraContainer, resolvedUnit)
-                    end
+                    rebindNativeManagedAuraOwners(MF, resolvedUnit, false)
                 else
                     attachNativeManagedAura(MF, resolvedUnit)
                 end
@@ -4635,14 +4799,7 @@ function T._StartModernTickers121()
 end
 
 function T._SetNativeContainerEnabled121(container, enabled)
-    if not container then return end
-    if enabled then
-        if container.Show then safe("Lifecycle native Show", container.Show, container) end
-        if container.SetEnabled then safe("Lifecycle native enable", container.SetEnabled, container, true) end
-    else
-        if container.SetEnabled then safe("Lifecycle native disable", container.SetEnabled, container, false) end
-        if container.Hide then safe("Lifecycle native Hide", container.Hide, container) end
-    end
+    return setNativeContainerEnabled(container, enabled)
 end
 
 function T._ApplyModernSecureUIEnabled121(enabled)
@@ -4651,18 +4808,21 @@ function T._ApplyModernSecureUIEnabled121(enabled)
     if type(existing) == "table" then
         for unit, MF in pairs(existing) do
             if MF then
-                T._SetNativeContainerEnabled121(MF.ManagedAuraContainer, enabled)
-                for priority = 1, 3 do
-                    T._SetNativeContainerEnabled121(MF.Decursive121PriorityGateContainers
-                        and MF.Decursive121PriorityGateContainers[priority], enabled)
-                    T._SetNativeContainerEnabled121(MF.Decursive121VerificationNativeContainers
-                        and MF.Decursive121VerificationNativeContainers[priority], enabled)
-                end
-
                 if enabled then
-                    T._MUFDeath121.Initialize(MF)
-                    attachNativeManagedAura(MF, MF.CurrUnit or unit)
+                    local expectedUnit = establishExpectedMUFUnit(MF, MF.CurrUnit or unit)
+                    attachNativeManagedAura(MF, expectedUnit)
+                    local rebound = rebindNativeManagedAuraOwners(MF, expectedUnit, true)
+                    if rebound then
+                        -- Restore all configuration before native processing and
+                        -- visibility resume. No protected aura state is observed.
+                        refreshNativeCarrierFilters(MF)
+                        local carriers = collectNativeManagedCarriers(MF)
+                        for i = 1, #carriers do setNativeContainerEnabled(carriers[i].container, true) end
+                        T._MUFDeath121.Initialize(MF)
+                    end
                 else
+                    local carriers = collectNativeManagedCarriers(MF)
+                    for i = 1, #carriers do setNativeContainerEnabled(carriers[i].container, false) end
                     if MF.Decursive121CooldownOverlay then MF.Decursive121CooldownOverlay:Hide() end
                     if MF.Decursive121RangeOverlay then MF.Decursive121RangeOverlay:Hide() end
                     if MF.Decursive121LineOfSightOverlay then MF.Decursive121LineOfSightOverlay:Hide() end

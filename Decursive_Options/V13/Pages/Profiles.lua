@@ -27,6 +27,14 @@ local Controls = UI.Controls
 local Theme = V13.Theme
 local ZD = T.ZhaohuModern
 local D = T.Dcr
+local L = D and D.L
+
+local function localized(key, fallback)
+    return L and L[key] or fallback
+end
+
+local USE_ACCOUNT_PROFILE = "__USE_ACCOUNT_PROFILE__"
+local USE_CHARACTER_PROFILE = "__USE_CHARACTER_PROFILE__"
 
 local environmentValues = {
     { key = "AUTO", label = "Automatic" },
@@ -61,10 +69,30 @@ local function profileExists(name)
     return false
 end
 
+local function assignmentValues(inheritKey, inheritLabel)
+    local result = {}
+    if inheritKey then
+        result[#result + 1] = {
+            key = inheritKey,
+            label = inheritLabel,
+        }
+    end
+    for _, profile in ipairs(profileValues()) do result[#result + 1] = profile end
+    return result
+end
+
+local function deletableProfileValues()
+    local result = {}
+    for _, profile in ipairs(profileValues()) do
+        if profile.key ~= "Default" then result[#result + 1] = profile end
+    end
+    return result
+end
+
 UI:RegisterPage("PROFILES", "Profiles", function(parent)
     local page = CreateFrame("Frame", nil, parent)
     page:SetAllPoints()
-    page.contentHeight = 1280
+    page.contentHeight = 1780
     page.eyebrow = Controls:Label(page, "PROFILES & ENVIRONMENTS", 9, Theme.color.cyan)
     page.eyebrow:SetPoint("TOPLEFT", 0, -2)
     page.title = Controls:Label(page, "Your setup, adapted to the content", 20, Theme.color.text)
@@ -89,6 +117,7 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
             return applied
         end)
     local nameInput = Controls:TextInput(named, "Profile name", "Example: Mythic Healer")
+    nameInput.edit:SetMaxLetters(48)
     local createProfile = Controls:Button(named, "Create / Switch", 150, function()
         local name = nameInput.edit:GetText() or ""
         if ZD.CreateUserProfile and ZD:CreateUserProfile(name) then
@@ -122,11 +151,119 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
         end
     end)
     resetProfile:SetPoint("BOTTOMLEFT", 16, 16)
+    local renameProfile = Controls:Button(named,
+        localized("PROFILE_RENAME_BUTTON", "Rename Current"), 150, function()
+            local name = nameInput.edit:GetText() or ""
+            if ZD.RenameCurrentProfile and ZD:RenameCurrentProfile(name) then
+                nameInput.edit:SetText("")
+                UI:SetStatus(localized("PROFILE_RENAME_SUCCESS", "Current profile renamed."), "success")
+                page:Refresh()
+            else
+                UI:SetStatus("Enter a new profile name outside combat.", "error")
+            end
+        end)
+    renameProfile:SetPoint("LEFT", resetProfile, "RIGHT", 8, 0)
+
+    local assignments = Controls:Card(page,
+        localized("PROFILE_RUNTIME_ASSIGNMENTS", "Runtime assignments"),
+        localized("PROFILE_RUNTIME_ASSIGNMENTS_DESC", "Choose account, character, and specialization fallbacks without replacing saved profiles."))
+    assignments:SetPoint("TOPLEFT", named, "BOTTOMLEFT", 0, -12)
+    assignments:SetPoint("TOPRIGHT", named, "BOTTOMRIGHT", 0, -12)
+    assignments:SetHeight(285)
+    Controls:Cycle(assignments,
+        localized("PROFILE_ACCOUNT_DEFAULT", "Account default"),
+        function() return assignmentValues() end,
+        function()
+            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+            return state.account or "Default"
+        end,
+        function(value)
+            return ZD.SetAccountProfile and ZD:SetAccountProfile(value) or false
+        end)
+    Controls:Cycle(assignments,
+        localized("PROFILE_CHARACTER_ASSIGNMENT", "This character"),
+        function()
+            return assignmentValues(USE_ACCOUNT_PROFILE,
+                localized("PROFILE_USE_ACCOUNT_DEFAULT", "Use account default"))
+        end,
+        function()
+            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+            return state.character or USE_ACCOUNT_PROFILE
+        end,
+        function(value)
+            if value == USE_ACCOUNT_PROFILE then value = nil end
+            return ZD.SetCharacterProfile and ZD:SetCharacterProfile(value) or false
+        end)
+    Controls:Toggle(assignments,
+        localized("PROFILE_SPEC_ENABLED", "Per-specialization profiles"),
+        localized("PROFILE_SPEC_ENABLED_DESC", "When enabled, changing specialization selects its assigned profile."),
+        function()
+            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+            return state.perSpecEnabled == true
+        end,
+        function(value)
+            return ZD.SetSpecProfilesEnabled and ZD:SetSpecProfilesEnabled(value) or false
+        end)
+    Controls:Cycle(assignments,
+        localized("PROFILE_CURRENT_SPEC", "Current specialization"),
+        function()
+            return assignmentValues(USE_CHARACTER_PROFILE,
+                localized("PROFILE_USE_CHARACTER_ASSIGNMENT", "Use character assignment"))
+        end,
+        function()
+            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+            return state.spec or USE_CHARACTER_PROFILE
+        end,
+        function(value)
+            if value == USE_CHARACTER_PROFILE then value = nil end
+            return ZD.SetCurrentSpecProfile and ZD:SetCurrentSpecProfile(value) or false
+        end,
+        function()
+            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+            return state.perSpecEnabled == true
+        end)
+
+    local deleteSelection
+    local function getDeleteSelection()
+        local values = deletableProfileValues()
+        if #values == 0 then
+            deleteSelection = nil
+            return nil
+        end
+        for _, profile in ipairs(values) do
+            if profile.key == deleteSelection then return deleteSelection end
+        end
+        deleteSelection = values[1].key
+        return deleteSelection
+    end
+
+    local deletion = Controls:Card(page,
+        localized("PROFILE_DELETE_UNUSED", "Delete an unused profile"),
+        localized("PROFILE_DELETE_UNUSED_DESC", "Default is protected. Character and specialization assignments fall back safely."))
+    deletion:SetPoint("TOPLEFT", assignments, "BOTTOMLEFT", 0, -12)
+    deletion:SetPoint("TOPRIGHT", assignments, "BOTTOMRIGHT", 0, -12)
+    deletion:SetHeight(170)
+    Controls:Cycle(deletion,
+        localized("PROFILE_DELETE_SELECTION", "Profile to delete"),
+        deletableProfileValues,
+        getDeleteSelection,
+        function(value) deleteSelection = value return true end,
+        function() return #deletableProfileValues() > 0 end)
+    local deleteProfile = Controls:ConfirmButton(deletion,
+        localized("PROFILE_DELETE_BUTTON", "Delete Selected Profile"), 190, function()
+            local name = getDeleteSelection()
+            if name and ZD.DeleteUserProfile and ZD:DeleteUserProfile(name) then
+                deleteSelection = nil
+                UI:SetStatus(localized("PROFILE_DELETE_SUCCESS", "Profile deleted; assignments now use their fallback."), "warning")
+                page:Refresh()
+            end
+        end)
+    deleteProfile:SetPoint("BOTTOMLEFT", 16, 16)
 
     local behavior = Controls:Card(page, "Automatic behavior",
         "Automatic mode follows Open World, Dungeon/Follower, Mythic+, Raid and PvP.")
-    behavior:SetPoint("TOPLEFT", named, "BOTTOMLEFT", 0, -12)
-    behavior:SetPoint("TOPRIGHT", named, "BOTTOMRIGHT", 0, -12)
+    behavior:SetPoint("TOPLEFT", deletion, "BOTTOMLEFT", 0, -12)
+    behavior:SetPoint("TOPRIGHT", deletion, "BOTTOMRIGHT", 0, -12)
     behavior:SetHeight(230)
     Controls:Cycle(behavior, "Activation mode", function() return environmentValues end,
         function() return ZD.GetEnvironmentSetting and ZD:GetEnvironmentSetting() or "AUTO" end,
@@ -199,6 +336,8 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 
     function page:Refresh()
         named:Refresh()
+        assignments:Refresh()
+        deletion:Refresh()
         behavior:Refresh()
     end
     return page

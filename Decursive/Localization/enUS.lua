@@ -555,6 +555,23 @@ L["TOOFAR"] = "Too far"
 L["UNITSTATUS"] = "Unit Status: "
 L["UNSTABLERELEASE"] = "Unstable release"
 
+L["PROFILE_ACCOUNT_DEFAULT"] = "Account default"
+L["PROFILE_CHARACTER_ASSIGNMENT"] = "This character"
+L["PROFILE_CURRENT_SPEC"] = "Current specialization"
+L["PROFILE_DELETE_BUTTON"] = "Delete Selected Profile"
+L["PROFILE_DELETE_SELECTION"] = "Profile to delete"
+L["PROFILE_DELETE_SUCCESS"] = "Profile deleted; assignments now use their fallback."
+L["PROFILE_DELETE_UNUSED"] = "Delete an unused profile"
+L["PROFILE_DELETE_UNUSED_DESC"] = "Default is protected. Character and specialization assignments fall back safely."
+L["PROFILE_RUNTIME_ASSIGNMENTS"] = "Runtime assignments"
+L["PROFILE_RUNTIME_ASSIGNMENTS_DESC"] = "Choose account, character, and specialization fallbacks without replacing saved profiles."
+L["PROFILE_RENAME_BUTTON"] = "Rename Current"
+L["PROFILE_RENAME_SUCCESS"] = "Current profile renamed."
+L["PROFILE_SPEC_ENABLED"] = "Per-specialization profiles"
+L["PROFILE_SPEC_ENABLED_DESC"] = "When enabled, changing specialization selects its assigned profile."
+L["PROFILE_USE_ACCOUNT_DEFAULT"] = "Use account default"
+L["PROFILE_USE_CHARACTER_ASSIGNMENT"] = "Use character assignment"
+
 
 
 

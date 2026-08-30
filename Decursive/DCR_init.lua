@@ -93,6 +93,14 @@ local function RegisterDecursive_Once() -- {{{
         end
     end
 
+    function D:OnManagedProfileDeleted(_, _, profileName)
+        local modern = T.ZhaohuModern
+        if modern and modern.HandleDeletedProfileAssignments then
+            modern:HandleDeletedProfileAssignments(profileName)
+        end
+        self:NotifyConfigurationChanged()
+    end
+
     D.DcrFullyInitialized = false;
 
     RegisterDecursive_Once = nil;
@@ -1006,6 +1014,7 @@ DC.NormalRezSpellIDs = DC.NormalRezSpellIDs or { 50769, 7328, 2006, 2008, 115178
 -- casts, so Warlocks use Emergency Soul Link through the same fallback path as
 -- classes without a native shared-charge battle resurrection.
 DC.BattleRezSpellIDs = { 20484, 61999, 391054 }
+DC.SoulLinkItemID = 269586
 
 local function playerKnowsSpell(spellID)
     local ok, known
@@ -1065,7 +1074,8 @@ function D:VersionWarnings(forceDisplay) -- {{{
     end
 
     local packagedVersionLower = ("@project-version@"):lower();
-    if packagedVersionLower:find("beta", 1, true)
+    if packagedVersionLower:find("alpha", 1, true)
+        or packagedVersionLower:find("beta", 1, true)
         or packagedVersionLower:find("rc", 1, true)
         or packagedVersionLower:find("candidate", 1, true)
         or alpha then
@@ -1159,6 +1169,99 @@ function D:VersionWarnings(forceDisplay) -- {{{
 end -- }}}
 
 
+local PROFILE_MANAGER_SCHEMA = 1
+
+local function isValidManagedProfileName(value)
+    return type(value) == "string" and value ~= ""
+end
+
+local function getCurrentCharacterProfileKey()
+    local name = UnitName("player")
+    local realm = GetRealmName()
+    if type(name) ~= "string" or name == "" or type(realm) ~= "string" or realm == "" then
+        return nil
+    end
+    return name .. " - " .. realm
+end
+
+local function savedProfileExists(saved, profileName)
+    if profileName == "Default" then return true end
+    if type(saved.profiles) == "table" and type(saved.profiles[profileName]) == "table" then
+        return true
+    end
+    if type(saved.profileKeys) == "table" then
+        for _, assigned in pairs(saved.profileKeys) do
+            if assigned == profileName then return true end
+        end
+    end
+
+    return false
+end
+
+local function initializeProfileManagerStorage()
+    if type(_G.DecursiveDB) ~= "table" then _G.DecursiveDB = {} end
+    local saved = _G.DecursiveDB
+    local manager = saved.profileManager
+    if type(manager) ~= "table" then
+        manager = {}
+        saved.profileManager = manager
+    end
+
+    if type(manager.schemaVersion) ~= "number" or manager.schemaVersion < PROFILE_MANAGER_SCHEMA then
+        local assignments = {}
+        if type(saved.profileKeys) == "table" then
+            for characterKey, profileName in pairs(saved.profileKeys) do
+                if type(characterKey) == "string" and isValidManagedProfileName(profileName) then
+                    assignments[characterKey] = profileName
+                end
+            end
+        end
+        local specializationAssignments = {}
+        local namespaces = type(saved.namespaces) == "table" and saved.namespaces or nil
+        local dualSpec = namespaces and namespaces["LibDualSpec-1.0"] or nil
+        local dualSpecCharacters = type(dualSpec) == "table" and dualSpec.char or nil
+        if type(dualSpecCharacters) == "table" then
+            for characterKey, record in pairs(dualSpecCharacters) do
+                if type(characterKey) == "string" and type(record) == "table" then
+                    local characterSpecs = {}
+                    for spec, profileName in pairs(record) do
+                        if type(spec) == "number" and isValidManagedProfileName(profileName)
+                            and savedProfileExists(saved, profileName)
+                        then
+                            characterSpecs[spec] = profileName
+                        end
+                    end
+                    if next(characterSpecs) then specializationAssignments[characterKey] = characterSpecs end
+                end
+            end
+        end
+        manager.characterAssignments = assignments
+        manager.specializationAssignments = specializationAssignments
+        manager.accountDefault = "Default"
+        manager.schemaVersion = PROFILE_MANAGER_SCHEMA
+    end
+
+    if type(manager.characterAssignments) ~= "table" then manager.characterAssignments = {} end
+    if type(manager.specializationAssignments) ~= "table" then manager.specializationAssignments = {} end
+    if not isValidManagedProfileName(manager.accountDefault)
+        or not savedProfileExists(saved, manager.accountDefault)
+    then
+        manager.accountDefault = "Default"
+    end
+
+    local characterKey = getCurrentCharacterProfileKey()
+    local characterProfile = characterKey and manager.characterAssignments[characterKey]
+    if not isValidManagedProfileName(characterProfile) or not savedProfileExists(saved, characterProfile) then
+        if characterKey then manager.characterAssignments[characterKey] = nil end
+        characterProfile = manager.accountDefault
+    end
+
+    saved.profileKeys = type(saved.profileKeys) == "table" and saved.profileKeys or {}
+    if characterKey then saved.profileKeys[characterKey] = characterProfile end
+    return characterProfile or "Default"
+end
+
+
 function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
 
     if T._SelfDiagnostic() == 2 then
@@ -1173,7 +1276,8 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
 
     D.defaults = D:GetDefaultsSettings();
 
-    self.db = LibStub("AceDB-3.0"):New("DecursiveDB", D.defaults, true);
+    local defaultProfile = initializeProfileManagerStorage()
+    self.db = LibStub("AceDB-3.0"):New("DecursiveDB", D.defaults, defaultProfile)
 
 
 
@@ -1388,6 +1492,7 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
         self.db.RegisterCallback(self, "OnProfileChanged", "SetConfiguration")
         self.db.RegisterCallback(self, "OnProfileCopied", "SetConfiguration")
         self.db.RegisterCallback(self, "OnProfileReset", "SetConfiguration")
+        self.db.RegisterCallback(self, "OnProfileDeleted", "OnManagedProfileDeleted")
     end
 
     -- hook the load macro thing {{{
@@ -2567,6 +2672,33 @@ do
         return nil
     end
 
+    -- Soul Link is only a usable fallback while the item is physically carried.
+    -- Explicit false flags exclude the character bank, reagent bank and account
+    -- bank; item charges are not substituted for the carried stack count.
+    function D:HasCarriedSoulLinkItem()
+        local itemAPI = _G.C_Item
+        if not DC.TWELVEONE or type(itemAPI) ~= "table"
+            or type(itemAPI.GetItemCount) ~= "function"
+        then
+            return false
+        end
+
+        local ok, count = pcall(
+            itemAPI.GetItemCount,
+            DC.SoulLinkItemID,
+            false,
+            false,
+            false,
+            false
+        )
+        if not ok or (issecretvalue and issecretvalue(count))
+            or not canaccessvalue(count) or type(count) ~= "number"
+        then
+            return false
+        end
+        return count > 0
+    end
+
     function D:GetSmartRezActions()
         if not DC.TWELVEONE then return nil, nil, false, false end
 
@@ -2583,8 +2715,9 @@ do
         local battleRezName = self:GetKnownRezSpellName(DC.BattleRezSpellIDs)
         local outOfCombatRezName = normalRezName or battleRezName
         local soulLinkEnabled = not self.profile or self.profile.SoulLink121Enabled ~= false
-        local combatSoulLink = soulLinkEnabled and not battleRezName
-        local outOfCombatSoulLink = soulLinkEnabled and not outOfCombatRezName
+        local hasCarriedSoulLink = soulLinkEnabled and self:HasCarriedSoulLinkItem()
+        local combatSoulLink = hasCarriedSoulLink and not battleRezName
+        local outOfCombatSoulLink = hasCarriedSoulLink and not outOfCombatRezName
 
         if type(self.Status) == "table" then
             self.Status.SmartRezActions = {

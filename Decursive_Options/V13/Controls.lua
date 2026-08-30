@@ -29,6 +29,18 @@ V13.Options = UI
 local Controls = {}
 UI.Controls = Controls
 
+local function isControlEnabled(enabledGetter)
+    if type(enabledGetter) ~= "function" then return true end
+    local ok, enabled = pcall(enabledGetter)
+    return ok and enabled ~= false
+end
+
+local function setInteractiveState(row, enabled)
+    row.controlEnabled = enabled == true
+    if row.SetEnabled then row:SetEnabled(row.controlEnabled) end
+    row:SetAlpha(row.controlEnabled and 1 or 0.5)
+end
+
 -- Run a setting mutation through one shared boundary.  Earlier controls
 -- refreshed themselves even when a setter raised an error or returned false,
 -- which made a rejected change look like an inert button.  Preserve any more
@@ -175,7 +187,7 @@ function Controls:Card(parent, title, description)
     return card
 end
 
-function Controls:Toggle(card, labelText, description, getter, setter)
+function Controls:Toggle(card, labelText, description, getter, setter, enabledGetter)
     local row = CreateFrame("Button", nil, card)
     row:RegisterForClicks("LeftButtonUp")
     row:SetPoint("TOPLEFT", Theme.spacing.card, card.nextY)
@@ -202,6 +214,7 @@ function Controls:Toggle(card, labelText, description, getter, setter)
 
     function row:Refresh()
         local enabled = getter and getter() and true or false
+        setInteractiveState(self, isControlEnabled(enabledGetter))
         if enabled then
             self.track:SetBackdropColor(rgba(Theme.color.cyan))
             self.knob:SetColorTexture(rgba(Theme.color.text))
@@ -216,6 +229,7 @@ function Controls:Toggle(card, labelText, description, getter, setter)
     end
 
     row:SetScript("OnClick", function(self)
+        if self.controlEnabled == false then return end
         Controls:Apply(labelText, setter, not (getter and getter()))
         card:Refresh()
     end)
@@ -275,7 +289,7 @@ function Controls:Stepper(card, labelText, getter, setter, minimum, maximum, ste
     return row
 end
 
-function Controls:Cycle(card, labelText, valuesGetter, getter, setter)
+function Controls:Cycle(card, labelText, valuesGetter, getter, setter, enabledGetter)
     local row = CreateFrame("Frame", nil, card)
     row:SetPoint("TOPLEFT", Theme.spacing.card, card.nextY)
     row:SetPoint("RIGHT", -Theme.spacing.card, 0)
@@ -286,6 +300,7 @@ function Controls:Cycle(card, labelText, valuesGetter, getter, setter)
     row.label:SetPoint("LEFT", 0, 0)
     row.label:SetPoint("RIGHT", -206, 0)
     row.button = self:Button(row, "", 198, function()
+        if row.controlEnabled == false then return end
         local values = valuesGetter and valuesGetter() or {}
         if #values == 0 then return end
         local current = getter and getter()
@@ -300,6 +315,7 @@ function Controls:Cycle(card, labelText, valuesGetter, getter, setter)
     row.button:SetPoint("RIGHT", 0, 0)
 
     function row:Refresh()
+        setInteractiveState(self, isControlEnabled(enabledGetter))
         local values = valuesGetter and valuesGetter() or {}
         local current = getter and getter()
         local display = tostring(current or "Select")

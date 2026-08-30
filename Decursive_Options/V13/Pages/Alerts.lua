@@ -86,6 +86,15 @@ local function environment()
     return ZD.GetEnvironmentProfile and ZD:GetEnvironmentProfile() or nil
 end
 
+local function soundEnabled()
+    return not D.profile or D.profile.PlaySound ~= false
+end
+
+local function cooldownOverlayEnabled()
+    local env = environment()
+    return not env or env.CooldownOverlay121Enabled ~= false
+end
+
 UI:RegisterPage("ALERTS", "Alerts", function(parent)
     local page = CreateFrame("Frame", nil, parent)
     page:SetAllPoints()
@@ -143,7 +152,7 @@ UI:RegisterPage("ALERTS", "Alerts", function(parent)
     sound:SetPoint("TOPRIGHT", text, "BOTTOMRIGHT", 0, -12)
     sound:SetHeight(310)
     Controls:Toggle(sound, "Enable sound", nil,
-        function() return D.profile and D.profile.PlaySound ~= false end,
+        soundEnabled,
         function(value)
             if not D.profile then return false end
             D.profile.PlaySound = value and true or false
@@ -158,7 +167,7 @@ UI:RegisterPage("ALERTS", "Alerts", function(parent)
             D.profile.SoundFile = soundFiles[value] or (DC and DC.AfflictionSound)
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("v13 sound preset") end
             return true
-        end)
+        end, soundEnabled)
     Controls:Cycle(sound, "Output channel", function() return soundChannels end,
         function() return D.profile and D.profile.SoundNotificationChannel or "Master" end,
         function(value)
@@ -166,21 +175,21 @@ UI:RegisterPage("ALERTS", "Alerts", function(parent)
             D.profile.SoundNotificationChannel = value
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("v13 sound channel") end
             return true
-        end)
+        end, soundEnabled)
     Controls:Stepper(sound, "Fallback debounce",
         function() return D.profile and D.profile.SoundNotificationIgnoreSeconds or 2 end,
         function(value)
             if not D.profile then return false end
             D.profile.SoundNotificationIgnoreSeconds = value
             return true
-        end, 0, 5, 0.25, "sec")
+        end, 0, 5, 0.25, "sec", soundEnabled)
     Controls:Toggle(sound, "Cure-failure sound", nil,
         function() return D.profile and D.profile.PlayFailureSound == true end,
         function(value)
             if not D.profile then return false end
             D.profile.PlayFailureSound = value and true or false
             return true
-        end)
+        end, soundEnabled)
 
     local feedback = Controls:Card(page, "Environment feedback",
         "These switches apply to the environment selected on the Profiles page.")
@@ -207,15 +216,16 @@ UI:RegisterPage("ALERTS", "Alerts", function(parent)
     cooldown:SetPoint("TOPRIGHT", feedback, "BOTTOMRIGHT", 0, -12)
     cooldown:SetHeight(205)
     Controls:Toggle(cooldown, "Enable overlay", nil,
-        function() local env = environment(); return not env or env.CooldownOverlay121Enabled ~= false end,
+        cooldownOverlayEnabled,
         function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Enabled", value) end)
     Controls:Toggle(cooldown, "Countdown numbers", nil,
         function() local env = environment(); return not env or env.CooldownOverlay121Numbers ~= false end,
-        function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Numbers", value) end)
+        function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Numbers", value) end,
+        cooldownOverlayEnabled)
     Controls:Stepper(cooldown, "Overlay darkness",
         function() local env = environment(); return env and env.CooldownOverlay121Opacity or 0.62 end,
         function(value) return ZD:SetEnvironmentValue(ZD:GetEditEnvironment(), "CooldownOverlay121Opacity", value) end,
-        0, 1, 0.05, "")
+        0, 1, 0.05, "", cooldownOverlayEnabled)
 
     function page:Refresh()
         text:Refresh()

@@ -26,13 +26,16 @@ local builderSource = source:sub(builderStart, builderEnd - 1)
 DC = {
     TWELVEONE = true,
     NormalRezSpellIDs = { 50769, 7328, 2006, 2008, 115178, 361227 },
-    BattleRezSpellIDs = { 20484, 61999, 391054 }
+    BattleRezSpellIDs = { 20484, 61999, 391054 },
+    SoulLinkItemID = 269586
 }
 D = {}
 
 local knownSpells = {}
 local spellNames = {}
 local combatLocked = false
+local carriedSoulLinkCount = 1
+local itemCountArguments = {}
 local debugEntries = {}
 local now = 10
 SECRET_VALUE = {}
@@ -62,6 +65,19 @@ function GetTime()
     return now
 end
 
+C_Item = {
+    GetItemCount = function(itemID, includeBank, includeUses, includeReagentBank, includeAccountBank)
+        itemCountArguments[#itemCountArguments + 1] = {
+            itemID = itemID,
+            includeBank = includeBank,
+            includeUses = includeUses,
+            includeReagentBank = includeReagentBank,
+            includeAccountBank = includeAccountBank
+        }
+        return carriedSoulLinkCount
+    end
+}
+
 function D:AddDebugText(...)
     debugEntries[#debugEntries + 1] = { ... }
 end
@@ -69,10 +85,12 @@ end
 local loader = loadstring or load
 assert(loader(builderSource, "smart-rez-builder"))()
 
-local function reset(known, names, soulLinkEnabled)
+local function reset(known, names, soulLinkEnabled, soulLinkCount)
     knownSpells = known or {}
     spellNames = names or {}
     combatLocked = false
+    carriedSoulLinkCount = soulLinkCount == nil and 1 or soulLinkCount
+    itemCountArguments = {}
     debugEntries = {}
     D.profile = { SoulLink121Enabled = soulLinkEnabled ~= false }
     D.Status = {
@@ -151,7 +169,33 @@ contains(paladinMacro, "[@mouseover,help,exists,dead,combat] Intercession")
 contains(paladinMacro, "[@mouseover,help,exists,dead,nocombat] Redemption")
 assertMacroBudget(paladinMacro, "Paladin smart macro")
 
-reset({}, {}, true)
+reset({}, {}, true, 0)
+local absentItemMacro, absentCureOnly, absentRezOnly, absentHasRez = D:BuildSmartRezMacroText(
+    "mouseover",
+    "cast",
+    "Remove Curse",
+    false
+)
+assert(absentHasRez == false)
+assert(absentItemMacro == absentCureOnly)
+assert(absentRezOnly == "")
+excludes(absentItemMacro, "item:269586")
+assert(D.Status.SmartRezActions.combatSoulLink == false)
+assert(D.Status.SmartRezActions.outOfCombatSoulLink == false)
+
+reset({}, {}, true, SECRET_VALUE)
+local secretItemMacro, secretCureOnly, secretRezOnly, secretHasRez = D:BuildSmartRezMacroText(
+    "mouseover",
+    "cast",
+    "Remove Curse",
+    false
+)
+assert(secretHasRez == false)
+assert(secretItemMacro == secretCureOnly)
+assert(secretRezOnly == "")
+excludes(secretItemMacro, "item:269586")
+
+reset({}, {}, true, 1)
 local itemMacro, _, itemRezOnly, itemHasRez = D:BuildSmartRezMacroText(
     "mouseover",
     "cast",
@@ -160,8 +204,16 @@ local itemMacro, _, itemRezOnly, itemHasRez = D:BuildSmartRezMacroText(
 )
 assert(itemHasRez == true)
 contains(itemMacro, "[@mouseover,help,exists,dead,combat][@mouseover,help,exists,dead,nocombat] item:269586")
+assert(D.Status.SmartRezActions.combatSoulLink == true)
+assert(D.Status.SmartRezActions.outOfCombatSoulLink == true)
 assertMacroBudget(itemMacro, "Soul Link-only combined macro")
 assertMacroBudget(itemRezOnly, "Soul Link-only rez macro")
+assert(#itemCountArguments == 1)
+assert(itemCountArguments[1].itemID == 269586)
+assert(itemCountArguments[1].includeBank == false)
+assert(itemCountArguments[1].includeUses == false)
+assert(itemCountArguments[1].includeReagentBank == false)
+assert(itemCountArguments[1].includeAccountBank == false)
 
 reset({}, {}, false)
 local disabledItemMacro, disabledCureOnly, disabledRezOnly, disabledHasRez = D:BuildSmartRezMacroText(
@@ -174,6 +226,7 @@ assert(disabledHasRez == false)
 assert(disabledItemMacro == disabledCureOnly)
 assert(disabledRezOnly == "")
 excludes(disabledItemMacro, "item:269586")
+assert(#itemCountArguments == 0)
 
 reset({ [20707] = true }, { [20707] = "Soulstone" }, true)
 local warlockMacro = D:BuildSmartRezMacroText("mouseover", "cast", "Singe Magic", true)
@@ -239,6 +292,52 @@ combatLocked = false
 assert(D:RefreshMUFActionMacros("ooc test") == true)
 assert(updated == 1)
 
+local bagHandlerStart = assert(eventSource:find("function D:BAG_UPDATE_DELAYED()", 1, true))
+local bagHandlerEnd = assert(eventSource:find("function D:GET_ITEM_INFO_RECEIVED()", bagHandlerStart, true))
+assert(loader(eventSource:sub(bagHandlerStart, bagHandlerEnd - 1), "bag-update-handler"))()
+
+local scheduledCalls = {}
+function D:Debug()
+end
+function D:ReConfigure()
+end
+function D:ScheduleDelayedCall(id, func, delay, ...)
+    scheduledCalls[id] = { func = func, delay = delay, args = { ... } }
+end
+
+D:BAG_UPDATE_DELAYED()
+assert(scheduledCalls.Dcr_ReConfigure)
+local bagRefresh = assert(scheduledCalls.Dcr_RefreshMUFActionMacros)
+assert(bagRefresh.func == D.RefreshMUFActionMacros)
+assert(bagRefresh.delay == 0.5)
+assert(bagRefresh.args[1] == D)
+assert(bagRefresh.args[2] == "BAG_UPDATE_DELAYED")
+
+combatLocked = true
+D.delayed = nil
+bagRefresh.func((table.unpack or unpack)(bagRefresh.args))
+assert(D.delayed and D.delayed.id == "Dcr_RefreshMUFActionMacros")
+combatLocked = false
+
+reset({}, {}, true, 0)
+D.Status.CuringSpellsPrio = { Cleanse = 1 }
+D.Status.FoundSpells = {
+    Cleanse = { false, 527, false, 0, nil, false }
+}
+D:SetMacrosPerPrioTable("mouseover")
+excludes(D.Status.prio_macro[1].macroText, "item:269586")
+carriedSoulLinkCount = 1
+scheduledCalls = {}
+D:BAG_UPDATE_DELAYED()
+bagRefresh = assert(scheduledCalls.Dcr_RefreshMUFActionMacros)
+combatLocked = true
+D.delayed = nil
+bagRefresh.func((table.unpack or unpack)(bagRefresh.args))
+assert(D.delayed and D.delayed.id == "Dcr_RefreshMUFActionMacros")
+combatLocked = false
+D.delayed.func((table.unpack or unpack)(D.delayed.args))
+contains(D.Status.prio_macro[1].macroText, "item:269586")
+
 contains(frameSource, 'self.Frame:RegisterForClicks("AnyUp")')
 contains(frameSource, 'self.Frame:SetAttribute(binding:format("type"), "macro")')
 contains(frameSource, 'local physicalLeftBinding = "*%s1"')
@@ -256,15 +355,18 @@ excludes(frameSource:sub(
 
 contains(eventSource, "function D:PLAYER_SPECIALIZATION_CHANGED()")
 contains(eventSource, '"Dcr_RefreshMUFActionMacros"')
+contains(eventSource:sub(bagHandlerStart, bagHandlerEnd - 1), '"BAG_UPDATE_DELAYED"')
 contains(soulLinkSource, "local actions = D.Status and D.Status.SmartRezActions")
 contains(soulLinkSource, "return actions.combatSoulLink == true")
 contains(soulLinkSource, "return actions.outOfCombatSoulLink == true")
 excludes(soulLinkSource, "D:GetSmartRezActions")
-contains(soulLinkSource, "D:IsMUFRezEligibleUnitToken(unit)")
+contains(soulLinkSource, "pcall(D.IsMUFRezEligibleUnitToken, D, unit)")
 contains(soulLinkSource, "MF.SmartRezLeftEnabled121 == true")
 contains(optionSource, 'D:RefreshMUFActionMacros("Soul Link option toggle")')
 contains(source, "type(_G.C_SpellBook.IsSpellInSpellBook) == \"function\"")
 contains(source, "_G.Enum.SpellBookSpellBank.Player")
+contains(builderSource, "function D:HasCarriedSoulLinkItem()")
+contains(builderSource, "DC.SoulLinkItemID,")
 excludes(source:sub(builderStart, builderEnd - 1), "UnitIsDeadOrGhost")
 excludes(source:sub(builderStart, builderEnd - 1), "spell:%")
 excludes(source:sub(builderStart, builderEnd - 1), "RegisterForClicks")

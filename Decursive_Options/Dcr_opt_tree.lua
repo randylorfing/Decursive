@@ -1331,7 +1331,7 @@ local function GetStaticOptions ()
                             SoulLink121Enabled = {
                                 type = "toggle",
                                 name = "Emergency Soul Link fallback",
-                                desc = "Unmodified left-click automatically uses your native resurrection spell on a dead ally. This option also uses the Emergency Soul Link item (Midnight Engineering) when your class has no native resurrection for the current combat state, with a yellow range dot and an out-of-range alert.",
+                                desc = "Unmodified left-click automatically uses your native resurrection spell on a dead ally. When your class has no native resurrection for the current combat state, Decursive can use Emergency Soul Link if the item is in your carried bags. For passive green/yellow range colors, put the item itself or a simple /use item:269586 macro in any real action-bar slot; a hidden or unselected bar page is fine.",
                                 get = function() return not D.profile or D.profile.SoulLink121Enabled ~= false end,
                                 set = function(info, value)
                                     D.profile.SoulLink121Enabled = value and true or false

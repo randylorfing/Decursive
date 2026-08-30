@@ -683,6 +683,15 @@ end
 function D:BAG_UPDATE_DELAYED()
     D:Debug("|cFFFF0000Bag changed, scheduling a reconfiguration check|r");
     self:ScheduleDelayedCall("Dcr_ReConfigure", self.ReConfigure, 4, self);
+    if self.RefreshMUFActionMacros then
+        self:ScheduleDelayedCall(
+            "Dcr_RefreshMUFActionMacros",
+            self.RefreshMUFActionMacros,
+            0.5,
+            self,
+            "BAG_UPDATE_DELAYED"
+        )
+    end
 end
 
 function D:GET_ITEM_INFO_RECEIVED()

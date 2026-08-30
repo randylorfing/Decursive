@@ -35,6 +35,12 @@ UI.pages = UI.pages or {}
 UI.currentPage = UI.currentPage or "OVERVIEW"
 UI.statusText = UI.statusText or "Ready"
 
+local MAX_SEARCH_RESULTS = 6
+
+local function localized(key, fallback)
+    return D.L and D.L[key] or fallback
+end
+
 function UI:RegisterPage(key, label, builder, options)
     self.pageDefinitions[key] = {
         label = label,
@@ -138,6 +144,57 @@ local function buildTestRail(parent)
     return rail
 end
 
+function UI:RefreshSearchResults(query, resetSelection)
+    local frame = self.frame
+    local panel = frame and frame.searchResults
+    if not panel then return {} end
+
+    local results = ZD.FindSearchResults and ZD:FindSearchResults(query, MAX_SEARCH_RESULTS) or {}
+    frame.searchMatches = results
+    if resetSelection then frame.searchSelection = 1 end
+    frame.searchSelection = math.max(1, math.min(frame.searchSelection or 1, math.max(1, #results)))
+
+    if query == "" or #results == 0 then
+        panel:Hide()
+        return results
+    end
+
+    for index, row in ipairs(panel.rows) do
+        local result = results[index]
+        row.result = result
+        row:SetShown(result ~= nil)
+        if result then
+            row.title:SetText(result.label or localized("SEARCH", "Search"))
+            row.route:SetText(result.pageName or result.page or "")
+            local selected = index == frame.searchSelection
+            row:SetBackdropBorderColor(unpack(selected and Theme.color.cyan or Theme.color.border))
+        end
+    end
+    panel:SetHeight(8 + #results * 36)
+    panel:Show()
+    return results
+end
+
+function UI:MoveSearchSelection(delta)
+    local frame = self.frame
+    local results = frame and frame.searchMatches or {}
+    if #results == 0 then return false end
+    frame.searchSelection = ((frame.searchSelection or 1) - 1 + delta) % #results + 1
+    self:RefreshSearchResults(frame.search and frame.search:GetText() or "")
+    return true
+end
+
+function UI:SelectSearchResult(result)
+    local frame = self.frame
+    if not result and frame then result = (frame.searchMatches or {})[frame.searchSelection or 1] end
+    if type(result) ~= "table" or type(result.page) ~= "string" then return false end
+    UI:OpenLegacyRoute(result.page)
+    self:SetStatus((localized("SEARCH", "Search") .. ": " .. (result.label or result.pageName or result.page)), "success")
+    if frame and frame.search then frame.search:ClearFocus() end
+    if frame and frame.searchResults then frame.searchResults:Hide() end
+    return true
+end
+
 function UI:CreateShell()
     if self.frame then return self.frame end
 
@@ -197,16 +254,10 @@ function UI:CreateShell()
     search:SetScript("OnTextChanged", function(self)
         local text = self:GetText() or ""
         self.placeholder:SetShown(text == "" and not self:HasFocus())
+        UI:RefreshSearchResults(text, true)
     end)
     search:SetScript("OnEnterPressed", function(self)
-        local legacyResults = ZD.FindSearchResults and ZD:FindSearchResults(self:GetText(), 1) or {}
-        local legacyMatch = legacyResults[1]
-        if legacyMatch then
-            UI:OpenLegacyRoute(legacyMatch.page)
-            UI:SetStatus("Opened " .. (legacyMatch.label or legacyMatch.pageName or legacyMatch.page) .. ".", "success")
-            self:ClearFocus()
-            return
-        end
+        if UI:SelectSearchResult() then return end
         local results = V13.SettingsSchema and V13.SettingsSchema:Search(self:GetText()) or {}
         local match = results[1]
         if match then
@@ -217,7 +268,53 @@ function UI:CreateShell()
             UI:SetStatus("No setting matched that search.", "warning")
         end
     end)
+    search:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+        if frame.searchResults then frame.searchResults:Hide() end
+    end)
+    search:SetScript("OnKeyDown", function(_, key)
+        if key == "UP" then UI:MoveSearchSelection(-1) end
+        if key == "DOWN" then UI:MoveSearchSelection(1) end
+    end)
     frame.search = search
+
+    local searchResults = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+    searchResults:SetPoint("TOPLEFT", search, "BOTTOMLEFT", 0, -4)
+    searchResults:SetPoint("TOPRIGHT", search, "BOTTOMRIGHT", 0, -4)
+    searchResults:SetHeight(8)
+    searchResults:SetFrameStrata("DIALOG")
+    searchResults:SetFrameLevel(header:GetFrameLevel() + 20)
+    searchResults:SetClampedToScreen(true)
+    Controls:SetBackdrop(searchResults, Theme.color.surface, Theme.color.border)
+    searchResults.rows = {}
+    for index = 1, MAX_SEARCH_RESULTS do
+        local row = CreateFrame("Button", nil, searchResults, "BackdropTemplate")
+        row:SetPoint("TOPLEFT", 4, -4 - (index - 1) * 36)
+        row:SetPoint("TOPRIGHT", -4, -4 - (index - 1) * 36)
+        row:SetHeight(32)
+        row:RegisterForClicks("LeftButtonUp")
+        Controls:SetBackdrop(row, Theme.color.canvas, Theme.color.border)
+        row.title = Controls:Label(row, "", 10, Theme.color.text)
+        row.title:SetPoint("LEFT", 8, 0)
+        row.title:SetPoint("RIGHT", -96, 0)
+        row.route = Controls:Label(row, "", 9, Theme.color.muted)
+        row.route:SetPoint("RIGHT", -8, 0)
+        row.route:SetJustifyH("RIGHT")
+        row:SetScript("OnClick", function(self) UI:SelectSearchResult(self.result) end)
+        row:SetScript("OnEnter", function(self)
+            if self.result then self:SetBackdropBorderColor(unpack(Theme.color.cyan)) end
+        end)
+        row:SetScript("OnLeave", function(self)
+            local selected = self.result and self.result == (frame.searchMatches or {})[frame.searchSelection or 1]
+            self:SetBackdropBorderColor(unpack(selected and Theme.color.cyan or Theme.color.border))
+        end)
+        row:Hide()
+        searchResults.rows[index] = row
+    end
+    searchResults:Hide()
+    frame.searchResults = searchResults
+    frame.searchMatches = {}
+    frame.searchSelection = 1
 
     local commandBar = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     commandBar:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
@@ -305,6 +402,16 @@ function UI:CreateShell()
         updateContext(frame)
         UI:ShowPage(UI.currentPage)
         UI:RefreshStatus()
+    end)
+    frame:EnableKeyboard(true)
+    if frame.SetPropagateKeyboardInput then frame:SetPropagateKeyboardInput(true) end
+    frame:SetScript("OnKeyDown", function(self, key)
+        local focusSearch = key == "F" and IsControlKeyDown and IsControlKeyDown()
+        if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(not focusSearch) end
+        if focusSearch then
+            search:SetFocus()
+            search:HighlightText()
+        end
     end)
     frame:RegisterEvent("PLAYER_REGEN_DISABLED")
     frame:RegisterEvent("PLAYER_REGEN_ENABLED")
