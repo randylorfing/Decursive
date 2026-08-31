@@ -1,0 +1,12 @@
+---
+description: Prohibit downloads and execution from dyne/luabinaries
+alwaysApply: true
+---
+
+# Prohibited LuaBinaries Source
+
+- Never download files from the `dyne/luabinaries` GitHub repository or any of its release URLs.
+- Never execute binaries obtained from that repository.
+- Prefer an already-installed or bundled runtime for Lua validation.
+- If no suitable local runtime is available, report the unavailable validation or ask the user before obtaining tooling from any alternative source.
+- If an artifact from `dyne/luabinaries` is discovered locally, do not execute it; report its path to the user.

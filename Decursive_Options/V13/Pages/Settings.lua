@@ -42,6 +42,7 @@ local categories = {
             { key = "curing", label = "Curing", builder = "BuildCuring", direct = true },
             { key = "bindings", label = "Spells & Bindings", builder = "BuildBindings", direct = true },
             { key = "lists", label = "Priority & Skip", builder = "BuildLists", height = 590 },
+			{ key = "macro", label = "Macro", builder = "BuildMacro", direct = true },
         },
     },
     {
@@ -62,14 +63,6 @@ local categories = {
             { key = "bleeds", label = "Bleeds", builder = "BuildBleeds", direct = true },
             { key = "integrations", label = "Detection", builder = "BuildIntegrations", height = 460 },
             { key = "dispeldb", label = "Dispel Database", builder = "BuildDispelDB", height = 850 },
-        },
-    },
-    {
-        key = "profiles", label = "Profiles & Tools",
-        routes = {
-            { key = "profiles", label = "Profiles & Modes", builder = "BuildProfiles", height = 660 },
-            { key = "sharing", label = "Import / Export", builder = "BuildSharing", height = 560 },
-            { key = "macro", label = "Macro", builder = "BuildMacro", direct = true },
         },
     },
     {

@@ -980,7 +980,7 @@ do
             return errorPrefix("D.Status not available");
         end
 
-        local sucess, MouseButtons = pcall(function ()return D.db.global.MouseButtons end);
+        local sucess, MouseButtons = pcall(function () return D.profile.MouseButtons end)
 
         if not sucess then
             return errorPrefix("couldn't get MouseButtons: " .. MouseButtons);

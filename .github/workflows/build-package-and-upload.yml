@@ -69,7 +69,9 @@ jobs:
             Decursive/Dcr_DebuffsFrame.lua
             Decursive/Dcr_Events.lua
             Decursive/Dcr_LiveList.lua
+            Decursive/Dcr_ProfileManager.lua
             Decursive/Dcr_ProfileIO.lua
+            Decursive/Dcr_CureBindings.lua
             Decursive/Dcr_opt.lua
             Decursive/Dcr_preload.lua
             Decursive/Dcr_utils.lua

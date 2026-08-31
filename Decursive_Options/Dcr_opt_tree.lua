@@ -2124,11 +2124,12 @@ local function GetStaticOptions ()
                    CurrentAssignments = {
                         type = 'description',
                         name = function()
-                            local MouseButtons = D.db.global.MouseButtons;
                              table.wipe(SpellAssignmentsTexts);
                              SpellAssignmentsTexts[1] = "\n" .. D:ColorText(L["OPT_CUSTOMSPELLS_EFFECTIVE_ASSIGNMENTS"], "FFEEEE33");
 
-                              for Spell, Prio in pairs(D.Status.CuringSpellsPrio) do
+                              for _, action in ipairs(D.GetCureBindingActions and D:GetCureBindingActions() or {}) do
+                                  local Spell = action.spellName
+                                  local Prio = action.slot
 
                                   local SpellCuredTypes = {};
                                   for typeprio, afflictionType in ipairs(D.Status.ReversedCureOrder) do
@@ -2140,10 +2141,11 @@ local function GetStaticOptions ()
 
                                   SpellCuredTypes = table.concat (SpellCuredTypes, " - ");
 
+                                  local gestureName = DC.MouseButtonsReadable[action.gesture] or L["CURE_BINDING_UNASSIGNED"] or "Unassigned"
                                   SpellAssignmentsTexts[Prio + 1] = str_format(
                                   "\n    %s -> %s%s", D:ColorText(("%s - %s - (%s)"
                                   ):format(
-                                  L["OPT_CURE_PRIORITY_NUM"]:format(Prio), SpellCuredTypes, DC.MouseButtonsReadable[MouseButtons[Prio]]
+                                  L["OPT_CURE_PRIORITY_NUM"]:format(Prio), SpellCuredTypes, gestureName
                                   ), D:NumToHexColor(D.profile.MF_colors[Prio])), Spell, (D.Status.FoundSpells[Spell] and D.Status.FoundSpells[Spell][5]) and "|cFFFF0000*|r" or "");
                               end
                               return table.concat(SpellAssignmentsTexts, "\n");
@@ -2350,7 +2352,7 @@ local function GetStaticOptions ()
                         desc = L["OPT_MACROBIND_DESC"],
                         get = function ()
                             local key = (GetBindingKey(D.CONF.MACROCOMMAND));
-                            D.db.global.MacroBind = key;
+                            D.profile.MacroBind = key
                             return key;
                         end,
                         set = function (info,key)
@@ -2477,70 +2479,97 @@ local function GetOptions()
     -- create bleeding debuffs addition submenus
     D:CreateBleedingDebuffsOptionMenu(options.args.CureOptions.args.BleedEffects.args.knownBleedingEffects.args);
 
-    -- Create profile options
-    options.args.general.args.profiles = LibStub("AceDBOptions-3.0"):GetOptionsTable(D.db);
-    options.args.general.args.profiles.order = -1;
-    options.args.general.args.profiles.inline = true;
-    options.args.general.args.profiles.hidden = function() return not D:IsEnabled(); end;
-    options.args.general.args.profiles.disabled = function() return D.Status.Combat or not D:IsEnabled(); end;
+    if D.ProfileManager then
+        -- Stable profile IDs and environment assignments are manager-owned.  Do
+        -- not expose AceDBOptions here: it operates on storage keys and would
+        -- bypass the profile-name, ordering, assignment, and read-only policy.
+        options.args.general.args.profiles = {
+            type = 'group',
+            name = 'Decursive Profiles',
+            desc = 'Open the Profiles workspace to manage saved profiles and environment assignments.',
+            order = -1,
+            inline = true,
+            hidden = function() return not D:IsEnabled() end,
+            args = {
+                OpenProfiles = {
+                    type = 'execute',
+                    name = 'Open Profiles Workspace',
+                    desc = 'Open the separate Decursive Profiles and Environment Profiles pages.',
+                    func = function()
+                        local V13 = DecursiveRootTable and DecursiveRootTable.ZhaohuV13
+                        if V13 and V13.Options and V13.Options.OpenProfilesRoute then
+                            V13.Options:OpenProfilesRoute('DECURSIVE')
+                        end
+                    end,
+                    order = 1,
+                },
+            },
+        }
+    else
+        -- Older branches retain AceDB's name-keyed profile UI and sharing panel.
+        options.args.general.args.profiles = LibStub("AceDBOptions-3.0"):GetOptionsTable(D.db)
+        options.args.general.args.profiles.order = -1
+        options.args.general.args.profiles.inline = true
+        options.args.general.args.profiles.hidden = function() return not D:IsEnabled() end
+        options.args.general.args.profiles.disabled = function() return D.Status.Combat or not D:IsEnabled() end
 
-    -- Zhaohu 12.1: profile sharing uses the existing AceDB profile plus AceSerializer.
-    options.args.general.args.profiles.args.DecursiveProfileIO = {
-        type = 'group',
-        name = 'Import / Export',
-        desc = 'Share the active Decursive profile without overwriting global, locale, or class-scoped data.',
-        order = 90,
-        inline = true,
-        args = {
-            CurrentProfile = {
-                type = 'description',
-                name = function()
-                    local name = D.db and D.db:GetCurrentProfile() or 'Unknown'
-                    return '|cff55ffffCurrent profile:|r |cffffffff' .. tostring(name) .. '|r'
-                end,
-                order = 1,
+        options.args.general.args.profiles.args.DecursiveProfileIO = {
+            type = 'group',
+            name = 'Import / Export',
+            desc = 'Share the active Decursive profile without overwriting global, locale, or class-scoped data.',
+            order = 90,
+            inline = true,
+            args = {
+                CurrentProfile = {
+                    type = 'description',
+                    name = function()
+                        local name = D.db and D.db:GetCurrentProfile() or 'Unknown'
+                        return '|cff55ffffCurrent profile:|r |cffffffff' .. tostring(name) .. '|r'
+                    end,
+                    order = 1,
+                },
+                ExportProfile = {
+                    type = 'input',
+                    name = 'Export current profile',
+                    desc = 'Copy this text to share or back up the active Decursive profile.',
+                    multiline = 8,
+                    width = 'full',
+                    get = function() return D:GetProfileExportString() end,
+                    set = function() end,
+                    order = 10,
+                },
+                ImportProfile = {
+                    type = 'input',
+                    name = 'Import profile',
+                    desc = 'Paste a Decursive profile export here, then click Import.',
+                    multiline = 8,
+                    width = 'full',
+                    get = function() return D:GetProfileImportBuffer() end,
+                    set = function(info, value) D:SetProfileImportBuffer(value) end,
+                    order = 20,
+                },
+                ImportButton = {
+                    type = 'execute',
+                    name = 'Import',
+                    desc = 'Replace the settings in the active profile with the pasted profile data.',
+                    confirm = 'Importing will replace the settings in your current Decursive profile. Continue?',
+                    func = function() D:ImportProfileString(D:GetProfileImportBuffer()) end,
+                    disabled = function()
+                        return InCombatLockdown() or D:GetProfileImportBuffer():match('^%s*$') ~= nil
+                    end,
+                    order = 30,
+                },
+                IOStatus = {
+                    type = 'description',
+                    name = function() return D:GetProfileIOStatus() end,
+                    order = 40,
+                },
             },
-            ExportProfile = {
-                type = 'input',
-                name = 'Export current profile',
-                desc = 'Copy this text to share or back up the active Decursive profile.',
-                multiline = 8,
-                width = 'full',
-                get = function() return D:GetProfileExportString() end,
-                set = function() end,
-                order = 10,
-            },
-            ImportProfile = {
-                type = 'input',
-                name = 'Import profile',
-                desc = 'Paste a Decursive profile export here, then click Import.',
-                multiline = 8,
-                width = 'full',
-                get = function() return D:GetProfileImportBuffer() end,
-                set = function(info, value) D:SetProfileImportBuffer(value) end,
-                order = 20,
-            },
-            ImportButton = {
-                type = 'execute',
-                name = 'Import',
-                desc = 'Replace the settings in the active profile with the pasted profile data.',
-                confirm = 'Importing will replace the settings in your current Decursive profile. Continue?',
-                func = function() D:ImportProfileString(D:GetProfileImportBuffer()) end,
-                disabled = function()
-                    return InCombatLockdown() or D:GetProfileImportBuffer():match('^%s*$') ~= nil
-                end,
-                order = 30,
-            },
-            IOStatus = {
-                type = 'description',
-                name = function() return D:GetProfileIOStatus() end,
-                order = 40,
-            },
-        },
-    };
+        }
+    end
 
-    if DC.CATACLYSM or not DC.WOWC then
-        -- AceDB already enhanced at Decursive OnEnable; only wire options UI here.
+    if (DC.CATACLYSM or not DC.WOWC) and not D.ProfileManager then
+        -- Older branches without the manager retain LibDualSpec's Ace options.
         local LibDualSpec = LibStub('LibDualSpec-1.0');
         if options.args.general.args.profiles then
             LibDualSpec:EnhanceOptions(options.args.general.args.profiles, D.db);

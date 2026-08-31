@@ -18,7 +18,8 @@
     You should have received a copy of the GNU General Public License
     along with Decursive.  If not, see <https://www.gnu.org/licenses/>.
 
-    Uses AceSerializer-3.0 and intentionally operates on the active AceDB profile only.
+    Uses AceSerializer-3.0. Format v2 explicitly distinguishes a complete
+    logical profile (five full variants) from a single environment variant.
 --]]
 
 local addonName, T = ...
@@ -27,10 +28,11 @@ if not D then return end
 
 local Serializer = LibStub("AceSerializer-3.0", true)
 local FORMAT = "DECursiveProfile"
-local FORMAT_VERSION = 1
-local MAX_IMPORT_BYTES = 256 * 1024
+local FORMAT_VERSION = 2
+local LEGACY_FORMAT_VERSION = 1
+local MAX_IMPORT_BYTES = 1024 * 1024
 local MAX_IMPORT_DEPTH = 16
-local MAX_IMPORT_NODES = 20000
+local MAX_IMPORT_NODES = 100000
 local MAX_STRING_BYTES = 4096
 local MAX_KEY_BYTES = 256
 local MAX_LIST_ENTRIES = 100
@@ -216,6 +218,7 @@ local ENUM_VALUES = {
     Alert121DispelMode = { TIMED = true, UNTIL_CLEARED = true },
     SoundNotificationChannel = { Master = true, SFX = true, Dialog = true, Ambience = true, Music = true },
     CenterTextDisplay = { ["1_TLEFT"] = true, ["2_TELAPSED"] = true, ["3_STACKS"] = true, ["4_NONE"] = true },
+    CureBindingMode = { AUTO = true, MANUAL = true },
 }
 
 local COORDINATE_KEYS = {
@@ -249,7 +252,36 @@ local EXTENSION_SCHEMA = {
     V11WindowWidth = "number",
     V11WindowHeight = "number",
     MacroBind = "string_or_false",
+    CureBindingMode = "string",
 }
+
+local CURE_BINDING_GESTURES = {
+    UNASSIGNED = true,
+    ["*%s1"] = true, ["*%s2"] = true, ["*%s3"] = true, ["*%s4"] = true, ["*%s5"] = true,
+    ["ctrl-%s1"] = true, ["ctrl-%s2"] = true, ["ctrl-%s3"] = true, ["ctrl-%s4"] = true, ["ctrl-%s5"] = true,
+    ["shift-%s1"] = true, ["shift-%s2"] = true, ["shift-%s3"] = true, ["shift-%s4"] = true, ["shift-%s5"] = true,
+    ["alt-%s1"] = true, ["alt-%s2"] = true, ["alt-%s3"] = true, ["alt-%s4"] = true, ["alt-%s5"] = true,
+}
+
+local function validateCureBindingManual(value, path)
+    if type(value) ~= "table" then return nil, path .. " must be a table" end
+    local result = {}
+    local count = 0
+    for actionKey, gesture in pairs(value) do
+        count = count + 1
+        if count > 100 then return nil, path .. " contains too many actions" end
+        if type(actionKey) ~= "string" or actionKey == "" or #actionKey > 128
+            or actionKey:find("[%z\1-\31\127]")
+        then
+            return nil, path .. " contains an invalid action identity"
+        end
+        if not CURE_BINDING_GESTURES[gesture] then
+            return nil, path .. "." .. actionKey .. " has an unsupported gesture"
+        end
+        result[actionKey] = gesture
+    end
+    return result
+end
 
 local LIST_KEYS = {
     PriorityList = true,
@@ -557,6 +589,7 @@ local function validateExtension(key, value, path, context)
 end
 
 local function buildValidatedProfile(addon, imported)
+    if type(imported) ~= "table" then return nil, "profile variant is missing or invalid" end
     if type(addon.defaults) ~= "table" or type(addon.defaults.profile) ~= "table" then
         return nil, "Decursive profile defaults are unavailable"
     end
@@ -603,6 +636,14 @@ local function buildValidatedProfile(addon, imported)
             local validated, err = mergeMinimapSettings(defaults[key] or {}, value, "profile." .. key, context)
             if err then return nil, err end
             result[key] = validated
+        elseif key == "MacroBind" then
+            local validated, err = validateExtension(key, value, "profile." .. key, context)
+            if err then return nil, err end
+            result[key] = validated
+        elseif key == "CureBindingManual" then
+            local validated, err = validateCureBindingManual(value, "profile." .. key)
+            if err then return nil, err end
+            result[key] = validated
         elseif defaults[key] ~= nil then
             local validated, err = validateAgainstDefault(value, defaults[key], key, "profile." .. key, context)
             if err then return nil, err end
@@ -627,27 +668,49 @@ local function shortError(value)
     return message
 end
 
-function D:GetProfileExportString()
+function D:GetProfileExportString(scope)
     if not Serializer or not self.db or type(self.db.profile) ~= "table" then
         return ""
     end
 
+    scope = scope == "environment" and "environment" or "logical"
     local payload = {
         format = FORMAT,
         version = FORMAT_VERSION,
         addon = "Decursive",
         addonVersion = self.version or "unknown",
         interface = select(4, GetBuildInfo()),
-        profileName = self.db:GetCurrentProfile(),
-        profile = self.db.profile,
+        scope = scope,
     }
+    if self.ProfileManager then
+        local profileID = self.ProfileManager:ResolveActiveProfileID()
+        payload.profileName = self.ProfileManager:GetProfileName(profileID)
+        if scope == "logical" then
+            local logical, logicalError = self.ProfileManager:ExportLogicalProfile(profileID)
+            if not logical then
+                self.ProfileIOStatus = "|cffff3333Export failed:|r " .. tostring(logicalError)
+                return ""
+            end
+            payload.activationMode = logical.activationMode
+            payload.variants = logical.variants
+        else
+            payload.environment = self.ProfileManager:GetEditEnvironment(profileID)
+            payload.profile = self.db.profile
+        end
+    else
+        payload.scope = "environment"
+        payload.profileName = self.db:GetCurrentProfile()
+        payload.profile = self.db.profile
+    end
 
     local ok, serialized = pcall(Serializer.Serialize, Serializer, payload)
     if not ok then
         self.ProfileIOStatus = "|cffff3333Export failed:|r " .. tostring(serialized)
         return ""
     end
-    self.ProfileIOStatus = "|cff55ff55Profile export ready.|r"
+    self.ProfileIOStatus = scope == "logical"
+        and "|cff55ff55Complete logical profile export ready (five full variants).|r"
+        or "|cff55ff55Single environment variant export ready.|r"
     return serialized
 end
 
@@ -662,6 +725,10 @@ end
 function D:ImportProfileString(text)
     if InCombatLockdown() then
         self.ProfileIOStatus = "|cffff3333Profiles cannot be imported during combat.|r"
+        return false
+    end
+    if self.ProfileManager and self.ProfileManager:IsReadOnly() then
+        self.ProfileIOStatus = "|cffff3333Profile import is disabled:|r this profile catalog was created by a newer Decursive version."
         return false
     end
     if not Serializer then
@@ -692,7 +759,9 @@ function D:ImportProfileString(text)
         self.ProfileIOStatus = "|cffff3333Import failed:|r invalid serialized data."
         return false
     end
-    if type(payload) ~= "table" or payload.format ~= FORMAT or payload.version ~= FORMAT_VERSION or type(payload.profile) ~= "table" then
+    if type(payload) ~= "table" or payload.format ~= FORMAT
+        or payload.version ~= FORMAT_VERSION and payload.version ~= LEGACY_FORMAT_VERSION
+    then
         self.ProfileIOStatus = "|cffff3333Import failed:|r this is not a supported Decursive profile export."
         return false
     end
@@ -703,11 +772,47 @@ function D:ImportProfileString(text)
         return false
     end
 
+    if payload.version == FORMAT_VERSION and payload.scope == "logical" then
+        if not self.ProfileManager or type(payload.variants) ~= "table" then
+            self.ProfileIOStatus = "|cffff3333Import failed:|r the complete logical profile payload is incomplete."
+            return false
+        end
+        local candidates = {}
+        local ignoredTotal = 0
+        for _, environment in ipairs(self.ProfileManager.ENVIRONMENT_ORDER) do
+            local candidate, validationError, ignored = buildValidatedProfile(self, payload.variants[environment])
+            if not candidate then
+                self.ProfileIOStatus = "|cffff3333Import failed in " .. environment .. ":|r " .. shortError(validationError) .. "."
+                return false
+            end
+            candidates[environment] = candidate
+            ignoredTotal = ignoredTotal + (ignored or 0)
+        end
+        local profileID = self.ProfileManager:ResolveActiveProfileID()
+        local imported, importError = self.ProfileManager:ImportLogicalProfile(profileID, candidates, payload.activationMode)
+        if not imported then
+            self.ProfileIOStatus = "|cffff3333Import failed; no variants were changed:|r " .. shortError(importError)
+            return false
+        end
+        self.ProfileImportBuffer = ""
+        self.ProfileIOStatus = ignoredTotal > 0
+            and ("|cff55ff55Complete logical profile imported.|r %d obsolete or unsupported setting(s) were ignored."):format(ignoredTotal)
+            or "|cff55ff55Complete logical profile imported transactionally.|r"
+        return true
+    end
+
+    if type(payload.profile) ~= "table" then
+        self.ProfileIOStatus = "|cffff3333Import failed:|r the single environment payload is incomplete."
+        return false
+    end
     local candidate, validationError, ignored = buildValidatedProfile(self, payload.profile)
     if not candidate then
         self.ProfileIOStatus = "|cffff3333Import failed:|r " .. shortError(validationError) .. "."
         return false
     end
+    candidate.Environment121Profiles = nil
+    candidate.Environment121ProfilesInitialized = nil
+    candidate.Environment121Mode = nil
 
     local previousProfile = cloneValue(self.db.profile)
     local previousCatchAllErrors = T._CatchAllErrors
@@ -741,13 +846,13 @@ function D:ImportProfileString(text)
 
     self.ProfileImportBuffer = ""
     if ignored and ignored > 0 then
-        self.ProfileIOStatus = ("|cff55ff55Profile imported successfully.|r %d obsolete or unsupported setting(s) were ignored."):format(ignored)
+        self.ProfileIOStatus = ("|cff55ff55Single environment variant imported successfully.|r %d obsolete or unsupported setting(s) were ignored."):format(ignored)
     else
-        self.ProfileIOStatus = "|cff55ff55Profile imported successfully.|r"
+        self.ProfileIOStatus = "|cff55ff55Single environment variant imported successfully.|r"
     end
     return true
 end
 
 function D:GetProfileIOStatus()
-    return self.ProfileIOStatus or "Exports contain only the active AceDB profile. Global, locale, and class-scoped data are not overwritten."
+    return self.ProfileIOStatus or "Complete exports contain all five variants of one logical profile. Global, locale, and class-scoped data are never overwritten."
 end

@@ -221,6 +221,39 @@ function D:GetDefaultsSettings()
         },
 
         profile = {
+            -- Binding policy is profile-scoped in schema v4 so every complete
+            -- environment variant can use independent click priorities and a
+            -- different optional Decursive macro key.
+            MacroBind = false,
+            -- Simple Two-Button is the default secure cure layout. The
+            -- generated bindings are rebuilt from the current specialization's
+            -- distinct targeted friendly cures while out of combat. Manual
+            -- mappings are keyed by stable spell/item action identity so every
+            -- full environment variant can keep an independent layout.
+            CureBindingMode = "AUTO",
+            CureBindingManual = {},
+            MouseButtons = {
+                "*%s1",
+                "*%s2",
+                "ctrl-%s1",
+                "ctrl-%s2",
+                "shift-%s1",
+                "shift-%s2",
+                "shift-%s3",
+                "alt-%s1",
+                "alt-%s2",
+                "alt-%s3",
+                "*%s4",
+                "ctrl-%s4",
+                "shift-%s4",
+                "alt-%s4",
+                "*%s5",
+                "ctrl-%s5",
+                "shift-%s5",
+                "alt-%s5",
+                "*%s3",
+                "ctrl-%s3",
+            },
             -- this is the priority list of people to cure
             PriorityList = { },
             PriorityListClass = { },
@@ -1007,6 +1040,7 @@ function D:SetCureOrder (ToChange)
         D:SetIcon(DC.IconOFF);
     end
 
+    if self.RefreshCureBindingModel then self:RefreshCureBindingModel("cure-order") end
     self:SetMacrosPerPrioTable("mouseover");
 
 end
@@ -1513,8 +1547,12 @@ do
 
         if (type(ColorReason) == "number" and ColorReason <= 7) then
 
-            name = D:ColorText(  ("%s (%s)"):format( L["OPT_CURE_PRIORITY_NUM"]:format(ColorReason), DC.MouseButtonsReadable[D.db.global.MouseButtons[ColorReason] ])  , D:NumToHexColor(L_MF_colors[ColorReason]));
-            desc = (L["COLORALERT"]):format(DC.MouseButtonsReadable[D.db.global.MouseButtons[ColorReason] ]);
+            local gesture = D.GetCureBindingGestureForPriority
+                and D:GetCureBindingGestureForPriority(ColorReason)
+                or D.profile.MouseButtons[ColorReason]
+            local gestureName = DC.MouseButtonsReadable[gesture] or L["CURE_BINDING_UNASSIGNED"] or "Unassigned"
+            name = D:ColorText(("%s (%s)"):format(L["OPT_CURE_PRIORITY_NUM"]:format(ColorReason), gestureName), D:NumToHexColor(L_MF_colors[ColorReason]))
+            desc = (L["COLORALERT"]):format(gestureName)
 
         elseif (type(ColorReason) == "number")      then
             local Text = "";
@@ -1714,10 +1752,10 @@ do
         if retrieveKeyComboNum (info) == 1 then
             table.wipe(TempTable);
 
-            for i=1, #D.db.global.MouseButtons do
-                TempTable[i] = D:ColorText(DC.MouseButtonsReadable[D.db.global.MouseButtons[i]],
+            for i=1, #D.profile.MouseButtons do
+                TempTable[i] = D:ColorText(DC.MouseButtonsReadable[D.profile.MouseButtons[i]],
                         i < 7 and D:NumToHexColor(D.profile.MF_colors[i]) -- defined priorities
-                        or (i >= #D.db.global.MouseButtons - 1 and "FFFFFFFF" -- target and focus
+                        or (i >= #D.profile.MouseButtons - 1 and "FFFFFFFF" -- target and focus
                         or "FFBBBBBB") -- other unused buttons
                     );
             end
@@ -1736,9 +1774,9 @@ do
         name = function (info)
             if not retrieveKeyComboNum (info) then return "" end -- needed because when called by command line, info is set to the parent
 
-            if retrieveKeyComboNum (info) < #D.db.global.MouseButtons - 1 then
+            if retrieveKeyComboNum (info) < #D.profile.MouseButtons - 1 then
                 return D:ColorText(L["OPT_CURE_PRIORITY_NUM"]:format(retrieveKeyComboNum (info)),  D:NumToHexColor(D.profile.MF_colors[retrieveKeyComboNum (info)]));
-            elseif  retrieveKeyComboNum (info) == #D.db.global.MouseButtons - 1 then
+            elseif  retrieveKeyComboNum (info) == #D.profile.MouseButtons - 1 then
                 return L["OPT_MUFTARGETBUTTON"];
             else
                 return L["OPT_MUFFOCUSBUTTON"];
@@ -1756,7 +1794,9 @@ do
 
             if value ~= ThisKeyComboNum then -- we would destroy the table
 
-                D:tSwap(D.db.global.MouseButtons, ThisKeyComboNum, value);
+                D:tSwap(D.profile.MouseButtons, ThisKeyComboNum, value)
+
+				if D.AdoptLegacyMouseButtonsAsManual then D:AdoptLegacyMouseButtonsAsManual() end
 
                 -- force all MUFs to update their attributes
                 D.Status.SpellsChanged = GetTime();
@@ -1780,8 +1820,9 @@ do
                 name = L["OPT_RESETMUFMOUSEBUTTONS"],
                 desc = L["OPT_RESETMUFMOUSEBUTTONS_DESC"],
                 func = function ()
-                    table.wipe(D.db.global.MouseButtons);
-                    D:tcopy(D.db.global.MouseButtons, D.defaults.global.MouseButtons);
+                    table.wipe(D.profile.MouseButtons)
+                    D:tcopy(D.profile.MouseButtons, D.defaults.profile.MouseButtons)
+                    if D.ResetCureBindingsToAutomatic then D:ResetCureBindingsToAutomatic() end
                     -- force all MUFs to update their attributes
                     D.Status.SpellsChanged = GetTime();
                 end,
@@ -1795,9 +1836,9 @@ do
         end
 
         -- create choice munu for targeting (it's always the last but one available button)
-        key_Combos_Select["KeyCombo" .. #D.db.global.MouseButtons - 1] = OptionPrototype;
+        key_Combos_Select["KeyCombo" .. #D.profile.MouseButtons - 1] = OptionPrototype
         -- create choice munu for focusing (it's always the last available button)
-        key_Combos_Select["KeyCombo" .. #D.db.global.MouseButtons] = OptionPrototype;
+        key_Combos_Select["KeyCombo" .. #D.profile.MouseButtons] = OptionPrototype
 
         return key_Combos_Select;
     end
@@ -2351,7 +2392,7 @@ do
     end
 end
 
--- to test on 2.3 : /script D:PrintLiteral(GetBindingAction(D.db.global.MacroBind));
+-- Binding selection is stored in the active full environment variant.
 -- to test on 2.3 : /script D:PrintLiteral(GetBindingKey(D.CONF.MACROCOMMAND));
 local SaveBindings = _G.SaveBindings or _G.AttemptToSaveBindings; -- was renamed for WOW Classic, it might happen too on retail...
 
@@ -2368,14 +2409,14 @@ function D:SetMacroKey ( key )
     end
 
     -- if the key is already correctly mapped, return here.
-    --if (key and key == D.db.global.MacroBind and GetBindingAction(key) == D.CONF.MACROCOMMAND) then
-    if D.profile.DisableMacroCreation or key and key == D.db.global.MacroBind and D:tcheckforval({GetBindingKey(D.CONF.MACROCOMMAND)}, key) then -- change for 2.3 where GetBindingAction() is no longer working
+    -- If the selected profile key is already bound, preserve the previous action.
+    if D.profile.DisableMacroCreation or key and key == D.profile.MacroBind and D:tcheckforval({GetBindingKey(D.CONF.MACROCOMMAND)}, key) then -- change for 2.3 where GetBindingAction() is no longer working
         return;
     end
 
     -- if the current set key is currently mapped to Decursive macro (it means we are changing the key)
     --if (D.profile.MacroBind and GetBindingAction(D.profile.MacroBind) == D.CONF.MACROCOMMAND) then
-    if (D.db.global.MacroBind and D:tcheckforval({GetBindingKey(D.CONF.MACROCOMMAND)}, D.db.global.MacroBind) ) then -- change for 2.3 where GetBindingAction() is no longer working
+    if (D.profile.MacroBind and D:tcheckforval({GetBindingKey(D.CONF.MACROCOMMAND)}, D.profile.MacroBind) ) then -- change for 2.3 where GetBindingAction() is no longer working
 
         -- clearing redudent mapping to Decursive macro.
         local MappedKeys = {GetBindingKey(D.CONF.MACROCOMMAND)};
@@ -2387,7 +2428,7 @@ function D:SetMacroKey ( key )
         -- Restore previous key state
         if (D.profile.PreviousMacroKeyAction) then
             D:Debug("Previous key action restored:", D.profile.PreviousMacroKeyAction);
-            if not SetBinding(D.db.global.MacroBind, D.profile.PreviousMacroKeyAction) then
+            if not SetBinding(D.profile.MacroBind, D.profile.PreviousMacroKeyAction) then
                 --  /script SetBinding ("BUTTON1", "CAMERAORSELECTORMOVE"); to communicate to people who accidently set BUUTON1 to our macro.
                 D:Debug("Restoration failed");
             end
@@ -2408,13 +2449,13 @@ function D:SetMacroKey ( key )
 
         -- set
         if (SetBindingMacro(key, D.CONF.MACRONAME)) then
-            D.db.global.MacroBind = key;
+            D.profile.MacroBind = key
             D:Println(L["MACROKEYMAPPINGSUCCESS"], key);
         else
             D:errln(L["MACROKEYMAPPINGFAILED"], key);
         end
     else
-        D.db.global.MacroBind = false;
+        D.profile.MacroBind = false
         if D.profile.NoKeyWarn and not GetBindingKey(D.CONF.MACROCOMMAND) then
             D:errln(L["MACROKEYNOTMAPPED"]);
         end

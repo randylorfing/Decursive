@@ -196,6 +196,7 @@ RELEASE_NOTES_v11*.md
 RELEASE_NOTES_v12.0*.md
 Todo.txt
 IMPLEMENTATION_SUMMARY.md
+FULL_ENVIRONMENT_PROFILES.md
 12_1_PATCH_NOTES.md
 V10.*.md
 V11_*.md
@@ -214,6 +215,10 @@ fi
 
 if [ -n "$(find "$releasedir" -type d -name .github -print -quit)" ]; then
     fail ".github/ was packaged; release automation is repository-only."
+fi
+
+if [ -n "$(find "$releasedir" -type d -name .cursor -print -quit)" ]; then
+    fail ".cursor/ was packaged; agent rules are repository-only."
 fi
 
 # The branding asset is source-only and is 612 KB, ~30% of an otherwise clean

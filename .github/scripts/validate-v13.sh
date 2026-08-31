@@ -24,8 +24,9 @@ lua_roots=(Decursive Decursive_Options)
 release_workflow=.github/workflows/build-package-and-upload.yml
 if ! rg -q --fixed-strings -- "- 'v*'" "$release_workflow" \
     || ! rg -q '^  pull_request:' "$release_workflow" \
-    || [ "$(rg -c '^[[:space:]]+- master$' "$release_workflow")" -lt 2 ]; then
-    fail 'The workflow must verify pull requests and master pushes while retaining the version-tag trigger.'
+    || [ "$(rg -c '^[[:space:]]+- master$' "$release_workflow")" -lt 2 ] \
+    || [ "$(rg -c '^[[:space:]]+- alpha$' "$release_workflow")" -lt 2 ]; then
+    fail 'The workflow must verify pull requests and pushes for master and alpha while retaining the version-tag trigger.'
 fi
 if ! rg -q --fixed-strings 'args: -d' "$release_workflow" \
     || ! rg -q --fixed-strings 'needs: verify' "$release_workflow" \
@@ -33,7 +34,9 @@ if ! rg -q --fixed-strings 'args: -d' "$release_workflow" \
     fail 'The publishing workflow lacks its credential-free pre-publish package gate.'
 fi
 if ! rg -q --fixed-strings 'Run maintained-code static checks' "$release_workflow" \
-    || ! rg -q --fixed-strings -- '--no-global' "$release_workflow"; then
+    || ! rg -q --fixed-strings -- '--no-global' "$release_workflow" \
+    || ! rg -q --fixed-strings 'Decursive/Dcr_ProfileManager.lua' "$release_workflow" \
+    || ! rg -q --fixed-strings 'Decursive/Dcr_CureBindings.lua' "$release_workflow"; then
     fail 'The workflow lacks its correctness-oriented maintained-code luacheck pass.'
 fi
 if ! rg -q --fixed-strings 'CF_API_TOKEN: ${{ secrets.CF_API_KEY }}' "$release_workflow" \
@@ -50,6 +53,10 @@ fi
     || fail 'The Emergency Soul Link visual behavior harness is missing.'
 [ -f .github/scripts/test-muf-aura-binding.lua ] \
     || fail 'The MUF native-owner binding behavior harness is missing.'
+[ -f .github/scripts/test-muf-native-detection.lua ] \
+    || fail 'The MUF native detection behavior harness is missing.'
+[ -f .github/scripts/test-cooldown-state-machine.lua ] \
+    || fail 'The Retail cooldown transaction behavior harness is missing.'
 [ -f .github/scripts/test-muf-state-safety.lua ] \
     || fail 'The MUF state-safety behavior harness is missing.'
 [ -f .github/scripts/test-live-list-startup-sentinels.lua ] \
@@ -58,6 +65,18 @@ fi
     || fail 'The Dcr_12_1 local-budget regression harness is missing.'
 [ -f .github/scripts/test-profile-manager.lua ] \
     || fail 'The profile migration and assignment regression harness is missing.'
+[ -f .github/scripts/test-profile-pages.lua ] \
+    || fail 'The profile page separation and routing regression harness is missing.'
+[ -f .github/scripts/test-full-environment-variants-static.lua ] \
+    || fail 'The full environment variant parser harness is missing.'
+[ -f .github/scripts/test-cure-bindings.lua ] \
+    || fail 'The automatic/manual cure-binding behavior harness is missing.'
+[ -f .github/scripts/test-cure-bindings-static.lua ] \
+    || fail 'The secure cure-binding static harness is missing.'
+[ -f .github/scripts/run-fengari.js ] \
+    || fail 'The reliable local Fengari status runner is missing.'
+[ -f .github/scripts/parse-lua-tree.js ] \
+    || fail 'The repository-wide Fengari Lua parser is missing.'
 
 verify_block=$(sed -n '/^  verify:/,/^  release:/p' "$release_workflow")
 release_block=$(sed -n '/^  release:/,$p' "$release_workflow")
@@ -111,9 +130,40 @@ fi
 source_version_tokens=$(rg -o '@project-version@' "${lua_roots[@]}" | wc -l | tr -d ' ')
 source_date_tokens=$(rg -o '@project-date-iso@' "${lua_roots[@]}" | wc -l | tr -d ' ')
 source_hash_tokens=$(rg -o '@project-abbreviated-hash@' "${lua_roots[@]}" | wc -l | tr -d ' ')
-if [ "$source_version_tokens" -ne 50 ] || [ "$source_date_tokens" -ne 4 ] \
+if [ "$source_version_tokens" -ne 51 ] || [ "$source_date_tokens" -ne 4 ] \
     || [ "$source_hash_tokens" -ne 1 ]; then
     fail "Unexpected source package-token baseline (version=$source_version_tokens date=$source_date_tokens hash=$source_hash_tokens)."
+fi
+
+if ! rg -q --fixed-strings 'Dcr_ProfileManager.lua' Decursive/Decursive.toc \
+    || ! rg -q --fixed-strings 'SCHEMA_VERSION = 4' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'libDualSpecMode = "manager-owned"' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'profileOrder = { Manager.DEFAULT_PROFILE_ID }' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'MAX_PROFILE_NAME_BYTES = 48' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'storedVersion and storedVersion > self.SCHEMA_VERSION' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'storageModel = "five-full-variants"' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'function Manager:CopyEnvironment' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'function Manager:ImportLogicalProfile' Decursive/Dcr_ProfileManager.lua; then
+    fail 'The stable-ID profile manager, compatibility mode, limits, or future-schema guard is incomplete.'
+fi
+if ! rg -q --fixed-strings 'Decursive/FULL_ENVIRONMENT_PROFILES.md' .pkgmeta; then
+    fail 'The full-environment architecture guide must remain source-only in packaged releases.'
+fi
+if ! rg -q '^[[:space:]]+- \.cursor\r?$' .pkgmeta \
+    || [ ! -f .cursor/rules/prohibited-luabinaries-source.mdc ] \
+    || ! rg -q --fixed-strings 'Never download files from the `dyne/luabinaries` GitHub repository' .cursor/rules/prohibited-luabinaries-source.mdc; then
+    fail 'The prohibited LuaBinaries source rule is missing or is not excluded from addon packages.'
+fi
+if ! rg -q --fixed-strings 'scope = scope == "environment" and "environment" or "logical"' Decursive/Dcr_ProfileIO.lua \
+    || ! rg -q --fixed-strings 'ExportLogicalProfile' Decursive/Dcr_ProfileIO.lua \
+    || ! rg -q --fixed-strings 'ImportLogicalProfile' Decursive/Dcr_ProfileIO.lua \
+    || ! rg -q --fixed-strings 'BeginEnvironmentEditing' Decursive_Options/V13/Shell.lua \
+    || ! rg -q --fixed-strings 'EndEnvironmentEditing' Decursive_Options/V13/Shell.lua; then
+    fail 'The full logical-profile IO contract or explicit edit-preview lifecycle is incomplete.'
+fi
+if rg -n --fixed-strings 'LibDualSpec:EnhanceDatabase' Decursive/DCR_init.lua \
+    || ! rg -q --fixed-strings 'and not D.ProfileManager' Decursive_Options/Dcr_opt_tree.lua; then
+    fail 'LibDualSpec can still compete with the manager-owned profile resolver.'
 fi
 
 for toc in Decursive/Decursive.toc Decursive_Options/Decursive_Options.toc; do
@@ -343,6 +393,14 @@ fi
 
 if rg -n --glob '*.lua' 'Native cure verification refresh|Native shared cooldown refresh' Decursive; then
     fail 'Found a retired combat-time managed AuraContainer refresh.'
+fi
+
+if ! rg -q --fixed-strings 'DCR_COOLDOWN_TX_V1_BEGIN' Decursive/Dcr_12_1.lua \
+    || ! rg -q --fixed-strings 'managedCooldownDurationObjects.BeginPending(priority, spellID, targetMF, attempt)' Decursive/Dcr_12_1.lua \
+    || ! rg -q --fixed-strings 'pcall(C_Spell.GetSpellCooldown, spellID)' Decursive/Dcr_12_1.lua \
+    || ! rg -q --fixed-strings 'C_Spell.GetSpellChargeDuration' Decursive/Dcr_12_1.lua \
+    || rg -q --fixed-strings 'GetSpellCooldownDuration, spellID, true' Decursive/Dcr_12_1.lua; then
+    fail 'The Retail cooldown pending transaction, public-state gate, or documented Duration API contract is incomplete.'
 fi
 
 if rg -n --glob '*.lua' --fixed-strings 'UpdateAllAuras' \
@@ -579,10 +637,31 @@ if [ -n "$lua_runner" ]; then
     "$lua_runner" .github/scripts/test-smart-rez.lua || status=1
     "$lua_runner" .github/scripts/test-soul-link-visual.lua || status=1
     "$lua_runner" .github/scripts/test-muf-aura-binding.lua || status=1
+    "$lua_runner" .github/scripts/test-muf-native-detection.lua || status=1
+    "$lua_runner" .github/scripts/test-cooldown-state-machine.lua || status=1
     "$lua_runner" .github/scripts/test-muf-state-safety.lua || status=1
     "$lua_runner" .github/scripts/test-live-list-startup-sentinels.lua || status=1
     "$lua_runner" .github/scripts/test-dcr-12-1-local-budget.lua || status=1
     "$lua_runner" .github/scripts/test-profile-manager.lua || status=1
+    "$lua_runner" .github/scripts/test-profile-pages.lua || status=1
+    "$lua_runner" .github/scripts/test-full-environment-variants-static.lua || status=1
+    "$lua_runner" .github/scripts/test-cure-bindings.lua || status=1
+    "$lua_runner" .github/scripts/test-cure-bindings-static.lua || status=1
+    if "$lua_runner" .github/scripts/test-profile-manager.lua --self-test-failure >/dev/null 2>&1; then
+        fail 'The profile-manager harness failure self-test unexpectedly returned success.'
+    else
+        echo 'PASS: profile-manager harness failure self-test returned nonzero.'
+    fi
+    if "$lua_runner" .github/scripts/test-cure-bindings.lua --self-test-failure >/dev/null 2>&1; then
+        fail 'The cure-binding harness failure self-test unexpectedly returned success.'
+    else
+        echo 'PASS: cure-binding harness failure self-test returned nonzero.'
+    fi
+    if "$lua_runner" .github/scripts/test-cooldown-state-machine.lua --self-test-failure >/dev/null 2>&1; then
+        fail 'The cooldown state-machine harness failure self-test unexpectedly returned success.'
+    else
+        echo 'PASS: cooldown state-machine harness failure self-test returned nonzero.'
+    fi
 else
     echo 'INFO: no local Lua runtime is available; CI installs Lua 5.4 for behavior harnesses.'
 fi

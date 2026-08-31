@@ -1,5 +1,88 @@
 # Zhaohu-Decursive Changelog
 
+## v12.1.4-alpha.3
+
+### Broader native detection and reliable cooldown feedback
+- Retail 12.1 MUFs now prefer Blizzard's broader native `DISPELLABLE` filter,
+  with `RAID_PLAYER_DISPELLABLE` as a guarded fallback. Decursive's existing
+  per-priority dispel-type maps still choose the established red, blue, and
+  orange presentation; aura identity remains owned by Blizzard's protected
+  detector.
+- Reworked successful-cure cooldown handling as a bounded pending transaction.
+  Cold first queries, late Duration objects, and spell-cache rebuilds can now
+  retry against the exact spell that succeeded instead of abandoning the
+  cooldown after one early miss.
+- Cooldown arming ignores global-cooldown-only states, handles final-charge
+  consumption, keeps the clicked MUF excluded safely across frame reuse, and
+  synchronizes newly attached native gates with an already active cooldown.
+  Seven generation-guarded retries over 2.8 seconds replace the former
+  one-shot race without adding polling.
+
+### Simple Two-Button and manual cure bindings
+- Added automatic-by-default secure cure bindings per full environment variant.
+  Distinct targeted friendly cure spells collapse duplicate dispel types and
+  receive Left, Right, then Ctrl+Left. Native MUF color/filter slots follow the
+  same action order.
+- Middle targets, Ctrl+Middle focuses, and Button5 is reserved when a verified
+  PvP bandage action is available. No item IDs are guessed.
+- Added an out-of-combat carried-bag resolver for Button5. It enumerates only
+  the backpack, equipped bags, and reagent bag; requires a public use spell
+  matching Mending Bandage plus public count/usability; and prefers the highest
+  public item level. If item level is unavailable it makes no quality claim and
+  uses the lowest item ID, then earliest bag/slot, solely as deterministic
+  fallback. Bank and account storage are excluded, item-data/bag/world/spec
+  events refresh the choice, combat retains the last verified item, and a
+  registered resolver can nominate future families without bypassing carried,
+  public, usable on-use-item validation.
+- Added Manual Cure Bindings keyed by stable spell/item action identity, inline
+  duplicate/reserved-gesture rejection, safe Unassigned state, unavailable-spec
+  display, automatic restore, combat deferral, and environment isolation.
+- Additional, self-only, enemy, area-utility, and custom actions no longer
+  displace targeted friendly cures. Poison Cleansing Totem remains available in
+  the advanced path without receiving targeted cure/resurrection clauses.
+- Stock legacy mouse tables migrate to automatic mode. Customized legacy global
+  or profile tables migrate to manual mode and retain their gestures. Logical
+  profile copy/reset/import/export includes the new policy and mappings.
+- Corrected the advanced macro tooltip: WoW 12.1 still supports the secure macro
+  attributes Decursive uses internally; only arbitrary editing is unavailable
+  in the simplified editor.
+
+### Complete per-environment profile variants
+- Every logical profile now owns full Open World, Party/Dungeon, Mythic+, Raid,
+  and PvP AceDB variants. MUFs, layout, colors, pets, alerts, visibility,
+  cooldowns, click priorities, macro binding, and all other profile-scoped
+  options are independent without a setting allow-list.
+- Logical assignment resolves before environment selection. Automatic context
+  precedence is PvP/arena, Raid, active Mythic+, Party/Dungeon, then Open World;
+  manual override remains available. Full switches are deferred during combat.
+- Opening settings explicitly previews the remembered edit variant across every
+  page and legacy route. The persistent header distinguishes the edit preview
+  from the actual runtime context, and closing settings restores runtime.
+- Logical create/copy/reset/delete and format-2 import/export operate across all
+  five variants transactionally. Environment Profiles can copy or preset-reset
+  one complete variant.
+- Schema-4 migration preserves original AceDB tables and stable IDs, expands
+  legacy profiles idempotently, overlays old environment blocks, preserves
+  offline assignments and LibDualSpec compatibility, and repairs partial
+  expansion. SavedVariables profile storage is expected to grow to roughly 5x.
+
+### Stable-ID profile manager
+- Replaced the hybrid name-keyed profile assignment layer with a stable internal
+  ID catalog and deterministic profile order while retaining AceDB as the
+  settings-table backend.
+- Profile renames are now metadata-only. Existing AceDB profile tables and
+  legacy display names, including names longer than the new 48-byte limit, are
+  preserved without a copy/delete move.
+- Added explicit specialization → character → account → protected Default
+  resolution, transactional migration from AceDB `profileKeys` and LibDualSpec,
+  offline assignment cleanup, a 50-profile creation limit, and future-schema
+  read-only protection.
+- Replaced independent LibDualSpec switching with a manager-owned compatibility
+  adapter so specialization changes have one authoritative resolver.
+- Kept Decursive Profiles CRUD/import-export separate from Environment Profiles
+  assignment and inheritance controls, with display names shown instead of
+  internal IDs.
+
 ## v12.1.3
 
 ### Stopped shipping repository documentation inside the addon

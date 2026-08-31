@@ -6,6 +6,10 @@
 
 Zhaohu's Decursive is a fast, focused dispel assistant for **World of Warcraft Retail 12.1**. It preserves Decursive's compact Micro Unit Frames (MUFs) and click-to-cure workflow while adding a modern settings interface, Blizzard-native protected-aura support, combat alerts, sound notifications, cooldown feedback, and automatic environment profiles.
 
+Profile schema 4 stores five complete environment variants per logical profile.
+See [Full Environment Profiles](FULL_ENVIRONMENT_PROFILES.md) for resolution,
+migration, editing, storage growth, and scope details.
+
 [Download on CurseForge](https://www.curseforge.com/wow/addons/decursive-12-1-compatibility-patch) | [Source on GitHub](https://github.com/randylorfing/Decursive) | [Report an issue](https://github.com/randylorfing/Decursive/issues)
 
 > Zhaohu's Decursive is an independently maintained GPLv3 fork of [Decursive](https://github.com/2072/Decursive). It is not the upstream 2072 release.
@@ -22,8 +26,8 @@ Zhaohu's Decursive is a fast, focused dispel assistant for **World of Warcraft R
 - Optional range and cure-result indicators
 - Priority and Skip Lists
 - Custom mouse bindings and custom spells
-- Named profiles with import and export
-- Automatic Open World, Dungeon, Mythic+, Raid, and PvP behavior profiles
+- Named logical profiles with complete five-variant import and export
+- Full Open World, Party/Dungeon, Mythic+, Raid, and PvP settings variants
 - Protected combat operations that are deferred until Blizzard permits them
 
 No external unit-frame addon is required. Zhaohu's Decursive uses Blizzard's native protected-aura system directly.
@@ -107,15 +111,17 @@ MUF hover tooltips are enabled by default. Blizzard can provide managed aura det
 
 ## Cure priorities and mouse bindings
 
-Zhaohu's Decursive detects the cure spells available to your current class, specialization, and talents. Each cure priority can be assigned to a mouse button or modifier combination, including:
+Zhaohu's Decursive detects the targeted friendly cures available to your current class, specialization, and talents. The default **Simple Two-Button** layout collapses every dispel type handled by the same secure spell into one action:
 
-- Left, right, and middle click
-- Mouse Button 4 and Mouse Button 5
-- Shift, Ctrl, and Alt modifiers
+- Left click uses the highest-priority targeted friendly cure. On a dead player it uses the existing secure combat battle-resurrection or out-of-combat resurrection clauses instead.
+- Right click uses the second distinct targeted friendly cure, when one exists.
+- Ctrl+Left uses a third distinct targeted friendly cure, when one exists.
+- Middle click targets the MUF unit and Ctrl+Middle focuses it.
+- Button5 is reserved when a verified PvP bandage action is available. Mending Bandage is detected from the player's spellbook. Outside combat, Decursive also scans only the backpack, equipped bag slots, and reagent bag for usable items whose public use-spell ID matches Mending Bandage; bank, reagent-bank, and account-bank storage is never considered. The usable candidate with the highest public item level wins. If item level is unavailable, Decursive makes no quality claim and deterministically falls back to the lowest public item ID, then earliest bag and slot. A registered resolver may nominate a future bandage family, but its result must still be a public on-use item physically present and usable in carried bags. No item ID is guessed or built into the scan.
 
-Use **Cure** for the common controls or **All Settings > Spells & Bindings** for the complete assignment system.
+Switch the current environment variant to **Manual Cure Bindings** on the **Cure** page to assign supported gestures explicitly. Duplicate available gestures are rejected and unavailable specialization actions remain visible without receiving an unsafe binding. Use **All Settings > Spells & Bindings** for unusual area, self-only, enemy, and custom actions. Poison Cleansing Totem is labeled as area utility and never receives targeted cure or resurrection clauses.
 
-Secure binding and frame-structure changes cannot be applied during combat. When necessary, Zhaohu's Decursive waits until combat ends before applying them.
+Secure binding and frame-structure changes cannot be applied during combat. The active secure layout, including the last verified carried-bandage item ID, remains unchanged until Zhaohu's Decursive applies the queued specialization, talent, environment, bag, item-data, or settings refresh after combat. An out-of-combat scan that finds no valid bandage clears Button5.
 
 ## Alerts and sounds
 
@@ -146,6 +152,11 @@ If **Test Sound** works but live alerts do not, run `/zdsound` and include its o
 
 After a successful cleanse, the clicked MUF clears immediately. Other MUFs that still need the same cure priority can show a dark cooldown overlay and optional countdown until the spell is ready again.
 
+Cooldown activation uses a short, bounded retry transaction so a Duration
+object that becomes available just after the successful cast is not missed.
+The transaction is tied to the exact successful spell, ignores
+global-cooldown-only states, and does not poll continuously.
+
 Cooldown visibility, opacity, numbers, and secondary-affliction borders can be configured separately for each environment.
 
 ## Profiles and environments
@@ -153,7 +164,14 @@ Cooldown visibility, opacity, numbers, and secondary-affliction borders can be c
 Named profiles and environment profiles are separate systems:
 
 - **Named profiles** store your overall Decursive configuration and support create, copy, reset, delete, import, and export.
-- **Environment profiles** automatically tune range, cooldown, text-alert, chat-alert, and secondary-affliction behavior for the current activity.
+- **Environment profiles** select one of five complete variants of the logical profile. Every profile-scoped option can differ between Open World, Party/Dungeon, Mythic+, Raid, and PvP.
+
+Named profiles use stable internal identities, so renaming a profile does not
+move or recreate its AceDB settings table. Runtime selection resolves in the
+explicit order specialization → character → account → protected Default.
+Existing AceDB and LibDualSpec assignments are migrated into that resolver;
+LibDualSpec remains available through a compatibility adapter but no longer
+selects a competing profile independently.
 
 Automatic mode recognizes:
 

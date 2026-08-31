@@ -194,485 +194,224 @@ function ZD:GetDetectionProviderStatus()
 end
 
 function ZD:GetUserProfileName()
-    if D.db and D.db.GetCurrentProfile then
-        return D.db:GetCurrentProfile() or "Default"
-    end
-    return "Default"
+    local manager = D.ProfileManager
+    local profileID = manager and manager:GetActiveProfileID()
+    return manager and manager:GetProfileName(profileID) or "Default"
+end
+
+function ZD:GetUserProfileID()
+    return D.ProfileManager and D.ProfileManager:GetActiveProfileID() or "default"
+end
+
+function ZD:GetProfileCatalog()
+    return D.ProfileManager and D.ProfileManager:GetCatalog() or {
+        { id = "default", name = "Default", protected = true, deletable = false, active = true },
+    }
 end
 
 function ZD:GetProfiles()
-    local profiles = {}
-    if D.db and D.db.GetProfiles then
-        D.db:GetProfiles(profiles)
-    end
-    table.sort(profiles)
-    return profiles
+    local names = {}
+    for _, profile in ipairs(self:GetProfileCatalog()) do names[#names + 1] = profile.name end
+    return names
 end
 
-local function validProfileName(name)
-    return type(name) == "string"
-        and name ~= ""
-        and #name <= 48
-        and name:find("[%z\1-\31\127]") == nil
-end
-
-local function profileExists(name)
-    if type(name) ~= "string" or name == "" then return false end
-    for _, profileName in ipairs(ZD:GetProfiles()) do
-        if profileName == name then return true end
-    end
-    return false
-end
-
-local function getProfileManager()
-    local saved = D.db and D.db.sv
-    if type(saved) ~= "table" then return nil end
-    saved.profileManager = type(saved.profileManager) == "table" and saved.profileManager or {
-        schemaVersion = 1,
-        accountDefault = "Default",
-        characterAssignments = {},
+function ZD:GetProfileSchemaStatus()
+    return D.ProfileManager and D.ProfileManager:GetSchemaStatus() or {
+        readOnly = true,
+        storedVersion = 0,
+        supportedVersion = 0,
+        message = "The profile manager is unavailable.",
     }
-    local manager = saved.profileManager
-    manager.characterAssignments = type(manager.characterAssignments) == "table" and manager.characterAssignments or {}
-    manager.specializationAssignments = type(manager.specializationAssignments) == "table"
-        and manager.specializationAssignments or {}
-    if not profileExists(manager.accountDefault) then manager.accountDefault = "Default" end
-    return manager
-end
-
-local function getCharacterKey()
-    return D.db and D.db.keys and D.db.keys.char or nil
-end
-
-local function dualSpecEnabled()
-    return D.db and D.db.IsDualSpecEnabled and D.db:IsDualSpecEnabled() == true
-end
-
-local function getCurrentSpecIndex()
-    local getSpecialization = _G.GetSpecialization
-    if type(getSpecialization) == "function" then
-        local spec = getSpecialization()
-        if type(spec) == "number" and spec > 0 then return spec end
-    end
-    local specializationAPI = _G.C_SpecializationInfo
-    local getActiveSpecGroup = type(specializationAPI) == "table" and specializationAPI.GetActiveSpecGroup
-    if type(getActiveSpecGroup) == "function" then
-        local spec = getActiveSpecGroup()
-        if type(spec) == "number" and spec > 0 then return spec end
-    end
-    return nil
-end
-
-local function getDualSpecCharacters()
-    local namespaces = D.db and D.db.sv and D.db.sv.namespaces
-    local dualSpec = type(namespaces) == "table" and namespaces["LibDualSpec-1.0"] or nil
-    local characters = type(dualSpec) == "table" and dualSpec.char or nil
-    return type(characters) == "table" and characters or nil
-end
-
-local function getCharacterSpecAssignments(manager, characterKey, create)
-    if not manager or not characterKey then return nil end
-    local assignments = manager.specializationAssignments[characterKey]
-    if type(assignments) ~= "table" and create then
-        assignments = {}
-        manager.specializationAssignments[characterKey] = assignments
-    end
-    return type(assignments) == "table" and assignments or nil
-end
-
-local function replaceDualSpecAssignments(profileName, replacementName)
-    local manager = getProfileManager()
-    local function replaceIn(characters)
-        if type(characters) == "table" then
-            for _, record in pairs(characters) do
-                if type(record) == "table" then
-                    for spec, assigned in pairs(record) do
-                        if type(spec) == "number" and assigned == profileName then
-                            record[spec] = replacementName
-                        end
-                    end
-                end
-            end
-        end
-    end
-    replaceIn(getDualSpecCharacters())
-    replaceIn(manager and manager.specializationAssignments)
-end
-
-local function cleanDeletedDualSpecAssignments(profileName)
-    replaceDualSpecAssignments(profileName, nil)
 end
 
 function ZD:GetProfileAssignments()
-    local manager = getProfileManager()
-    local characterKey = getCharacterKey()
-    local characterProfile = manager and characterKey and manager.characterAssignments[characterKey] or nil
-    local spec = getCurrentSpecIndex()
-    local specAssignments = getCharacterSpecAssignments(manager, characterKey, false)
-    local specProfile = specAssignments and spec and specAssignments[spec] or nil
-    local runtimeCharacters = getDualSpecCharacters()
-    local runtimeRecord = runtimeCharacters and characterKey and runtimeCharacters[characterKey] or nil
-    if dualSpecEnabled() and type(runtimeRecord) == "table" and spec then
-        specProfile = runtimeRecord[spec]
-    end
-    return {
-        account = manager and manager.accountDefault or "Default",
-        character = characterProfile,
-        characterKey = characterKey,
-        perSpecEnabled = dualSpecEnabled(),
-        spec = specProfile,
-        active = self:GetUserProfileName(),
+    return D.ProfileManager and D.ProfileManager:GetAssignmentSnapshot() or {
+        account = "default",
+        active = "default",
+        perSpecEnabled = false,
     }
 end
 
-function ZD:SetAccountProfile(name)
-    if not self:CanConfigure() or not profileExists(name) then return false end
-    local manager = getProfileManager()
-    if not manager then return false end
-    local characterKey = getCharacterKey()
-    local inheritsAccount = characterKey and manager.characterAssignments[characterKey] == nil
-    manager.accountDefault = name
-    if inheritsAccount and not dualSpecEnabled() then D.db:SetProfile(name) end
-    self:SetStatus("Account default profile set to " .. name .. ".")
+local function profileID(value)
+    return D.ProfileManager and D.ProfileManager:FindProfileID(value) or nil
+end
+
+local function profileName(value)
+    local id = profileID(value)
+    return id and D.ProfileManager:GetProfileName(id) or nil
+end
+
+local function managerFailure(code)
+    local messages = {
+        ["read-only"] = "Profile data is read-only because it was created by a newer Decursive version.",
+        ["combat"] = "Profile creation, reset, and deletion are unavailable during combat.",
+        ["profile-limit"] = "The account profile limit of 50 has been reached.",
+        ["invalid-name"] = "Enter a profile name from 1 to 48 UTF-8 bytes without control characters.",
+        ["name-exists"] = "A profile with that name already exists.",
+        ["protected-profile"] = "The built-in Default profile is protected.",
+        ["unknown-profile"] = "The selected profile no longer exists.",
+        ["character-unavailable"] = "The current character identity is not available yet.",
+        ["spec-unavailable"] = "The current specialization identity is not available yet.",
+    }
+    return messages[code] or "The profile change could not be completed: " .. tostring(code or "unknown error")
+end
+
+function ZD:SetAccountProfile(value)
+    if not self:CanConfigure() then return false end
+    local id = profileID(value)
+    local ok, code = D.ProfileManager:SetAssignment("account", id)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus("Account default profile set to " .. D.ProfileManager:GetProfileName(id) .. ".")
     return true
 end
 
-function ZD:SetCharacterProfile(name)
+function ZD:SetCharacterProfile(value)
     if not self:CanConfigure() then return false end
-    local manager = getProfileManager()
-    local characterKey = getCharacterKey()
-    if not manager or not characterKey then return false end
-    if name ~= nil and not profileExists(name) then return false end
-    manager.characterAssignments[characterKey] = name
-    if not dualSpecEnabled() then D.db:SetProfile(name or manager.accountDefault) end
-    self:SetStatus(name and ("Character profile set to " .. name .. ".") or "Character now uses the account default profile.")
+    local id = value and profileID(value) or nil
+    if value and not id then self:SetStatus(managerFailure("unknown-profile"), true) return false end
+    local ok, code = D.ProfileManager:SetAssignment("character", id)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus(id and ("Character profile set to " .. D.ProfileManager:GetProfileName(id) .. ".")
+        or "Character now uses the account default profile.")
     return true
 end
 
 function ZD:SetSpecProfilesEnabled(enabled)
-    if not self:CanConfigure() or not D.db or not D.db.SetDualSpecEnabled then return false end
-    local requested = enabled == true
-    if requested == dualSpecEnabled() then return true end
-    local manager = getProfileManager()
-    local characterKey = getCharacterKey()
-    local savedSpecs = getCharacterSpecAssignments(manager, characterKey, true)
-    if not manager or not characterKey or not savedSpecs then return false end
-    local characters = getDualSpecCharacters()
-    local runtimeRecord = characters and characterKey and characters[characterKey] or nil
-    if not requested and type(runtimeRecord) == "table" then
-        for spec in pairs(savedSpecs) do
-            if type(spec) == "number" then savedSpecs[spec] = nil end
-        end
-        for spec, profileName in pairs(runtimeRecord) do
-            if type(spec) == "number" and profileExists(profileName) then savedSpecs[spec] = profileName end
-        end
-    end
-    D.db:SetDualSpecEnabled(requested)
-    if requested then
-        runtimeRecord = characters and characterKey and characters[characterKey] or nil
-        if type(runtimeRecord) == "table" then
-            for spec in pairs(runtimeRecord) do
-                if type(spec) == "number" then runtimeRecord[spec] = nil end
-            end
-            for spec, profileName in pairs(savedSpecs) do
-                if type(spec) == "number" and profileExists(profileName) then runtimeRecord[spec] = profileName end
-            end
-        end
-        if D.db.CheckDualSpecState then D.db:CheckDualSpecState() end
-    else
-        local profileName = manager and characterKey and manager.characterAssignments[characterKey]
-            or manager and manager.accountDefault
-            or "Default"
-        D.db:SetProfile(profileName)
-    end
-    self:SetStatus(requested and "Specialization profiles enabled." or "Specialization profiles disabled.")
-    return true
-end
-
-function ZD:SetCurrentSpecProfile(name)
-    if not self:CanConfigure() or (name ~= nil and not profileExists(name))
-        or not D.db or not D.db.SetDualSpecProfile
-    then
-        return false
-    end
-    local manager = getProfileManager()
-    local characterKey = getCharacterKey()
-    local spec = getCurrentSpecIndex()
-    local savedSpecs = getCharacterSpecAssignments(manager, characterKey, true)
-    if not spec or not savedSpecs then return false end
-    savedSpecs[spec] = name
-    D.db:SetDualSpecProfile(name)
-    if name == nil then
-        local fallbackName = manager.characterAssignments[characterKey] or manager.accountDefault
-        D.db:SetProfile(fallbackName)
-        self:SetStatus("Current specialization now uses its character or account fallback.")
-    else
-        self:SetStatus("Current specialization profile set to " .. name .. ".")
-    end
-    return true
-end
-
-function ZD:SetUserProfile(name)
     if not self:CanConfigure() then return false end
-    if not profileExists(name) then return false end
-    if dualSpecEnabled() and D.db.SetDualSpecProfile then
-        if not self:SetCurrentSpecProfile(name) then return false end
-    else
-        local manager = getProfileManager()
-        local characterKey = getCharacterKey()
-        if manager and characterKey then manager.characterAssignments[characterKey] = name end
-        D.db:SetProfile(name)
-    end
-    self:SetStatus("Profile switched to " .. name .. ".")
+    local ok, code = D.ProfileManager:SetPerSpecEnabled(enabled)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus(enabled and "Specialization profiles enabled." or "Specialization profiles disabled.")
+    return true
+end
+
+function ZD:SetCurrentSpecProfile(value)
+    if not self:CanConfigure() then return false end
+    local id = value and profileID(value) or nil
+    if value and not id then self:SetStatus(managerFailure("unknown-profile"), true) return false end
+    local ok, code = D.ProfileManager:SetAssignment("spec", id)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus(id and ("Current specialization profile set to " .. D.ProfileManager:GetProfileName(id) .. ".")
+        or "Current specialization now uses its character or account fallback.")
+    return true
+end
+
+function ZD:SetUserProfile(value)
+    if not self:CanConfigure() then return false end
+    local id = profileID(value)
+    if not id then self:SetStatus(managerFailure("unknown-profile"), true) return false end
+    local ok, code = D.ProfileManager:ActivateProfile(id)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus("Profile switched to " .. D.ProfileManager:GetProfileName(id) .. ".")
     return true
 end
 
 function ZD:CreateUserProfile(name)
     if not self:CanConfigure() then return false end
-    name = type(name) == "string" and name:gsub("^%s+", ""):gsub("%s+$", "") or ""
-    if not validProfileName(name) then
-        self:SetStatus("Enter a profile name from 1 to 48 characters without control characters.", true)
-        return false
-    end
-    if not profileExists(name) and #self:GetProfiles() >= 50 then
-        self:SetStatus("The account profile limit of 50 has been reached.", true)
-        return false
-    end
-    if not profileExists(name) then D.db:SetProfile(name) end
-    self:SetUserProfile(name)
-    self:SetStatus("Created profile " .. name .. ".")
+    local existing = type(name) == "string" and D.ProfileManager:FindProfileID(name) or nil
+    if existing then return self:SetUserProfile(existing) end
+    local id, code = D.ProfileManager:CreateProfile(name)
+    if not id then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus("Created profile " .. D.ProfileManager:GetProfileName(id) .. ".")
     return true
 end
-
 
 function ZD:CloneCurrentProfile(newName)
     if not self:CanConfigure() then return false end
-    newName = type(newName) == "string" and newName:gsub("^%s+", ""):gsub("%s+$", "") or ""
-    if not validProfileName(newName) then
-        self:SetStatus("Enter a new profile name from 1 to 48 characters.", true)
-        return false
-    end
-    local source = self:GetUserProfileName()
-    if newName == source then
-        self:SetStatus("Choose a different name for the copy.", true)
-        return false
-    end
-    if profileExists(newName) then
-        self:SetStatus("A profile with that name already exists.", true)
-        return false
-    end
-    if #self:GetProfiles() >= 50 then
-        self:SetStatus("The account profile limit of 50 has been reached.", true)
-        return false
-    end
-    D.db:SetProfile(newName)
-    self:SetUserProfile(newName)
-    local ok, err = pcall(D.db.CopyProfile, D.db, source)
-    if not ok then
-        self:SetUserProfile(source)
-        pcall(D.db.DeleteProfile, D.db, newName)
-        self:SetStatus("Could not copy profile: " .. tostring(err), true)
-        return false
-    end
-    self:SetStatus("Copied " .. source .. " to " .. newName .. ".")
+    local sourceID = self:GetUserProfileID()
+    local sourceName = D.ProfileManager:GetProfileName(sourceID)
+    local id, code = D.ProfileManager:CreateProfile(newName, sourceID)
+    if not id then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus("Copied " .. sourceName .. " to " .. D.ProfileManager:GetProfileName(id) .. ".")
     return true
 end
 
-function ZD:CopyUserProfile(sourceName)
+function ZD:CopyUserProfile(value)
     if not self:CanConfigure() then return false end
-    if type(sourceName) ~= "string" or sourceName == "" then return false end
-    local ok, err = pcall(D.db.CopyProfile, D.db, sourceName)
-    if not ok then
-        self:SetStatus("Could not copy profile: " .. tostring(err), true)
-        return false
-    end
-    self:SetStatus("Copied settings from " .. sourceName .. ".")
+    local id = profileID(value)
+    if not id then self:SetStatus(managerFailure("unknown-profile"), true) return false end
+    local ok, err = D.ProfileManager:CopyProfile(self:GetUserProfileID(), id)
+    if not ok then self:SetStatus(managerFailure(err), true) return false end
+    self:SetStatus("Copied settings from " .. D.ProfileManager:GetProfileName(id) .. ".")
     return true
 end
 
 function ZD:ResetUserProfile()
     if not self:CanConfigure() then return false end
-    D.db:ResetProfile()
+    local ok, code = D.ProfileManager:ResetProfile(self:GetUserProfileID())
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
     self:SetStatus("Current profile reset to defaults.")
     return true
 end
 
 function ZD:RenameCurrentProfile(newName)
     if not self:CanConfigure() then return false end
-    newName = type(newName) == "string" and newName:gsub("^%s+", ""):gsub("%s+$", "") or ""
-    if not validProfileName(newName) then
-        self:SetStatus("Enter a new profile name from 1 to 48 characters.", true)
-        return false
-    end
-
-    local sourceName = self:GetUserProfileName()
-    if sourceName == "Default" then
-        self:SetStatus("The built-in Default profile cannot be renamed.", true)
-        return false
-    end
-    if profileExists(newName) then
-        self:SetStatus("A profile with that name already exists.", true)
-        return false
-    end
-
-    D.db:SetProfile(newName)
-    local copied, copyError = pcall(D.db.CopyProfile, D.db, sourceName)
-    if not copied then
-        D.db:SetProfile(sourceName)
-        pcall(D.db.DeleteProfile, D.db, newName)
-        self:SetStatus("Could not rename profile: " .. tostring(copyError), true)
-        return false
-    end
-
-    local manager = getProfileManager()
-    if not manager then
-        D.db:SetProfile(sourceName)
-        pcall(D.db.DeleteProfile, D.db, newName)
-        return false
-    end
-    if manager.accountDefault == sourceName then manager.accountDefault = newName end
-    for characterKey, assigned in pairs(manager.characterAssignments) do
-        if assigned == sourceName then manager.characterAssignments[characterKey] = newName end
-    end
-    replaceDualSpecAssignments(sourceName, newName)
-
-    local deleted, deleteError = pcall(D.db.DeleteProfile, D.db, sourceName)
-    if not deleted then
-        if manager.accountDefault == newName then manager.accountDefault = sourceName end
-        for characterKey, assigned in pairs(manager.characterAssignments) do
-            if assigned == newName then manager.characterAssignments[characterKey] = sourceName end
-        end
-        replaceDualSpecAssignments(newName, sourceName)
-        D.db:SetProfile(sourceName)
-        pcall(D.db.DeleteProfile, D.db, newName)
-        self:SetStatus("Could not rename profile: " .. tostring(deleteError), true)
-        return false
-    end
-
-    self:SetStatus("Renamed profile " .. sourceName .. " to " .. newName .. ".")
+    local id = self:GetUserProfileID()
+    local oldName = D.ProfileManager:GetProfileName(id)
+    local ok, code = D.ProfileManager:RenameProfile(id, newName)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus("Renamed profile " .. oldName .. " to " .. D.ProfileManager:GetProfileName(id) .. ".")
     return true
 end
 
-function ZD:HandleDeletedProfileAssignments(name)
-    if type(name) ~= "string" or name == "" then return false end
-    local manager = getProfileManager()
-    if not manager then return false end
-    if manager.accountDefault == name then manager.accountDefault = "Default" end
-    for characterKey, assigned in pairs(manager.characterAssignments) do
-        if assigned == name then manager.characterAssignments[characterKey] = nil end
-    end
-    cleanDeletedDualSpecAssignments(name)
+function ZD:HandleDeletedProfileAssignments(value)
+    local id = profileID(value)
+    if not id then return false end
+    D.ProfileManager:RemoveAssignments(id)
     return true
 end
 
-function ZD:DeleteUserProfile(name)
+function ZD:DeleteUserProfile(value)
     if not self:CanConfigure() then return false end
-    if name == "Default" then
-        self:SetStatus("The built-in Default profile cannot be deleted.", true)
-        return false
-    end
-    if not profileExists(name) then
-        self:SetStatus("The selected profile no longer exists.", true)
-        return false
-    end
-
-    if not self:HandleDeletedProfileAssignments(name) then return false end
-    local manager = getProfileManager()
-
-    if self:GetUserProfileName() == name then
-        local characterKey = getCharacterKey()
-        local fallbackName = characterKey and manager.characterAssignments[characterKey]
-            or manager.accountDefault
-        D.db:SetProfile(fallbackName)
-    end
-
-    local ok, err = pcall(D.db.DeleteProfile, D.db, name)
-    if not ok then
-        self:SetStatus("Could not delete profile: " .. tostring(err), true)
-        return false
-    end
+    local id = profileID(value)
+    if not id then self:SetStatus(managerFailure("unknown-profile"), true) return false end
+    local name = D.ProfileManager:GetProfileName(id)
+    local ok, code = D.ProfileManager:DeleteProfile(id)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
     self:SetStatus("Deleted profile " .. name .. ". Assignments using it now use their fallback.")
     return true
 end
 
 function ZD:GetEnvironmentSetting()
-    return (D.profile and D.profile.Environment121Mode) or "AUTO"
+    return D.ProfileManager and D.ProfileManager:GetEnvironmentMode() or "AUTO"
 end
 
 function ZD:GetActiveEnvironment()
-    if D.Get121EnvironmentMode then
-        local _, active, displayName = D:Get121EnvironmentMode()
-        return active or "OPEN_WORLD", displayName or ENV_NAMES[active] or active
+    if D.ProfileManager then
+        local profileID = D.ProfileManager:ResolveActiveProfileID()
+        local active = D.ProfileManager:ResolveEnvironment(profileID)
+        return active, ENV_NAMES[active] or active
     end
     return "OPEN_WORLD", ENV_NAMES.OPEN_WORLD
 end
 
 function ZD:SetEnvironmentSetting(mode)
     if not self:CanConfigure() then return false end
-    if D.Set121EnvironmentMode then
-        D:Set121EnvironmentMode(mode)
-    else
-        D.profile.Environment121Mode = mode
-    end
+    local ok, code = D.ProfileManager and D.ProfileManager:SetEnvironmentMode(mode)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
     self:SetStatus("Environment mode set to " .. (mode == "AUTO" and "Automatic" or (ENV_NAMES[mode] or mode)) .. ".")
     return true
 end
 
 function ZD:GetEditEnvironment()
-    local active = self:GetActiveEnvironment()
-    local key = self.editEnvironment or active
-    if not ENV_NAMES[key] then key = "OPEN_WORLD" end
-    return key
+    return D.ProfileManager and D.ProfileManager:GetEditEnvironment() or "OPEN_WORLD"
 end
 
 function ZD:SetEditEnvironment(key)
-    if ENV_NAMES[key] then
-        self.editEnvironment = key
-        self:SetStatus("Editing " .. ENV_NAMES[key] .. " behavior.")
-        if self.RefreshUI then self:RefreshUI() end
-        return true
-    end
-    return false
+    if not self:CanConfigure() then return false end
+    local ok, code = D.ProfileManager and D.ProfileManager:SetEditEnvironment(key, true)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus("Editing and previewing the complete " .. (ENV_NAMES[key] or key) .. " variant.")
+    if self.RefreshUI then self:RefreshUI() end
+    return true
 end
 
 function ZD:GetEnvironmentProfile(key)
-    key = key or self:GetEditEnvironment()
-    if not D.profile then return nil end
-    D.profile.Environment121Profiles = D.profile.Environment121Profiles or {}
-    D.profile.Environment121Profiles[key] = D.profile.Environment121Profiles[key] or shallowCopy(ENV_DEFAULTS[key] or ENV_DEFAULTS.OPEN_WORLD)
-    local env = D.profile.Environment121Profiles[key]
-    for setting, value in pairs(ENV_DEFAULTS[key] or ENV_DEFAULTS.OPEN_WORLD) do
-        if env[setting] == nil then env[setting] = shallowCopy(value) end
-    end
-    env.Detection121Mode = "STRICT_MANAGED"
-    return env
+    if key and key ~= self:GetEditEnvironment() and D.ProfileManager then return nil end
+    return D.profile
 end
 
 function ZD:ApplyEnvironmentProfileToRuntime(key)
-    if not D.profile then return end
-    local active = self:GetActiveEnvironment()
-    if active ~= key then return end
-    local env = self:GetEnvironmentProfile(key)
-    if not env then return end
-
-    D.profile.OutOfRange121Enabled = env.OutOfRange121Enabled ~= false
-    D.profile.OutOfRange121DimAmount = env.OutOfRange121DimAmount or .60
-    if type(env.OutOfRange121Color) == "table" then D.profile.OutOfRange121Color = shallowCopy(env.OutOfRange121Color) end
-    D.profile.LineOfSight121Enabled = env.LineOfSight121Enabled ~= false
-    if type(env.LineOfSight121Color) == "table" then D.profile.LineOfSight121Color = shallowCopy(env.LineOfSight121Color) end
-    D.profile.LineOfSight121Opacity = env.LineOfSight121Opacity or .78
-    D.profile.LineOfSight121HoldSeconds = env.LineOfSight121HoldSeconds or 2.5
-    D.profile.CooldownOverlay121Enabled = env.CooldownOverlay121Enabled ~= false
-    D.profile.CooldownOverlay121Opacity = env.CooldownOverlay121Opacity or .62
-    D.profile.CooldownOverlay121Numbers = env.CooldownOverlay121Numbers ~= false
-    D.profile.Detection121Mode = "STRICT_MANAGED"
-    D.profile.CooldownPriority2Border121Enabled = env.SecondaryAffliction121Enabled ~= false
-    D.profile.CooldownPriority2Pulse121Enabled = env.SecondaryAffliction121Pulse ~= false
-    D.profile.SharedPriorityCooldown121Enabled = env.SharedPriorityCooldown121Enabled == true
-    D.profile.ClearCleansedTarget121Enabled = env.ClearCleansedTarget121Enabled ~= false
-    D.profile.TextAlerts121Enabled = env.TextAlerts121Enabled ~= false
-    D.profile.EnvironmentChat121Enabled = env.EnvironmentChat121Enabled ~= false
-
+    if not D.profile or key ~= self:GetEditEnvironment() then return end
     if D.Apply121RangeAppearance then D:Apply121RangeAppearance() end
     if D.Set121OutOfRangeEnabled then D:Set121OutOfRangeEnabled(D.profile.OutOfRange121Enabled ~= false) end
     if D.Apply121LineOfSightAppearance then D:Apply121LineOfSightAppearance() end
@@ -686,10 +425,13 @@ end
 
 function ZD:SetEnvironmentValue(key, setting, value)
     if not self:CanConfigure() then return false end
-    local env = self:GetEnvironmentProfile(key)
-    if not env then return false end
-    env[setting] = shallowCopy(value)
-    env.Detection121Mode = "STRICT_MANAGED"
+    if key ~= self:GetEditEnvironment() then
+        local selected = self:SetEditEnvironment(key)
+        if not selected then return false end
+    end
+    if not D.profile then return false end
+    D.profile[setting] = shallowCopy(value)
+    D.profile.Detection121Mode = "STRICT_MANAGED"
     self:ApplyEnvironmentProfileToRuntime(key)
     self:SetStatus((ENV_NAMES[key] or key) .. " behavior updated.")
     return true
@@ -698,15 +440,38 @@ end
 function ZD:ResetEnvironmentProfile(key)
     if not self:CanConfigure() then return false end
     key = key or self:GetEditEnvironment()
-    local defaults = ENV_DEFAULTS[key]
-    local env = self:GetEnvironmentProfile(key)
-    if not defaults or not env then return false end
-    for k in pairs(env) do env[k] = nil end
-    for setting, value in pairs(defaults) do env[setting] = shallowCopy(value) end
-    env.Detection121Mode = "STRICT_MANAGED"
-    self:ApplyEnvironmentProfileToRuntime(key)
+    local profileID = D.ProfileManager and D.ProfileManager:ResolveActiveProfileID()
+    local ok, code = D.ProfileManager and D.ProfileManager:ResetEnvironment(profileID, key)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
     self:SetStatus((ENV_NAMES[key] or key) .. " behavior reset.")
     return true
+end
+
+function ZD:CopyEnvironmentProfile(sourceEnvironment)
+    if not self:CanConfigure() then return false end
+    local profileID = D.ProfileManager and D.ProfileManager:ResolveActiveProfileID()
+    local targetEnvironment = self:GetEditEnvironment()
+    local ok, code = D.ProfileManager and D.ProfileManager:CopyEnvironment(
+        profileID, targetEnvironment, profileID, sourceEnvironment)
+    if not ok then self:SetStatus(managerFailure(code), true) return false end
+    self:SetStatus((ENV_NAMES[targetEnvironment] or targetEnvironment)
+        .. " copied from " .. (ENV_NAMES[sourceEnvironment] or sourceEnvironment) .. ".")
+    return true
+end
+
+function ZD:GetProfileContext()
+    return D.ProfileManager and D.ProfileManager:GetContextSnapshot() or {}
+end
+
+function ZD:BeginEnvironmentEditing()
+    if not D.ProfileManager then return false end
+    local ok, code = D.ProfileManager:BeginEnvironmentEditing()
+    if not ok then self:SetStatus(managerFailure(code), true) end
+    return ok
+end
+
+function ZD:EndEnvironmentEditing()
+    return D.ProfileManager and D.ProfileManager:RestoreRuntimeEnvironment() or false
 end
 
 function ZD:SetProfileOption(key, value)

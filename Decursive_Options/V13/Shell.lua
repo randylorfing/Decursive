@@ -36,6 +36,7 @@ UI.currentPage = UI.currentPage or "OVERVIEW"
 UI.statusText = UI.statusText or "Ready"
 
 local MAX_SEARCH_RESULTS = 6
+local ENVIRONMENT_ORDER = { "OPEN_WORLD", "DUNGEON", "MYTHIC_PLUS", "RAID", "PVP" }
 
 local function localized(key, fallback)
     return D.L and D.L[key] or fallback
@@ -78,13 +79,14 @@ local function addToSpecialFrames(frame)
 end
 
 local function updateContext(frame)
-    local profile = ZD.GetUserProfileName and ZD:GetUserProfileName() or "Default"
-    local _, environment = ZD.GetActiveEnvironment and ZD:GetActiveEnvironment() or nil, "Open World"
-    if ZD.GetActiveEnvironment then
-        local _, display = ZD:GetActiveEnvironment()
-        environment = display or environment
-    end
-    frame.header.context.text:SetText(profile .. "  /  " .. environment)
+    local context = ZD.GetProfileContext and ZD:GetProfileContext() or {}
+    local profile = context.profileName or (ZD.GetUserProfileName and ZD:GetUserProfileName()) or "Default"
+    local editName = V13.SettingsSchema and V13.SettingsSchema.environmentNames
+        and V13.SettingsSchema.environmentNames[context.editEnvironment] or context.editEnvironment or "Open World"
+    local activeName = V13.SettingsSchema and V13.SettingsSchema.environmentNames
+        and V13.SettingsSchema.environmentNames[context.activeEnvironment] or context.activeEnvironment or "Open World"
+    local prefix = context.previewing and "EDIT PREVIEW" or "RUNTIME"
+    frame.header.context.text:SetText(profile .. "  /  " .. prefix .. ": " .. editName .. "  /  Active: " .. activeName .. "  >")
 end
 
 local function buildTestRail(parent)
@@ -235,8 +237,38 @@ function UI:CreateShell()
     header.close = Controls:Button(header, "X", 30, function() frame:Hide() end)
     header.close:SetPoint("RIGHT", -16, 0)
     header.context = Controls:Pill(header, "Default  /  Open World", Theme.color.cyan)
-    header.context:SetWidth(190)
+    header.context:SetWidth(360)
     header.context:SetPoint("RIGHT", header.close, "LEFT", -10, 0)
+    header.contextSelector = CreateFrame("Button", nil, header.context)
+    header.contextSelector:SetAllPoints()
+    header.contextSelector:RegisterForClicks("LeftButtonUp")
+    header.contextSelector:SetScript("OnClick", function()
+        if InCombatLockdown and InCombatLockdown() then
+            UI:SetStatus("Environment editing is locked during combat.", "warning")
+            return
+        end
+        local current = ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD"
+        local index = 1
+        for candidateIndex, environment in ipairs(ENVIRONMENT_ORDER) do
+            if environment == current then index = candidateIndex break end
+        end
+        local nextEnvironment = ENVIRONMENT_ORDER[index % #ENVIRONMENT_ORDER + 1]
+        if ZD.SetEditEnvironment and ZD:SetEditEnvironment(nextEnvironment) then
+            updateContext(frame)
+        end
+    end)
+    header.contextSelector:SetScript("OnEnter", function()
+        header.context:SetBackdropBorderColor(unpack(Theme.color.text))
+        if GameTooltip then
+            GameTooltip:SetOwner(header.contextSelector, "ANCHOR_BOTTOM")
+            GameTooltip:SetText("Click to edit the next complete environment variant")
+            GameTooltip:Show()
+        end
+    end)
+    header.contextSelector:SetScript("OnLeave", function()
+        header.context:SetBackdropBorderColor(unpack(Theme.color.cyan))
+        if GameTooltip then GameTooltip:Hide() end
+    end)
 
     local search = CreateFrame("EditBox", nil, header, "BackdropTemplate")
     search:SetSize(286, 30)
@@ -399,9 +431,13 @@ function UI:CreateShell()
     resize:SetScript("OnMouseUp", function() frame:StopMovingOrSizing() end)
 
     frame:SetScript("OnShow", function()
+        if ZD.BeginEnvironmentEditing then ZD:BeginEnvironmentEditing() end
         updateContext(frame)
         UI:ShowPage(UI.currentPage)
         UI:RefreshStatus()
+    end)
+    frame:SetScript("OnHide", function()
+        if ZD.EndEnvironmentEditing then ZD:EndEnvironmentEditing() end
     end)
     frame:EnableKeyboard(true)
     if frame.SetPropagateKeyboardInput then frame:SetPropagateKeyboardInput(true) end
@@ -428,6 +464,10 @@ function UI:CreateShell()
 end
 
 function UI:ShowPage(key)
+	key = tostring(key or "OVERVIEW"):upper()
+	if key == "DECURSIVE_PROFILES" then return self:OpenProfilesRoute("DECURSIVE") end
+	if key == "ENVIRONMENT_PROFILES" then return self:OpenProfilesRoute("ENVIRONMENT") end
+
     local frame = self:CreateShell()
     local definition = self.pageDefinitions[key]
     if not definition then
@@ -482,11 +522,28 @@ local LEGACY_ROUTES = {
     compat121 = true, diagnostics = true, dispeldb = true, about = true,
 }
 
+function UI:OpenProfilesRoute(route)
+	route = tostring(route or "DECURSIVE"):upper()
+	if route ~= "ENVIRONMENT" then route = "DECURSIVE" end
+	self.pendingProfilesRoute = route
+	local frame = self:CreateShell()
+	frame:Show()
+	self:ShowPage("PROFILES")
+	local page = self.pages.PROFILES
+	if page and page.SetRoute then page:SetRoute(route) end
+end
+
 function UI:OpenLegacyRoute(route)
     route = tostring(route or "dashboard"):lower()
     if route == "dashboard" then
         return self:Open("OVERVIEW")
     end
+	if route == "profiles" or route == "sharing" or route == "decursive_profiles" then
+		return self:OpenProfilesRoute("DECURSIVE")
+	end
+	if route == "environmentprofiles" or route == "environment_profiles" then
+		return self:OpenProfilesRoute("ENVIRONMENT")
+	end
     if not LEGACY_ROUTES[route] then route = "general" end
     self.pendingLegacyRoute = route
     local frame = self:CreateShell()
@@ -528,6 +585,7 @@ function UI:InstallAsPrimary()
     ZD.RefreshUI = function()
         local frame = UI.frame
         if not frame or not frame:IsShown() then return end
+        updateContext(frame)
         UI:RefreshStatus()
         local page = UI.pages[UI.currentPage]
         if page and page.IsShown and page:IsShown() and page.Refresh then page:Refresh() end

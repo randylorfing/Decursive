@@ -5,10 +5,10 @@ release of Zhaohu's Decursive, including the GPL obligations inherited from
 John Wellesz and the packager traps that have shipped broken builds four times.
 
     Repo         randylorfing/Decursive
-    Branch       master
+    Branches     master (stable), alpha (prerelease)
     License      GNU GPL v3
     CurseForge   project 1659159
-    Written at   v12.1.3
+    Written at   v12.1.4-alpha.3
 
 Where this document and the repository disagree, the repository wins. Re-verify
 against `.pkgmeta`, the workflow file, and the `.toc` files before relying on
@@ -33,7 +33,7 @@ When they hand over offline work, do not apply independent bugfixes on top of
 it. If something looks wrong, flag it and ask. Their build has usually been
 verified in game; yours has not.
 
-**Never force-push `master`. Never rewrite published tags.**
+**Never force-push `master` or `alpha`. Never rewrite published tags.**
 Released commits are immutable. Fix forward with a new version.
 
 **No `Co-Authored-By: Claude` trailer** in commit messages, in this or any repo.
@@ -68,21 +68,21 @@ DeadlyBossMods uses.
 
 `Decursive.toc` defines load order and several bugs have come from ignoring it:
 
-    line  67    Dcr_opt.lua
-    line  94    Dcr_12_1.lua
-    line 104    Modern\ZD_Core.lua
+    line  69    Dcr_opt.lua
+    line  97    Dcr_12_1.lua
+    line 108    Modern\ZD_Core.lua
 
 A file may only reference something an earlier file defined. Example of a real
 bug: `Dcr_DebuffsFrame.lua` loads before `Dcr_12_1.lua`, so calling
 `D:Is121MUFStatusLightEnabled()` from it was unreliable at first login.
 
-### Known live defect — do not "fix" silently
+### Environment defaults
 
-The per-environment defaults table exists in THREE copies — `Dcr_opt.lua`,
-`Dcr_12_1.lua`, and `Modern/ZD_Core.lua` — and they disagree. A fresh profile and
-a "reset to defaults" click can produce different PvP values. This is known and
-deliberately deferred by the maintainer. Do not fold a fix for it into an
-unrelated change.
+The shipped environment presets are centralized in
+[Dcr_12_1.lua](Decursive/Dcr_12_1.lua). The profile
+manager clones those defaults into each complete environment variant during
+creation, migration, repair, and reset. Do not reintroduce parallel preset
+tables in the profile or compatibility layers.
 
 
 --------------------------------------------------------------------------------
@@ -256,7 +256,7 @@ return to baseline:
     grep -rho "@project-version@\|@project-date-iso@\|@project-abbreviated-hash@" Decursive Decursive_Options | sort | uniq -c
     #   1 @project-abbreviated-hash@
     #   4 @project-date-iso@
-    #  50 @project-version@
+    #  51 @project-version@
 
 
 --------------------------------------------------------------------------------
@@ -321,8 +321,8 @@ reintroduces the collision above.
 ## 7. CI PIPELINE
 
 One workflow: [.github/workflows/build-package-and-upload.yml](.github/workflows/build-package-and-upload.yml).
-Its read-only `verify` job runs on pull requests targeting `master`, pushes to
-`master`, version tags (`v*`), and manual `workflow_dispatch`. Its write-enabled
+Its read-only `verify` job runs on pull requests targeting `master` or `alpha`,
+pushes to either branch, version tags (`v*`), and manual `workflow_dispatch`. Its write-enabled
 `release` job runs only for version tags.
 
 It is split into two jobs, and the split is the whole safety model:
@@ -343,13 +343,13 @@ broken file is already public — which is exactly how v11.0.46, v12.0.4 and
 v12.0.5 escaped. Packaging and validating with no credentials in scope, then
 publishing only on success, closes that hole.
 
-**Rehearsal.** Pull requests and `master` pushes verify automatically.
+**Rehearsal.** Pull requests and `master` or `alpha` pushes verify automatically.
 `workflow_dispatch` also runs `verify` only, because `release` requires both a
 `push` event and a `v*` tag ref. A manual run therefore lints, packages and
 validates but *cannot* publish, even if an existing version tag is selected as
 the dispatch ref. Use it before every tag:
 
-    gh workflow run "Check and build addon" --ref master
+    gh workflow run "Check and build addon" --ref <release-branch>
 
 ### The two validators
 
@@ -402,7 +402,7 @@ Do not tag on your own initiative. If they direct you to publish without testing
 state the risk once, then proceed — it is their call.
 
 **2. Audit the working tree.**
-Licence headers intact, package tokens at the 50 / 4 / 1 baseline, `.toc` fields
+Licence headers intact, package tokens at the 51 / 4 / 1 baseline, `.toc` fields
 present. Run repository validation, assemble a credential-free package into
 `.release`, and only then pass that assembled directory to the package validator:
 
@@ -421,11 +421,12 @@ gitignored, but the habit is the protection.
 Explain WHY, not just what — root cause, mechanism, and what was verified. No
 `Co-Authored-By` trailer.
 
-**5. Push to `master`, confirm its automatic verification, then rehearse the
+**5. Push to the intended release branch (`master` for stable releases or
+`alpha` for prereleases), confirm its automatic verification, then rehearse the
 exact commit if needed.**
 The push automatically runs `verify`. A manual rehearsal remains available:
 
-    gh workflow run "Check and build addon" --ref master
+    gh workflow run "Check and build addon" --ref <release-branch>
 
 Wait for green. Verification has read-only repository permission, no publishing
 secrets, and cannot publish. **Confirm the run used the commit you are about to
@@ -570,7 +571,7 @@ required a helper the same drop deliberately removed — it rejected its own fix
 **Restore every package token, not just the obvious one.**
 Tokens arrive substituted. `@project-abbreviated-hash@` became a bare short hash
 that a `git describe`-shaped search missed entirely; it is a public field other
-addons read. Confirm the baseline is 50 / 4 / 1 afterwards.
+addons read. Confirm the baseline is 51 / 4 / 1 afterwards.
 
 **Prose counts as source to the token validator.**
 Quoting a token name verbatim in `CHANGELOG.md` raised its count and broke the
@@ -607,8 +608,11 @@ baseline; tagging blind would have failed the release build.
 --------------------------------------------------------------------------------
 ## 12. OUTSTANDING
 
-**The per-environment defaults table exists in three divergent copies.** See §2.
-Known and deliberately deferred by the maintainer.
+**Environment migrations need real SavedVariables testing.** The schema-4
+manager expands every logical profile to five complete variants while retaining
+legacy tables for rollback. Automated fixtures cover idempotence, partial repair,
+and future-schema read-only behavior, but a prerelease should still be exercised
+against a backup of real account data before promotion to stable.
 
 *(Resolved: the broken v11.0.46 / v12.0.4 / v12.0.5 / v12.1.2 files have been
 removed from CurseForge by the maintainer. Deleting a GitHub release does not

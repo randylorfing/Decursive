@@ -94,9 +94,9 @@ local function RegisterDecursive_Once() -- {{{
     end
 
     function D:OnManagedProfileDeleted(_, _, profileName)
-        local modern = T.ZhaohuModern
-        if modern and modern.HandleDeletedProfileAssignments then
-            modern:HandleDeletedProfileAssignments(profileName)
+        local manager = T.ProfileManager
+        if manager and manager.OnAceProfileDeleted then
+            manager:OnAceProfileDeleted("OnProfileDeleted", self.db, profileName)
         end
         self:NotifyConfigurationChanged()
     end
@@ -1169,99 +1169,6 @@ function D:VersionWarnings(forceDisplay) -- {{{
 end -- }}}
 
 
-local PROFILE_MANAGER_SCHEMA = 1
-
-local function isValidManagedProfileName(value)
-    return type(value) == "string" and value ~= ""
-end
-
-local function getCurrentCharacterProfileKey()
-    local name = UnitName("player")
-    local realm = GetRealmName()
-    if type(name) ~= "string" or name == "" or type(realm) ~= "string" or realm == "" then
-        return nil
-    end
-    return name .. " - " .. realm
-end
-
-local function savedProfileExists(saved, profileName)
-    if profileName == "Default" then return true end
-    if type(saved.profiles) == "table" and type(saved.profiles[profileName]) == "table" then
-        return true
-    end
-    if type(saved.profileKeys) == "table" then
-        for _, assigned in pairs(saved.profileKeys) do
-            if assigned == profileName then return true end
-        end
-    end
-
-    return false
-end
-
-local function initializeProfileManagerStorage()
-    if type(_G.DecursiveDB) ~= "table" then _G.DecursiveDB = {} end
-    local saved = _G.DecursiveDB
-    local manager = saved.profileManager
-    if type(manager) ~= "table" then
-        manager = {}
-        saved.profileManager = manager
-    end
-
-    if type(manager.schemaVersion) ~= "number" or manager.schemaVersion < PROFILE_MANAGER_SCHEMA then
-        local assignments = {}
-        if type(saved.profileKeys) == "table" then
-            for characterKey, profileName in pairs(saved.profileKeys) do
-                if type(characterKey) == "string" and isValidManagedProfileName(profileName) then
-                    assignments[characterKey] = profileName
-                end
-            end
-        end
-        local specializationAssignments = {}
-        local namespaces = type(saved.namespaces) == "table" and saved.namespaces or nil
-        local dualSpec = namespaces and namespaces["LibDualSpec-1.0"] or nil
-        local dualSpecCharacters = type(dualSpec) == "table" and dualSpec.char or nil
-        if type(dualSpecCharacters) == "table" then
-            for characterKey, record in pairs(dualSpecCharacters) do
-                if type(characterKey) == "string" and type(record) == "table" then
-                    local characterSpecs = {}
-                    for spec, profileName in pairs(record) do
-                        if type(spec) == "number" and isValidManagedProfileName(profileName)
-                            and savedProfileExists(saved, profileName)
-                        then
-                            characterSpecs[spec] = profileName
-                        end
-                    end
-                    if next(characterSpecs) then specializationAssignments[characterKey] = characterSpecs end
-                end
-            end
-        end
-        manager.characterAssignments = assignments
-        manager.specializationAssignments = specializationAssignments
-        manager.accountDefault = "Default"
-        manager.schemaVersion = PROFILE_MANAGER_SCHEMA
-    end
-
-    if type(manager.characterAssignments) ~= "table" then manager.characterAssignments = {} end
-    if type(manager.specializationAssignments) ~= "table" then manager.specializationAssignments = {} end
-    if not isValidManagedProfileName(manager.accountDefault)
-        or not savedProfileExists(saved, manager.accountDefault)
-    then
-        manager.accountDefault = "Default"
-    end
-
-    local characterKey = getCurrentCharacterProfileKey()
-    local characterProfile = characterKey and manager.characterAssignments[characterKey]
-    if not isValidManagedProfileName(characterProfile) or not savedProfileExists(saved, characterProfile) then
-        if characterKey then manager.characterAssignments[characterKey] = nil end
-        characterProfile = manager.accountDefault
-    end
-
-    saved.profileKeys = type(saved.profileKeys) == "table" and saved.profileKeys or {}
-    if characterKey then saved.profileKeys[characterKey] = characterProfile end
-    return characterProfile or "Default"
-end
-
-
 function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
 
     if T._SelfDiagnostic() == 2 then
@@ -1276,8 +1183,11 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
 
     D.defaults = D:GetDefaultsSettings();
 
-    local defaultProfile = initializeProfileManagerStorage()
+    if type(_G.DecursiveDB) ~= "table" then _G.DecursiveDB = {} end
+    local profileManager = T.ProfileManager
+    local defaultProfile = profileManager and profileManager:InitializeStorage(_G.DecursiveDB) or "Default"
     self.db = LibStub("AceDB-3.0"):New("DecursiveDB", D.defaults, defaultProfile)
+    if profileManager then profileManager:BindDatabase(self.db) end
 
 
 
@@ -1476,14 +1386,9 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
 
     if (FirstEnable) then
         D:ExportOptions ();
-        -- Dual-spec profile switching must enhance AceDB at login, not when
-        -- Decursive_Options first builds its settings tree.
-        if DC.CATACLYSM or not DC.WOWC then
-            local ok, LibDualSpec = pcall(LibStub, "LibDualSpec-1.0")
-            if ok and LibDualSpec and LibDualSpec.EnhanceDatabase and D.db then
-                LibDualSpec:EnhanceDatabase(D.db, "DecursiveDB")
-            end
-        end
+        -- Profile selection is manager-owned. The compatibility adapter keeps
+        -- legacy callers working without allowing LibDualSpec to issue an
+        -- independent AceDB SetProfile during specialization changes.
         -- configure the message frame for Decursive
         DecursiveTextFrame:SetFading(true);
         DecursiveTextFrame:SetFadeDuration(D.CONF.TEXT_LIFETIME / 3);
@@ -1515,6 +1420,9 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
     D.eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED");
     D.eventFrame:RegisterEvent("BAG_UPDATE_DELAYED");
     D.eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED");
+    if _G.C_Item and _G.C_Item.RequestLoadItemDataByID then
+        D.eventFrame:RegisterEvent("ITEM_DATA_LOAD_RESULT")
+    end
     if not DC.WOWC or DC.CATACLYSM then
         D.eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE");
     end
@@ -1968,8 +1876,8 @@ function D:Init() --{{{
     DecursiveMainBar:SetAlpha(D.profile.LiveListAlpha);
     -- }}}
 
-    if (D.db.global.MacroBind == "NONE") then
-        D.db.global.MacroBind = false;
+    if (D.profile.MacroBind == "NONE") then
+        D.profile.MacroBind = false
     end
 
 
@@ -2834,6 +2742,7 @@ do
             return false
         end
 
+        if self.RefreshCureBindingModel then self:RefreshCureBindingModel(reason or "action-macros") end
         self:SetMacrosPerPrioTable("mouseover")
         local changedAt = GetTime()
         if changedAt == self.Status.SpellsChanged then changedAt = changedAt + 0.000001 end
@@ -2854,9 +2763,46 @@ do
         local prio_macro = D.Status.prio_macro
         for priority in pairs(prio_macro) do prio_macro[priority] = nil end
 
-        for Spell, Prio in pairs(D.Status.CuringSpellsPrio) do
+        local bindingActions = D.Status.CureBindingActions
+        if type(bindingActions) ~= "table" then
+            bindingActions = {}
+            for Spell, Prio in pairs(D.Status.CuringSpellsPrio) do
+                bindingActions[#bindingActions + 1] = {
+                    spellName = Spell,
+                    slot = Prio,
+                    gesture = D.profile.MouseButtons and D.profile.MouseButtons[Prio]
+                }
+            end
+        end
+
+        for _, action in ipairs(bindingActions) do
+            local Spell = action.spellName
+            local Prio = action.slot
+            local binding = action.gesture
             local foundSpell = D.Status.FoundSpells[Spell]
-            if foundSpell and not foundSpell[5] then
+            if binding and action.isPvPBandage and D.BuildPvPBandageMacroText then
+                local macroText = D:BuildPvPBandageMacroText(action, unit)
+                if type(macroText) == "string" and macroText ~= "" and #macroText <= 255 then
+                    prio_macro[Prio] = {
+                        macroText = macroText,
+                        cureOnlyMacroText = macroText,
+                        binding = binding,
+                        actionKey = action.actionKey,
+                        pvpBandage = true
+                    }
+                end
+            elseif binding and action.areaUtility and D.BuildAreaUtilityMacroText then
+                local macroText = D:BuildAreaUtilityMacroText(action)
+                if type(macroText) == "string" and macroText ~= "" and #macroText <= 255 then
+                    prio_macro[Prio] = {
+                        macroText = macroText,
+                        cureOnlyMacroText = macroText,
+                        binding = binding,
+                        actionKey = action.actionKey,
+                        areaUtility = true
+                    }
+                end
+            elseif binding and foundSpell and not foundSpell[5] then
                 local command = foundSpell[2] > 0 and "cast" or "use"
                 local combined, cureOnly, rezOnly, hasRezAction = D:BuildSmartRezMacroText(
                     unit,
@@ -2870,7 +2816,9 @@ do
                         cureOnlyMacroText = cureOnly,
                         rezOnlyMacroText = #rezOnly <= 255 and rezOnly or "",
                         smartRezAvailable = hasRezAction and #combined <= 255,
-                        unitFiltering = foundSpell[6]
+                        unitFiltering = foundSpell[6],
+                        binding = binding,
+                        actionKey = action.actionKey
                     }
                     if #combined > 255 then
                         D:AddDebugText("Smart resurrection macro exceeded 255 bytes for priority", Prio)
@@ -2878,13 +2826,15 @@ do
                 else
                     D:AddDebugText("Cure macro exceeded 255 bytes for priority", Prio)
                 end
-            elseif foundSpell and foundSpell[5] then
+            elseif binding and foundSpell and foundSpell[5] then
                 local customMacro = foundSpell[5]:gsub("UNITID", unit)
                 if #customMacro <= 255 then
                     prio_macro[Prio] = {
                         macroText = customMacro,
                         customMacro = true,
-                        unitFiltering = foundSpell[6]
+                        unitFiltering = foundSpell[6],
+                        binding = binding,
+                        actionKey = action.actionKey
                     }
                 else
                     D:AddDebugText("Custom cure macro exceeded 255 bytes for priority", Prio)
@@ -2938,7 +2888,7 @@ do
 
         updateMacroByName(unpack(MacroParameters));
 
-        D:SetMacroKey(D.db.global.MacroBind);
+        D:SetMacroKey(D.profile.MacroBind)
 
         T._CatchAllErrors = catchAllErrorBackup;
         return true;

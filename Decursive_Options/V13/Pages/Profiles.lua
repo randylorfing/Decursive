@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Zhaohu's Decursive v13 Profiles page.
+    Zhaohu's Decursive v13 Profiles workspace.
     Copyright (C) 2026 Randy Lorfing
 
     Decursive is free software: you can redistribute it and/or modify
@@ -30,315 +30,482 @@ local D = T.Dcr
 local L = D and D.L
 
 local function localized(key, fallback)
-    return L and L[key] or fallback
+	return L and L[key] or fallback
 end
 
 local USE_ACCOUNT_PROFILE = "__USE_ACCOUNT_PROFILE__"
 local USE_CHARACTER_PROFILE = "__USE_CHARACTER_PROFILE__"
 
 local environmentValues = {
-    { key = "AUTO", label = "Automatic" },
-    { key = "OPEN_WORLD", label = "Open World" },
-    { key = "DUNGEON", label = "Dungeon / Follower" },
-    { key = "MYTHIC_PLUS", label = "Mythic+" },
-    { key = "RAID", label = "Raid" },
-    { key = "PVP", label = "PvP" },
+	{ key = "AUTO", label = "Automatic" },
+	{ key = "OPEN_WORLD", label = "Open World" },
+	{ key = "DUNGEON", label = "Dungeon / Follower" },
+	{ key = "MYTHIC_PLUS", label = "Mythic+" },
+	{ key = "RAID", label = "Raid" },
+	{ key = "PVP", label = "PvP" },
 }
 
 local editEnvironmentValues = {
-    { key = "OPEN_WORLD", label = "Open World" },
-    { key = "DUNGEON", label = "Dungeon / Follower" },
-    { key = "MYTHIC_PLUS", label = "Mythic+" },
-    { key = "RAID", label = "Raid" },
-    { key = "PVP", label = "PvP" },
+	{ key = "OPEN_WORLD", label = "Open World" },
+	{ key = "DUNGEON", label = "Dungeon / Follower" },
+	{ key = "MYTHIC_PLUS", label = "Mythic+" },
+	{ key = "RAID", label = "Raid" },
+	{ key = "PVP", label = "PvP" },
 }
 
 local function profileValues()
-    local result = {}
-    for _, name in ipairs(ZD.GetProfiles and ZD:GetProfiles() or {}) do
-        result[#result + 1] = { key = name, label = name }
-    end
-    if #result == 0 then result[1] = { key = "Default", label = "Default" } end
-    return result
+	local result = {}
+	for _, profile in ipairs(ZD.GetProfileCatalog and ZD:GetProfileCatalog() or {}) do
+		result[#result + 1] = { key = profile.id, label = profile.name }
+	end
+	if #result == 0 then result[1] = { key = "default", label = "Default" } end
+	return result
 end
 
 local function profileExists(name)
-    for _, profile in ipairs(profileValues()) do
-        if profile.key == name then return true end
-    end
-    return false
+	return type(name) == "string" and D.ProfileManager and D.ProfileManager:FindProfileID(name) ~= nil or false
+end
+
+local function profilesWritable()
+	local status = ZD.GetProfileSchemaStatus and ZD:GetProfileSchemaStatus() or {}
+	return status.readOnly ~= true
 end
 
 local function assignmentValues(inheritKey, inheritLabel)
-    local result = {}
-    if inheritKey then
-        result[#result + 1] = {
-            key = inheritKey,
-            label = inheritLabel,
-        }
-    end
-    for _, profile in ipairs(profileValues()) do result[#result + 1] = profile end
-    return result
+	local result = {}
+	if inheritKey then
+		result[#result + 1] = {
+			key = inheritKey,
+			label = inheritLabel,
+		}
+	end
+	for _, profile in ipairs(profileValues()) do result[#result + 1] = profile end
+	return result
 end
 
 local function deletableProfileValues()
-    local result = {}
-    for _, profile in ipairs(profileValues()) do
-        if profile.key ~= "Default" then result[#result + 1] = profile end
-    end
-    return result
+	local result = {}
+	for _, profile in ipairs(ZD.GetProfileCatalog and ZD:GetProfileCatalog() or {}) do
+		if profile.deletable then result[#result + 1] = { key = profile.id, label = profile.name } end
+	end
+	return result
+end
+
+local function setRouteButtonActive(button, active)
+	if not button then return end
+	local fill = active and Theme.color.raised or Theme.color.surface
+	local border = active and Theme.color.cyan or Theme.color.border
+	button:SetBackdropColor(fill[1], fill[2], fill[3], fill[4] or 1)
+	button:SetBackdropBorderColor(border[1], border[2], border[3], border[4] or 1)
+	button.text:SetTextColor(unpack(active and Theme.color.text or Theme.color.muted))
 end
 
 UI:RegisterPage("PROFILES", "Profiles", function(parent)
-    local page = CreateFrame("Frame", nil, parent)
-    page:SetAllPoints()
-    page.contentHeight = 1780
-    page.eyebrow = Controls:Label(page, "PROFILES & ENVIRONMENTS", 9, Theme.color.cyan)
-    page.eyebrow:SetPoint("TOPLEFT", 0, -2)
-    page.title = Controls:Label(page, "Your setup, adapted to the content", 20, Theme.color.text)
-    page.title:SetPoint("TOPLEFT", page.eyebrow, "BOTTOMLEFT", 0, -6)
-    page.subtitle = Controls:Label(page,
-        "Named profiles and automatic environment behavior remain separate.",
-        10, Theme.color.muted)
-    page.subtitle:SetPoint("TOPLEFT", page.title, "BOTTOMLEFT", 0, -6)
+	local page = CreateFrame("Frame", nil, parent)
+	page:SetAllPoints()
+	page.routes = {}
+	page.routeFrames = {}
+	page.routeButtons = {}
 
-    local named = Controls:Card(page, "Named profile",
-        "Switching profiles changes the complete user setup.")
-    named:SetPoint("TOPLEFT", 0, -82)
-    named:SetPoint("TOPRIGHT", -8, -82)
-    named:SetHeight(300)
-    Controls:Cycle(named, "Current profile", profileValues,
-        function() return ZD.GetUserProfileName and ZD:GetUserProfileName() or "Default" end,
-        function(value)
-            local applied = ZD.SetUserProfile and ZD:SetUserProfile(value) or false
-            if applied then
-                UI:SetStatus("Switched to profile " .. value .. ".", "success")
-            end
-            return applied
-        end)
-    local nameInput = Controls:TextInput(named, "Profile name", "Example: Mythic Healer")
-    nameInput.edit:SetMaxLetters(48)
-    local createProfile = Controls:Button(named, "Create / Switch", 150, function()
-        local name = nameInput.edit:GetText() or ""
-        if ZD.CreateUserProfile and ZD:CreateUserProfile(name) then
-            nameInput.edit:SetText("")
-            UI:SetStatus("Profile created or selected.", "success")
-            page:Refresh()
-        else
-            UI:SetStatus("Enter a valid profile name outside combat.", "error")
-        end
-    end, "primary")
-    createProfile:SetPoint("BOTTOMLEFT", 16, 54)
-    local copyProfile = Controls:Button(named, "Copy Current", 140, function()
-        local name = (nameInput.edit:GetText() or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if profileExists(name) then
-            UI:SetStatus("Choose a new name; that profile already exists.", "warning")
-            return
-        end
-        if ZD.CloneCurrentProfile and ZD:CloneCurrentProfile(name) then
-            nameInput.edit:SetText("")
-            UI:SetStatus("Current profile copied to " .. name .. ".", "success")
-            page:Refresh()
-        else
-            UI:SetStatus("Enter a new profile name outside combat.", "error")
-        end
-    end)
-    copyProfile:SetPoint("LEFT", createProfile, "RIGHT", 8, 0)
-    local resetProfile = Controls:ConfirmButton(named, "Reset Current Profile", 180, function()
-        if ZD.ResetUserProfile and ZD:ResetUserProfile() then
-            UI:SetStatus("Current profile reset.", "warning")
-            page:Refresh()
-        end
-    end)
-    resetProfile:SetPoint("BOTTOMLEFT", 16, 16)
-    local renameProfile = Controls:Button(named,
-        localized("PROFILE_RENAME_BUTTON", "Rename Current"), 150, function()
-            local name = nameInput.edit:GetText() or ""
-            if ZD.RenameCurrentProfile and ZD:RenameCurrentProfile(name) then
-                nameInput.edit:SetText("")
-                UI:SetStatus(localized("PROFILE_RENAME_SUCCESS", "Current profile renamed."), "success")
-                page:Refresh()
-            else
-                UI:SetStatus("Enter a new profile name outside combat.", "error")
-            end
-        end)
-    renameProfile:SetPoint("LEFT", resetProfile, "RIGHT", 8, 0)
+	function page:RegisterRoute(key, label, height)
+		self.routes[key] = { key = key, label = label, height = height }
+	end
 
-    local assignments = Controls:Card(page,
-        localized("PROFILE_RUNTIME_ASSIGNMENTS", "Runtime assignments"),
-        localized("PROFILE_RUNTIME_ASSIGNMENTS_DESC", "Choose account, character, and specialization fallbacks without replacing saved profiles."))
-    assignments:SetPoint("TOPLEFT", named, "BOTTOMLEFT", 0, -12)
-    assignments:SetPoint("TOPRIGHT", named, "BOTTOMRIGHT", 0, -12)
-    assignments:SetHeight(285)
-    Controls:Cycle(assignments,
-        localized("PROFILE_ACCOUNT_DEFAULT", "Account default"),
-        function() return assignmentValues() end,
-        function()
-            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
-            return state.account or "Default"
-        end,
-        function(value)
-            return ZD.SetAccountProfile and ZD:SetAccountProfile(value) or false
-        end)
-    Controls:Cycle(assignments,
-        localized("PROFILE_CHARACTER_ASSIGNMENT", "This character"),
-        function()
-            return assignmentValues(USE_ACCOUNT_PROFILE,
-                localized("PROFILE_USE_ACCOUNT_DEFAULT", "Use account default"))
-        end,
-        function()
-            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
-            return state.character or USE_ACCOUNT_PROFILE
-        end,
-        function(value)
-            if value == USE_ACCOUNT_PROFILE then value = nil end
-            return ZD.SetCharacterProfile and ZD:SetCharacterProfile(value) or false
-        end)
-    Controls:Toggle(assignments,
-        localized("PROFILE_SPEC_ENABLED", "Per-specialization profiles"),
-        localized("PROFILE_SPEC_ENABLED_DESC", "When enabled, changing specialization selects its assigned profile."),
-        function()
-            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
-            return state.perSpecEnabled == true
-        end,
-        function(value)
-            return ZD.SetSpecProfilesEnabled and ZD:SetSpecProfilesEnabled(value) or false
-        end)
-    Controls:Cycle(assignments,
-        localized("PROFILE_CURRENT_SPEC", "Current specialization"),
-        function()
-            return assignmentValues(USE_CHARACTER_PROFILE,
-                localized("PROFILE_USE_CHARACTER_ASSIGNMENT", "Use character assignment"))
-        end,
-        function()
-            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
-            return state.spec or USE_CHARACTER_PROFILE
-        end,
-        function(value)
-            if value == USE_CHARACTER_PROFILE then value = nil end
-            return ZD.SetCurrentSpecProfile and ZD:SetCurrentSpecProfile(value) or false
-        end,
-        function()
-            local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
-            return state.perSpecEnabled == true
-        end)
+	page:RegisterRoute("DECURSIVE",
+		localized("PROFILE_DECURSIVE_PAGE", "Decursive Profiles"), 1330)
+	page:RegisterRoute("ENVIRONMENT",
+		localized("PROFILE_ENVIRONMENT_PAGE", "Environment Profiles"), 900)
 
-    local deleteSelection
-    local function getDeleteSelection()
-        local values = deletableProfileValues()
-        if #values == 0 then
-            deleteSelection = nil
-            return nil
-        end
-        for _, profile in ipairs(values) do
-            if profile.key == deleteSelection then return deleteSelection end
-        end
-        deleteSelection = values[1].key
-        return deleteSelection
-    end
+	page.eyebrow = Controls:Label(page, "PROFILES", 9, Theme.color.cyan)
+	page.eyebrow:SetPoint("TOPLEFT", 0, -2)
+	page.title = Controls:Label(page,
+		localized("PROFILE_WORKSPACE_TITLE", "Profiles without guesswork"),
+		20, Theme.color.text)
+	page.title:SetPoint("TOPLEFT", page.eyebrow, "BOTTOMLEFT", 0, -6)
+	page.subtitle = Controls:Label(page,
+		localized("PROFILE_WORKSPACE_DESC", "Manage saved setups separately from the rules that select them."),
+		10, Theme.color.muted)
+	page.subtitle:SetPoint("TOPLEFT", page.title, "BOTTOMLEFT", 0, -6)
+	page.subtitle:SetPoint("RIGHT", -8, 0)
 
-    local deletion = Controls:Card(page,
-        localized("PROFILE_DELETE_UNUSED", "Delete an unused profile"),
-        localized("PROFILE_DELETE_UNUSED_DESC", "Default is protected. Character and specialization assignments fall back safely."))
-    deletion:SetPoint("TOPLEFT", assignments, "BOTTOMLEFT", 0, -12)
-    deletion:SetPoint("TOPRIGHT", assignments, "BOTTOMRIGHT", 0, -12)
-    deletion:SetHeight(170)
-    Controls:Cycle(deletion,
-        localized("PROFILE_DELETE_SELECTION", "Profile to delete"),
-        deletableProfileValues,
-        getDeleteSelection,
-        function(value) deleteSelection = value return true end,
-        function() return #deletableProfileValues() > 0 end)
-    local deleteProfile = Controls:ConfirmButton(deletion,
-        localized("PROFILE_DELETE_BUTTON", "Delete Selected Profile"), 190, function()
-            local name = getDeleteSelection()
-            if name and ZD.DeleteUserProfile and ZD:DeleteUserProfile(name) then
-                deleteSelection = nil
-                UI:SetStatus(localized("PROFILE_DELETE_SUCCESS", "Profile deleted; assignments now use their fallback."), "warning")
-                page:Refresh()
-            end
-        end)
-    deleteProfile:SetPoint("BOTTOMLEFT", 16, 16)
+	local routeBar = CreateFrame("Frame", nil, page, "BackdropTemplate")
+	routeBar:SetPoint("TOPLEFT", 0, -82)
+	routeBar:SetPoint("TOPRIGHT", -8, -82)
+	routeBar:SetHeight(72)
+	Controls:SetBackdrop(routeBar, Theme.color.surface, Theme.color.border)
+	page.routeBar = routeBar
+	local schemaWarning = Controls:Pill(routeBar,
+		localized("PROFILE_FUTURE_SCHEMA", "Newer profile data detected. Profile changes are read-only."), Theme.color.warning)
+	schemaWarning:SetWidth(500)
+	schemaWarning:SetPoint("TOP", 0, -6)
+	page.schemaWarning = schemaWarning
 
-    local behavior = Controls:Card(page, "Automatic behavior",
-        "Automatic mode follows Open World, Dungeon/Follower, Mythic+, Raid and PvP.")
-    behavior:SetPoint("TOPLEFT", deletion, "BOTTOMLEFT", 0, -12)
-    behavior:SetPoint("TOPRIGHT", deletion, "BOTTOMRIGHT", 0, -12)
-    behavior:SetHeight(230)
-    Controls:Cycle(behavior, "Activation mode", function() return environmentValues end,
-        function() return ZD.GetEnvironmentSetting and ZD:GetEnvironmentSetting() or "AUTO" end,
-        function(value)
-            local applied = ZD.SetEnvironmentSetting and ZD:SetEnvironmentSetting(value) or false
-            if applied then UI:SetStatus("Environment activation updated.", "success") end
-            return applied
-        end)
-    Controls:StatusRow(behavior, "Currently active", function()
-        if not ZD.GetActiveEnvironment then return "Open World" end
-        local _, name = ZD:GetActiveEnvironment()
-        return name or "Open World"
-    end, function() return Theme.color.success end)
-    Controls:Cycle(behavior, "Edit environment", function() return editEnvironmentValues end,
-        function() return ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD" end,
-        function(value)
-            local applied = ZD.SetEditEnvironment and ZD:SetEditEnvironment(value) or false
-            if applied then
-                UI:SetStatus("Editing " .. (V13.SettingsSchema.environmentNames[value] or value) .. ".", "success")
-            end
-            return applied
-        end)
+	local decursiveRoute = Controls:Button(routeBar,
+		localized("PROFILE_DECURSIVE_PAGE", "Decursive Profiles"), 284, function()
+			page:SetRoute("DECURSIVE")
+		end)
+	decursiveRoute:SetPoint("BOTTOMLEFT", 10, 6)
+	decursiveRoute:SetPoint("BOTTOMRIGHT", routeBar, "BOTTOM", -4, 6)
+	page.routeButtons.DECURSIVE = decursiveRoute
 
-    local resetEnvironment = Controls:ConfirmButton(behavior, "Reset Edited Environment", 190, function()
-        local key = ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD"
-        if ZD.ResetEnvironmentProfile and ZD:ResetEnvironmentProfile(key) then
-            UI:SetStatus((V13.SettingsSchema.environmentNames[key] or key) .. " reset.", "warning")
-            page:Refresh()
-        end
-    end)
-    resetEnvironment:SetPoint("BOTTOMLEFT", 16, 16)
+	local environmentRoute = Controls:Button(routeBar,
+		localized("PROFILE_ENVIRONMENT_PAGE", "Environment Profiles"), 284, function()
+			page:SetRoute("ENVIRONMENT")
+		end)
+	environmentRoute:SetPoint("BOTTOMLEFT", routeBar, "BOTTOM", 4, 6)
+	environmentRoute:SetPoint("BOTTOMRIGHT", -10, 6)
+	page.routeButtons.ENVIRONMENT = environmentRoute
 
-    local export = Controls:Card(page, "Export active profile",
-        "Generate a portable string containing only the current AceDB user profile.")
-    export:SetPoint("TOPLEFT", behavior, "BOTTOMLEFT", 0, -12)
-    export:SetPoint("TOPRIGHT", behavior, "BOTTOMRIGHT", 0, -12)
-    export:SetHeight(275)
-    local exportText = Controls:TextArea(export, "Profile string", 120)
-    local generate = Controls:Button(export, "Generate & Select", 170, function()
-        local value = D.GetProfileExportString and D:GetProfileExportString() or ""
-        exportText.edit:SetText(value)
-        exportText.edit:HighlightText()
-        exportText.edit:SetFocus()
-        UI:SetStatus(value ~= "" and "Export ready. Press Ctrl+C to copy." or "Profile export failed.", value ~= "" and "success" or "error")
-    end, "primary")
-    generate:SetPoint("BOTTOMLEFT", 16, 16)
+	local decursive = CreateFrame("Frame", nil, page)
+	decursive:SetPoint("TOPLEFT", routeBar, "BOTTOMLEFT", 0, -12)
+	decursive:SetPoint("TOPRIGHT", routeBar, "BOTTOMRIGHT", 0, -12)
+	decursive:SetHeight(1180)
+	page.routeFrames.DECURSIVE = decursive
 
-    local import = Controls:Card(page, "Import into active profile",
-        "Import replaces the active profile's settings. Global, locale and class-scoped data are not overwritten.")
-    import:SetPoint("TOPLEFT", export, "BOTTOMLEFT", 0, -12)
-    import:SetPoint("TOPRIGHT", export, "BOTTOMRIGHT", 0, -12)
-    import:SetHeight(320)
-    local importText = Controls:TextArea(import, "Paste a Decursive profile string", 140)
-    local importButton = Controls:ConfirmButton(import, "Import Into Current Profile", 225, function()
-        local value = importText.edit:GetText() or ""
-        if D.SetProfileImportBuffer then D:SetProfileImportBuffer(value) end
-        local ok = D.ImportProfileString and D:ImportProfileString(value)
-        if ok then
-            importText.edit:SetText("")
-            UI:SetStatus("Profile imported successfully.", "success")
-            page:Refresh()
-        else
-            UI:SetStatus(D.GetProfileIOStatus and D:GetProfileIOStatus() or "Profile import failed.", "error")
-        end
-    end)
-    importButton:SetPoint("BOTTOMLEFT", 16, 16)
-    local importState = Controls:Pill(import, "DOUBLE CONFIRMATION REQUIRED", Theme.color.warning)
-    importState:SetWidth(220)
-    importState:SetPoint("LEFT", importButton, "RIGHT", 10, 0)
+	local decursiveHeading = Controls:Label(decursive,
+		localized("PROFILE_DECURSIVE_PAGE", "Decursive Profiles"), 16, Theme.color.text)
+	decursiveHeading:SetPoint("TOPLEFT", 0, 0)
+	local decursiveDescription = Controls:Label(decursive,
+		localized("PROFILE_DECURSIVE_PAGE_DESC", "Create, switch, protect, and transfer complete Decursive setups."),
+		10, Theme.color.muted)
+	decursiveDescription:SetPoint("TOPLEFT", decursiveHeading, "BOTTOMLEFT", 0, -5)
+	decursiveDescription:SetPoint("RIGHT", -8, 0)
 
-    function page:Refresh()
-        named:Refresh()
-        assignments:Refresh()
-        deletion:Refresh()
-        behavior:Refresh()
-    end
-    return page
+	local named = Controls:Card(decursive,
+		localized("PROFILE_NAMED_CARD", "Named profile"),
+		localized("PROFILE_NAMED_CARD_DESC", "Switching profiles changes the complete Decursive setup."))
+	named:SetPoint("TOPLEFT", 0, -52)
+	named:SetPoint("TOPRIGHT", -8, -52)
+	named:SetHeight(300)
+	local currentProfileCycle = Controls:Cycle(named, localized("PROFILE_CURRENT", "Current profile"), profileValues,
+		function() return ZD.GetUserProfileID and ZD:GetUserProfileID() or "default" end,
+		function(value)
+			local applied = ZD.SetUserProfile and ZD:SetUserProfile(value) or false
+			if applied then UI:SetStatus("Profile switched.", "success") end
+			return applied
+		end, profilesWritable)
+	local nameInput = Controls:TextInput(named,
+		localized("PROFILE_NAME", "Profile name"),
+		localized("PROFILE_NAME_EXAMPLE", "Example: Mythic Healer"))
+	nameInput.edit:SetMaxLetters(48)
+	local createProfile = Controls:Button(named,
+		localized("PROFILE_CREATE_SWITCH", "Create / Switch"), 150, function()
+			local name = nameInput.edit:GetText() or ""
+			if ZD.CreateUserProfile and ZD:CreateUserProfile(name) then
+				nameInput.edit:SetText("")
+				UI:SetStatus("Profile created or selected.", "success")
+				page:Refresh()
+			else
+				UI:SetStatus(ZD.lastStatus or "Enter a valid profile name outside combat.", "error")
+			end
+		end, "primary")
+	createProfile:SetPoint("BOTTOMLEFT", 16, 54)
+	local copyProfile = Controls:Button(named,
+		localized("PROFILE_COPY_CURRENT", "Copy Current"), 140, function()
+			local name = (nameInput.edit:GetText() or ""):gsub("^%s+", ""):gsub("%s+$", "")
+			if profileExists(name) then
+				UI:SetStatus("Choose a new name; that profile already exists.", "warning")
+				return
+			end
+			if ZD.CloneCurrentProfile and ZD:CloneCurrentProfile(name) then
+				nameInput.edit:SetText("")
+				UI:SetStatus("Current profile copied to " .. name .. ".", "success")
+				page:Refresh()
+			else
+				UI:SetStatus(ZD.lastStatus or "Enter a new profile name outside combat.", "error")
+			end
+		end)
+	copyProfile:SetPoint("LEFT", createProfile, "RIGHT", 8, 0)
+	local resetProfile = Controls:ConfirmButton(named,
+		localized("PROFILE_RESET_CURRENT", "Reset Current Profile"), 180, function()
+			if ZD.ResetUserProfile and ZD:ResetUserProfile() then
+				UI:SetStatus("Current profile reset.", "warning")
+				page:Refresh()
+			end
+		end)
+	resetProfile:SetPoint("BOTTOMLEFT", 16, 16)
+	local renameProfile = Controls:Button(named,
+		localized("PROFILE_RENAME_BUTTON", "Rename Current"), 150, function()
+			local name = nameInput.edit:GetText() or ""
+			if ZD.RenameCurrentProfile and ZD:RenameCurrentProfile(name) then
+				nameInput.edit:SetText("")
+				UI:SetStatus(localized("PROFILE_RENAME_SUCCESS", "Current profile renamed."), "success")
+				page:Refresh()
+			else
+				UI:SetStatus(ZD.lastStatus or "Enter a new profile name outside combat.", "error")
+			end
+		end)
+	renameProfile:SetPoint("LEFT", resetProfile, "RIGHT", 8, 0)
+
+	local deleteSelection
+	local function getDeleteSelection()
+		local values = deletableProfileValues()
+		if #values == 0 then
+			deleteSelection = nil
+			return nil
+		end
+		for _, profile in ipairs(values) do
+			if profile.key == deleteSelection then return deleteSelection end
+		end
+		deleteSelection = values[1].key
+		return deleteSelection
+	end
+
+	local deletion = Controls:Card(decursive,
+		localized("PROFILE_DELETE_UNUSED", "Delete an unused profile"),
+		localized("PROFILE_DELETE_UNUSED_DESC", "Default is protected. Character and specialization assignments fall back safely."))
+	deletion:SetPoint("TOPLEFT", named, "BOTTOMLEFT", 0, -12)
+	deletion:SetPoint("TOPRIGHT", named, "BOTTOMRIGHT", 0, -12)
+	deletion:SetHeight(170)
+	Controls:Cycle(deletion,
+		localized("PROFILE_DELETE_SELECTION", "Profile to delete"),
+		deletableProfileValues,
+		getDeleteSelection,
+		function(value)
+			deleteSelection = value
+			return true
+		end,
+		function() return #deletableProfileValues() > 0 end)
+	local deleteProfile = Controls:ConfirmButton(deletion,
+		localized("PROFILE_DELETE_BUTTON", "Delete Selected Profile"), 190, function()
+			local name = getDeleteSelection()
+			if name and ZD.DeleteUserProfile and ZD:DeleteUserProfile(name) then
+				deleteSelection = nil
+				UI:SetStatus(localized("PROFILE_DELETE_SUCCESS", "Profile deleted; assignments now use their fallback."), "warning")
+				page:Refresh()
+			end
+		end)
+	deleteProfile:SetPoint("BOTTOMLEFT", 16, 16)
+
+	local export = Controls:Card(decursive,
+		localized("PROFILE_EXPORT_CARD", "Export complete logical profile"),
+		localized("PROFILE_EXPORT_CARD_DESC", "Generate one portable string containing all five full environment variants."))
+	export:SetPoint("TOPLEFT", deletion, "BOTTOMLEFT", 0, -12)
+	export:SetPoint("TOPRIGHT", deletion, "BOTTOMRIGHT", 0, -12)
+	export:SetHeight(275)
+	local exportText = Controls:TextArea(export,
+		localized("PROFILE_EXPORT_STRING", "Profile string"), 120)
+	local generate = Controls:Button(export,
+		localized("PROFILE_EXPORT_GENERATE", "Generate & Select"), 170, function()
+			local value = D.GetProfileExportString and D:GetProfileExportString() or ""
+			exportText.edit:SetText(value)
+			exportText.edit:HighlightText()
+			exportText.edit:SetFocus()
+			UI:SetStatus(value ~= "" and "Export ready. Press Ctrl+C to copy." or "Profile export failed.", value ~= "" and "success" or "error")
+		end, "primary")
+	generate:SetPoint("BOTTOMLEFT", 16, 16)
+
+	local import = Controls:Card(decursive,
+		localized("PROFILE_IMPORT_CARD", "Import complete logical profile"),
+		localized("PROFILE_IMPORT_CARD_DESC", "Import transactionally replaces all five variants of the active logical profile. Global, locale and class-scoped data are not overwritten."))
+	import:SetPoint("TOPLEFT", export, "BOTTOMLEFT", 0, -12)
+	import:SetPoint("TOPRIGHT", export, "BOTTOMRIGHT", 0, -12)
+	import:SetHeight(320)
+	local importText = Controls:TextArea(import,
+		localized("PROFILE_IMPORT_STRING", "Paste a Decursive profile string"), 140)
+	local importButton = Controls:ConfirmButton(import,
+		localized("PROFILE_IMPORT_BUTTON", "Import Into Current Profile"), 225, function()
+			local value = importText.edit:GetText() or ""
+			if D.SetProfileImportBuffer then D:SetProfileImportBuffer(value) end
+			local ok = D.ImportProfileString and D:ImportProfileString(value)
+			if ok then
+				importText.edit:SetText("")
+				UI:SetStatus("Profile imported successfully.", "success")
+				page:Refresh()
+			else
+				UI:SetStatus(D.GetProfileIOStatus and D:GetProfileIOStatus() or "Profile import failed.", "error")
+			end
+		end)
+	importButton:SetPoint("BOTTOMLEFT", 16, 16)
+	local importState = Controls:Pill(import, "DOUBLE CONFIRMATION REQUIRED", Theme.color.warning)
+	importState:SetWidth(220)
+	importState:SetPoint("LEFT", importButton, "RIGHT", 10, 0)
+
+	local environment = CreateFrame("Frame", nil, page)
+	environment:SetPoint("TOPLEFT", routeBar, "BOTTOMLEFT", 0, -12)
+	environment:SetPoint("TOPRIGHT", routeBar, "BOTTOMRIGHT", 0, -12)
+	environment:SetHeight(560)
+	page.routeFrames.ENVIRONMENT = environment
+
+	local environmentHeading = Controls:Label(environment,
+		localized("PROFILE_ENVIRONMENT_PAGE", "Environment Profiles"), 16, Theme.color.text)
+	environmentHeading:SetPoint("TOPLEFT", 0, 0)
+	local environmentDescription = Controls:Label(environment,
+		localized("PROFILE_ENVIRONMENT_PAGE_DESC", "Assignments choose the logical profile. Environment activation chooses its runtime variant. Editing previews one complete variant across every settings page."),
+		10, Theme.color.muted)
+	environmentDescription:SetPoint("TOPLEFT", environmentHeading, "BOTTOMLEFT", 0, -5)
+	environmentDescription:SetPoint("RIGHT", -8, 0)
+	environmentDescription:SetWordWrap(true)
+
+	local assignments = Controls:Card(environment,
+		localized("PROFILE_RUNTIME_ASSIGNMENTS", "Runtime assignments"),
+		localized("PROFILE_RUNTIME_ASSIGNMENTS_DESC", "Choose account, character, and specialization fallbacks without replacing saved profiles."))
+	assignments:SetPoint("TOPLEFT", 0, -52)
+	assignments:SetPoint("TOPRIGHT", -8, -52)
+	assignments:SetHeight(285)
+	Controls:Cycle(assignments,
+		localized("PROFILE_ACCOUNT_DEFAULT", "Account default"),
+		function() return assignmentValues() end,
+		function()
+			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+			return state.account or "default"
+		end,
+		function(value)
+			return ZD.SetAccountProfile and ZD:SetAccountProfile(value) or false
+		end, profilesWritable)
+	Controls:Cycle(assignments,
+		localized("PROFILE_CHARACTER_ASSIGNMENT", "This character"),
+		function()
+			return assignmentValues(USE_ACCOUNT_PROFILE,
+				localized("PROFILE_USE_ACCOUNT_DEFAULT", "Use account default"))
+		end,
+		function()
+			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+			return state.character or USE_ACCOUNT_PROFILE
+		end,
+		function(value)
+			if value == USE_ACCOUNT_PROFILE then value = nil end
+			return ZD.SetCharacterProfile and ZD:SetCharacterProfile(value) or false
+		end, profilesWritable)
+	Controls:Toggle(assignments,
+		localized("PROFILE_SPEC_ENABLED", "Per-specialization profiles"),
+		localized("PROFILE_SPEC_ENABLED_DESC", "When enabled, changing specialization selects its assigned profile."),
+		function()
+			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+			return state.perSpecEnabled == true
+		end,
+		function(value)
+			return ZD.SetSpecProfilesEnabled and ZD:SetSpecProfilesEnabled(value) or false
+		end, profilesWritable)
+	Controls:Cycle(assignments,
+		localized("PROFILE_CURRENT_SPEC", "Current specialization"),
+		function()
+			return assignmentValues(USE_CHARACTER_PROFILE,
+				localized("PROFILE_USE_CHARACTER_ASSIGNMENT", "Use character assignment"))
+		end,
+		function()
+			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+			return state.spec or USE_CHARACTER_PROFILE
+		end,
+		function(value)
+			if value == USE_CHARACTER_PROFILE then value = nil end
+			return ZD.SetCurrentSpecProfile and ZD:SetCurrentSpecProfile(value) or false
+		end,
+		function()
+			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+			return profilesWritable() and state.perSpecEnabled == true
+		end)
+
+	local behavior = Controls:Card(environment,
+		localized("PROFILE_AUTOMATIC_BEHAVIOR", "Full environment variants"),
+		localized("PROFILE_AUTOMATIC_BEHAVIOR_DESC", "Every setting is independent in Open World, Party/Dungeon, Mythic+, Raid and PvP. Automatic precedence is PvP > Raid > Mythic+ > Party/Dungeon > Open World."))
+	behavior:SetPoint("TOPLEFT", assignments, "BOTTOMLEFT", 0, -12)
+	behavior:SetPoint("TOPRIGHT", assignments, "BOTTOMRIGHT", 0, -12)
+	behavior:SetHeight(330)
+	Controls:Cycle(behavior,
+		localized("PROFILE_ACTIVATION_MODE", "Activation mode"),
+		function() return environmentValues end,
+		function() return ZD.GetEnvironmentSetting and ZD:GetEnvironmentSetting() or "AUTO" end,
+		function(value)
+			local applied = ZD.SetEnvironmentSetting and ZD:SetEnvironmentSetting(value) or false
+			if applied then UI:SetStatus("Environment activation updated.", "success") end
+			return applied
+		end)
+	Controls:StatusRow(behavior,
+		localized("PROFILE_CURRENTLY_ACTIVE", "Currently active"), function()
+			if not ZD.GetActiveEnvironment then return "Open World" end
+			local _, name = ZD:GetActiveEnvironment()
+			return name or "Open World"
+		end, function() return Theme.color.success end)
+	Controls:Cycle(behavior,
+		localized("PROFILE_EDIT_ENVIRONMENT", "Edit and preview complete variant"),
+		function() return editEnvironmentValues end,
+		function() return ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD" end,
+		function(value)
+			local applied = ZD.SetEditEnvironment and ZD:SetEditEnvironment(value) or false
+			if applied then
+				UI:SetStatus("Editing " .. (V13.SettingsSchema.environmentNames[value] or value) .. ".", "success")
+			end
+			return applied
+		end)
+
+	local copySource = "OPEN_WORLD"
+	Controls:Cycle(behavior,
+		localized("PROFILE_COPY_ENVIRONMENT_SOURCE", "Copy settings from"),
+		function() return editEnvironmentValues end,
+		function() return copySource end,
+		function(value) copySource = value return true end)
+
+	local copyEnvironment = Controls:ConfirmButton(behavior,
+		localized("PROFILE_COPY_ENVIRONMENT", "Copy Into Edited Variant"), 205, function()
+			if ZD.CopyEnvironmentProfile and ZD:CopyEnvironmentProfile(copySource) then
+				UI:SetStatus("Copied the complete " .. (V13.SettingsSchema.environmentNames[copySource] or copySource)
+					.. " variant into the edited variant.", "success")
+				page:Refresh()
+			end
+		end)
+	copyEnvironment:SetPoint("BOTTOMLEFT", 16, 16)
+
+	local resetEnvironment = Controls:ConfirmButton(behavior,
+		localized("PROFILE_RESET_ENVIRONMENT", "Reset Edited to Preset"), 190, function()
+			local key = ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD"
+			if ZD.ResetEnvironmentProfile and ZD:ResetEnvironmentProfile(key) then
+				UI:SetStatus((V13.SettingsSchema.environmentNames[key] or key) .. " reset.", "warning")
+				page:Refresh()
+			end
+		end)
+	resetEnvironment:SetPoint("LEFT", copyEnvironment, "RIGHT", 8, 0)
+
+	function page:SetRoute(route)
+		route = tostring(route or "DECURSIVE"):upper()
+		if route == "DECURSIVE_PROFILES" or route == "PROFILES" or route == "SHARING" then
+			route = "DECURSIVE"
+		elseif route == "ENVIRONMENT_PROFILES" or route == "ENVIRONMENTPROFILES" then
+			route = "ENVIRONMENT"
+		end
+		if not self.routeFrames[route] then route = "DECURSIVE" end
+
+		self.currentRoute = route
+		for routeKey, frame in pairs(self.routeFrames) do
+			frame:SetShown(routeKey == route)
+		end
+		for routeKey, button in pairs(self.routeButtons) do
+			setRouteButtonActive(button, routeKey == route)
+		end
+		self.contentHeight = self.routes[route].height
+		if UI.frame and UI.currentPage == "PROFILES" then
+			UI.frame.content:SetHeight(self.contentHeight)
+			UI.frame.scroller:SetVerticalScroll(0)
+		end
+		UI.pendingProfilesRoute = nil
+		self:Refresh()
+		UI:SetStatus((route == "ENVIRONMENT"
+			and localized("PROFILE_ENVIRONMENT_PAGE", "Environment Profiles")
+			or localized("PROFILE_DECURSIVE_PAGE", "Decursive Profiles")) .. " ready.", "success")
+	end
+
+	function page:Refresh()
+		local schema = ZD.GetProfileSchemaStatus and ZD:GetProfileSchemaStatus() or {}
+		self.schemaWarning:SetShown(schema.readOnly == true)
+		if schema.readOnly and schema.message then self.schemaWarning.text:SetText(schema.message) end
+		local writable = schema.readOnly ~= true
+		nameInput.edit:SetEnabled(writable)
+		createProfile:SetEnabled(writable)
+		copyProfile:SetEnabled(writable)
+		resetProfile:SetEnabled(writable)
+		renameProfile:SetEnabled(writable)
+		deleteProfile:SetEnabled(writable and #deletableProfileValues() > 0)
+		importButton:SetEnabled(writable)
+		currentProfileCycle:Refresh()
+		if self.currentRoute == "ENVIRONMENT" then
+			assignments:Refresh()
+			behavior:Refresh()
+		else
+			named:Refresh()
+			deletion:Refresh()
+		end
+	end
+
+	page:SetRoute(UI.pendingProfilesRoute or "DECURSIVE")
+	return page
 end)

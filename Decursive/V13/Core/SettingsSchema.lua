@@ -160,14 +160,23 @@ boolean("feedback.range.enabled", true, "ALERTS", "RANGE", "Out-of-range status"
 boolean("feedback.text.enabled", true, "ALERTS", "TEXT", "Text alerts", "environment")
 boolean("feedback.chat.enabled", true, "ALERTS", "TEXT", "Chat status messages", "environment")
 
-navigation("profiles.create", "PROFILES", "PROFILE", "Create profile")
-navigation("profiles.copy", "PROFILES", "PROFILE", "Copy current profile")
-navigation("profiles.reset", "PROFILES", "PROFILE", "Reset current profile")
-navigation("profiles.import", "PROFILES", "TRANSFER", "Import profile")
-navigation("profiles.export", "PROFILES", "TRANSFER", "Export profile")
+navigation("profiles.create", "DECURSIVE_PROFILES", "PROFILE", "Create profile")
+navigation("profiles.copy", "DECURSIVE_PROFILES", "PROFILE", "Copy current profile")
+navigation("profiles.rename", "DECURSIVE_PROFILES", "PROFILE", "Rename current profile")
+navigation("profiles.reset", "DECURSIVE_PROFILES", "PROFILE", "Reset current profile")
+navigation("profiles.delete", "DECURSIVE_PROFILES", "PROFILE", "Delete profile")
+navigation("profiles.import", "DECURSIVE_PROFILES", "TRANSFER", "Import profile")
+navigation("profiles.export", "DECURSIVE_PROFILES", "TRANSFER", "Export profile")
+navigation("profiles.account", "ENVIRONMENT_PROFILES", "ASSIGNMENT", "Account default profile")
+navigation("profiles.character", "ENVIRONMENT_PROFILES", "ASSIGNMENT", "Character profile assignment")
+navigation("profiles.specialization", "ENVIRONMENT_PROFILES", "ASSIGNMENT", "Specialization profile assignment")
+navigation("profiles.environment", "ENVIRONMENT_PROFILES", "ENVIRONMENT", "Environment activation mode")
 navigation("advanced.diagnostics", "ADVANCED", "DIAGNOSTICS", "Runtime diagnostics")
 navigation("advanced.reload", "ADVANCED", "TOOLS", "Reload UI")
 
+-- Search/preview metadata only. This is not a persistence allow-list. Profile
+-- manager schema 4 stores the complete AceDB profile table for every
+-- environment, including settings that do not have a V13 schema entry.
 Schema.environmentDefaults = {
     OPEN_WORLD = {
         ["cooldown.enabled"] = true,

@@ -194,6 +194,14 @@ function D:PLAYER_ENTERING_WORLD()
         return;
     end
 
+    if self.ProfileManager then
+        self.ProfileManager:RefreshIdentity("PLAYER_ENTERING_WORLD")
+    end
+
+    if self.RefreshMUFActionMacros then
+        self:RefreshMUFActionMacros("PLAYER_ENTERING_WORLD")
+    end
+
     -- square-sound16: every world/instance transition gets a full MUF/provider
     -- soft reinitialization. Do not trust the first transient roster snapshot.
     -- The reinitializer resets visible MUF state, rebuilds Unit_Array, then
@@ -431,6 +439,14 @@ do
     function D:PLAYER_REGEN_ENABLED() -- LeaveCombat
         --D:Debug("Leaving combat");
         self.Status.Combat = false;
+
+        if self.ProfileManager then
+            self.ProfileManager:HandleCombatEnded()
+        end
+
+		if self.FlushPendingCureBindingRefresh then
+			self:FlushPendingCureBindingRefresh()
+		end
 
         -- Apply a Party/Raid size transition that was deferred while secure
         -- frames were locked by combat.
@@ -700,6 +716,27 @@ function D:GET_ITEM_INFO_RECEIVED()
         self.Status.WaitingForSpellInfo = false;
         D:Debug("|cFFFF0000Missing itemInfo received, scheduling a reconfiguration check|r");
     end
+    if self.RefreshMUFActionMacros then
+        self:ScheduleDelayedCall(
+            "Dcr_RefreshMUFActionMacros",
+            self.RefreshMUFActionMacros,
+            0.2,
+            self,
+            "GET_ITEM_INFO_RECEIVED"
+        )
+    end
+end
+
+function D:ITEM_DATA_LOAD_RESULT()
+    if self.RefreshMUFActionMacros then
+        self:ScheduleDelayedCall(
+            "Dcr_RefreshMUFActionMacros",
+            self.RefreshMUFActionMacros,
+            0.2,
+            self,
+            "ITEM_DATA_LOAD_RESULT"
+        )
+    end
 end
 
 function D:PLAYER_TALENT_UPDATE()
@@ -717,6 +754,9 @@ function D:PLAYER_TALENT_UPDATE()
 end
 
 function D:PLAYER_SPECIALIZATION_CHANGED()
+    if self.ProfileManager then
+        self.ProfileManager:RefreshIdentity("PLAYER_SPECIALIZATION_CHANGED")
+    end
     if self.RefreshMUFActionMacros then
         self:ScheduleDelayedCall(
             "Dcr_RefreshMUFActionMacros",

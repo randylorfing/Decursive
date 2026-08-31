@@ -55,6 +55,7 @@ ignore:
     - .gitattributes
     - .editorconfig
     - .docmeta
+    - .cursor
     - Decursive/docs
     # Superseded release notes and development docs are source-only. They stay
     # in the repository as project history but have no business in a user's
@@ -64,6 +65,7 @@ ignore:
     - Decursive/RELEASE_NOTES_v12.1.2.md
     - Decursive/12_1_PATCH_NOTES.md
     - Decursive/IMPLEMENTATION_SUMMARY.md
+    - Decursive/FULL_ENVIRONMENT_PROFILES.md
     - Decursive/V10.20_HOTFIX.md
     - Decursive/V10.41_12.1_SECRET_SAFETY.md
     - Decursive/Todo.txt

@@ -1,4 +1,7 @@
 local function readFile(path)
+    if type(readfile) == "function" then
+        return assert(readfile(path))
+    end
     local file = assert(io.open(path, "rb"))
     local text = assert(file:read("*a"))
     file:close()
@@ -92,7 +95,10 @@ local function reset(known, names, soulLinkEnabled, soulLinkCount)
     carriedSoulLinkCount = soulLinkCount == nil and 1 or soulLinkCount
     itemCountArguments = {}
     debugEntries = {}
-    D.profile = { SoulLink121Enabled = soulLinkEnabled ~= false }
+    D.profile = {
+        SoulLink121Enabled = soulLinkEnabled ~= false,
+        MouseButtons = { "LeftButton", "RightButton", "MiddleButton" }
+    }
     D.Status = {
         prio_macro = {},
         CuringSpellsPrio = {},
@@ -295,6 +301,12 @@ assert(updated == 1)
 local bagHandlerStart = assert(eventSource:find("function D:BAG_UPDATE_DELAYED()", 1, true))
 local bagHandlerEnd = assert(eventSource:find("function D:GET_ITEM_INFO_RECEIVED()", bagHandlerStart, true))
 assert(loader(eventSource:sub(bagHandlerStart, bagHandlerEnd - 1), "bag-update-handler"))()
+local itemInfoHandlerStart = bagHandlerEnd
+local itemInfoHandlerEnd = assert(eventSource:find("function D:ITEM_DATA_LOAD_RESULT()", itemInfoHandlerStart, true))
+assert(loader(eventSource:sub(itemInfoHandlerStart, itemInfoHandlerEnd - 1), "item-info-handler"))()
+local itemDataHandlerStart = itemInfoHandlerEnd
+local itemDataHandlerEnd = assert(eventSource:find("function D:PLAYER_TALENT_UPDATE()", itemDataHandlerStart, true))
+assert(loader(eventSource:sub(itemDataHandlerStart, itemDataHandlerEnd - 1), "item-data-handler"))()
 
 local scheduledCalls = {}
 function D:Debug()
@@ -312,6 +324,21 @@ assert(bagRefresh.func == D.RefreshMUFActionMacros)
 assert(bagRefresh.delay == 0.5)
 assert(bagRefresh.args[1] == D)
 assert(bagRefresh.args[2] == "BAG_UPDATE_DELAYED")
+
+scheduledCalls = {}
+D.Status.WaitingForSpellInfo = false
+D:GET_ITEM_INFO_RECEIVED()
+local itemInfoRefresh = assert(scheduledCalls.Dcr_RefreshMUFActionMacros)
+assert(itemInfoRefresh.delay == 0.2)
+assert(itemInfoRefresh.args[1] == D)
+assert(itemInfoRefresh.args[2] == "GET_ITEM_INFO_RECEIVED")
+
+scheduledCalls = {}
+D:ITEM_DATA_LOAD_RESULT()
+local itemDataRefresh = assert(scheduledCalls.Dcr_RefreshMUFActionMacros)
+assert(itemDataRefresh.delay == 0.2)
+assert(itemDataRefresh.args[1] == D)
+assert(itemDataRefresh.args[2] == "ITEM_DATA_LOAD_RESULT")
 
 combatLocked = true
 D.delayed = nil
@@ -341,7 +368,8 @@ contains(D.Status.prio_macro[1].macroText, "item:269586")
 contains(frameSource, 'self.Frame:RegisterForClicks("AnyUp")')
 contains(frameSource, 'self.Frame:SetAttribute(binding:format("type"), "macro")')
 contains(frameSource, 'local physicalLeftBinding = "*%s1"')
-contains(frameSource, "local physicalLeftReserved = mouseButtons[#mouseButtons - 1] == physicalLeftBinding")
+contains(frameSource, "local physicalLeftReserved = targetGesture == physicalLeftBinding")
+contains(frameSource, "or focusGesture == physicalLeftBinding")
 contains(frameSource, "binding == physicalLeftBinding and macroData.customMacro")
 contains(frameSource, "binding == physicalLeftBinding and rezEligibleUnit")
 contains(frameSource, "macroData.cureOnlyMacroText or macroData.macroText")

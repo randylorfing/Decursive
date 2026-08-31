@@ -1150,16 +1150,22 @@ do
             -- if necessary we will update the help tooltip text
             if (D.Status.SpellsChanged ~= TooltipUpdate and not D.Status.Combat) then
                 ttHelpLines = {};
-                local MouseButtons = D.db.global.MouseButtons;
+                local bindingActions = D.GetCureBindingActions and D:GetCureBindingActions() or {}
 
-                for Spell, Prio in pairs(D.Status.CuringSpellsPrio) do
-                    ttHelpLines[Prio] = {[D:ColorText(DC.MouseButtonsReadable[MouseButtons[Prio]], D:NumToHexColor(MF_colors[Prio]))] =
-
-                    ("%s%s"):format(GetSpellName(Spell) or Spell, (D.Status.FoundSpells[Spell] and D.Status.FoundSpells[Spell][5]) and "|cFFFF0000*|r" or "")}
+                for _, action in ipairs(bindingActions) do
+                    local Prio = action.slot
+                    local gesture = action.gesture
+                    if Prio and gesture then
+                        local Spell = action.spellName
+                        ttHelpLines[Prio] = {[D:ColorText(DC.MouseButtonsReadable[gesture] or gesture, D:NumToHexColor(MF_colors[Prio]))] =
+                        ("%s%s"):format(GetSpellName(Spell) or Spell, (D.Status.FoundSpells[Spell] and D.Status.FoundSpells[Spell][5]) and "|cFFFF0000*|r" or "")}
+                    end
                 end
 
-                t_insert(ttHelpLines, {[DC.MouseButtonsReadable[MouseButtons[#MouseButtons - 1]]] = ("%s"):format(L["TARGETUNIT"])});
-                t_insert(ttHelpLines, {[DC.MouseButtonsReadable[MouseButtons[#MouseButtons    ]]] = ("%s"):format(L["FOCUSUNIT"])});
+                local targetGesture = D.GetCureTargetGesture and D:GetCureTargetGesture() or "*%s3"
+                local focusGesture = D.GetCureFocusGesture and D:GetCureFocusGesture() or "ctrl-%s3"
+                t_insert(ttHelpLines, {[DC.MouseButtonsReadable[targetGesture] or targetGesture] = ("%s"):format(L["TARGETUNIT"])})
+                t_insert(ttHelpLines, {[DC.MouseButtonsReadable[focusGesture] or focusGesture] = ("%s"):format(L["FOCUSUNIT"])})
 
                 TooltipUpdate = D.Status.SpellsChanged;
             end
@@ -1259,7 +1265,10 @@ function MicroUnitF.OnPreClick(frame, Button) -- {{{
         return;
     end
 
-    RequestedPrio = D:tGiveValueIndex(D.db.global.MouseButtons, modifier and (modifier .. ButtonsString:sub(-3)) or ButtonsString);
+    local requestedGesture = modifier and (modifier .. ButtonsString:sub(-3)) or ButtonsString
+    RequestedPrio = D.GetCureBindingPriorityForGesture
+        and D:GetCureBindingPriorityForGesture(requestedGesture)
+        or D:tGiveValueIndex(D.profile.MouseButtons, requestedGesture)
 
     -- Record the exact protected action window before SecureActionButtonTemplate
     -- executes it. UI_ERROR_MESSAGE has no spell or item identity, so modern
@@ -1282,7 +1291,9 @@ function MicroUnitF.OnPreClick(frame, Button) -- {{{
 
         -- detect wrong button click and prepare for not-in-line-of-sight casting failures in coordination with CLEU (unavailable in MN)
     elseif (frame.Object.UnitStatus == AFFLICTED and frame.Object.Debuffs[1] and not frame.Object.Debuffs[1].secretMode) then
-        local NeededPrio = D:GiveSpellPrioNum(frame.Object.Debuffs[1].Type);
+        local NeededPrio = D.GetCureBindingPriorityForType
+            and D:GetCureBindingPriorityForType(frame.Object.Debuffs[1].Type)
+            or D:GiveSpellPrioNum(frame.Object.Debuffs[1].Type)
         local Unit = frame.Object.CurrUnit; -- shortcut
 
 
@@ -1292,7 +1303,9 @@ function MicroUnitF.OnPreClick(frame, Button) -- {{{
             D:Debug("No spell registered for", RequestedPrio);
 
             -- Get the priority that would have been requested without modifiers
-            local RequestedPrioNoMod = D:tGiveValueIndex(D.db.global.MouseButtons, ButtonsString);
+            local RequestedPrioNoMod = D.GetCureBindingPriorityForGesture
+                and D:GetCureBindingPriorityForGesture(ButtonsString)
+                or D:tGiveValueIndex(D.profile.MouseButtons, ButtonsString)
 
             -- Get the spell bond to this priority
             local NoModSpell = D:tGiveValueIndex(D.Status.CuringSpellsPrio, RequestedPrioNoMod)
@@ -1309,7 +1322,10 @@ function MicroUnitF.OnPreClick(frame, Button) -- {{{
             if RequestedPrio and NeededPrio ~= RequestedPrio then
                 D:errln(L["HLP_WRONGMBUTTON"]);
                 if NeededPrio and MF_colors[NeededPrio] then
-                    D:Println(L["HLP_USEXBUTTONTOCURE"], D:ColorText(DC.MouseButtonsReadable[ D.db.global.MouseButtons[NeededPrio] ], D:NumToHexColor(MF_colors[NeededPrio])));
+                    local neededGesture = D.GetCureBindingGestureForPriority
+                        and D:GetCureBindingGestureForPriority(NeededPrio)
+                        or D.profile.MouseButtons[NeededPrio]
+                    D:Println(L["HLP_USEXBUTTONTOCURE"], D:ColorText(DC.MouseButtonsReadable[neededGesture] or tostring(neededGesture), D:NumToHexColor(MF_colors[NeededPrio])))
                     --[==[
                 else
                     D:AddDebugText("Button wrong click info bug: NeededPrio:", NeededPrio, "Unit:", Unit, "RequestedPrio:", RequestedPrio, "Button clicked:", Button, "MF_colors:", unpack(MF_colors), "Debuff Type:", frame.Object.Debuffs[1].Type);
@@ -1592,27 +1608,32 @@ do
 
         -- D:Debug("UpdateAttributes() executed");
 
-        local mouseButtons = D.db.global.MouseButtons
+        local mouseButtons = D.profile.MouseButtons
+        local secureGestures = D.GetAllSecureBindingGestures and D:GetAllSecureBindingGestures() or mouseButtons
         if self.LastAttribUpdate == 0 then
-            for _, binding in ipairs(mouseButtons) do
+            for _, binding in ipairs(secureGestures) do
                 self.Frame:SetAttribute(binding:format("type"), "macro")
             end
         end
 
-        self:SetUnstableAttribute(mouseButtons[#mouseButtons - 1]:format("macrotext"), ("/target %s"):format(Unit))
-        self:SetUnstableAttribute(mouseButtons[#mouseButtons]:format("macrotext"), ("/focus %s"):format(Unit))
+        local targetGesture = D.GetCureTargetGesture and D:GetCureTargetGesture() or mouseButtons[#mouseButtons - 1]
+        local focusGesture = D.GetCureFocusGesture and D:GetCureFocusGesture() or mouseButtons[#mouseButtons]
+        self:SetUnstableAttribute(targetGesture:format("type"), "target")
+        self:SetUnstableAttribute(targetGesture:format("unit"), Unit)
+        self:SetUnstableAttribute(focusGesture:format("type"), "focus")
+        self:SetUnstableAttribute(focusGesture:format("unit"), Unit)
 
         local physicalLeftBinding = "*%s1"
         local rezEligibleUnit = D.IsMUFRezEligibleUnitToken
             and D:IsMUFRezEligibleUnitToken(Unit) or false
-        local physicalLeftReserved = mouseButtons[#mouseButtons - 1] == physicalLeftBinding
-            or mouseButtons[#mouseButtons] == physicalLeftBinding
+        local physicalLeftReserved = targetGesture == physicalLeftBinding
+            or focusGesture == physicalLeftBinding
         local physicalLeftAssigned = false
         self.SmartRezLeftEnabled121 = false
         self.SmartRezFallbackPriority2Enabled121 = false
 
         for priority, macroData in pairs(D.Status.prio_macro) do
-            local binding = mouseButtons[priority]
+            local binding = macroData.binding
             if binding then
                 if binding == physicalLeftBinding and macroData.customMacro then
                     -- A user-authored left-click macro owns that gesture even
@@ -1656,16 +1677,6 @@ do
             if rezMacro ~= "" then
                 self:SetUnstableAttribute(physicalLeftBinding:format("macrotext"), rezMacro)
                 self.SmartRezLeftEnabled121 = true
-            end
-        end
-
-        -- Preserve the separate priority-two resurrection fallback for
-        -- compatibility with existing layouts that have only one cure action.
-        if rezEligibleUnit and not D.Status.prio_macro[2] and D.GetBattleRezMacroText then
-            local fallbackMacro = D:GetBattleRezMacroText("mouseover")
-            if fallbackMacro ~= "" then
-                self:SetUnstableAttribute(mouseButtons[2]:format("macrotext"), fallbackMacro)
-                self.SmartRezFallbackPriority2Enabled121 = true
             end
         end
 

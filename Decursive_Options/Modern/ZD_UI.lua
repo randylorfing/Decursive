@@ -1471,8 +1471,8 @@ local SEARCH_PAGE_NAMES = {
     livelist = "Live List",
     messages = "Messages & Alerts",
     macro = "Macro",
-    profiles = "Profiles & Modes",
-    sharing = "Import / Export",
+	profiles = "Decursive Profiles",
+	environmentprofiles = "Environment Profiles",
     lists = "Priority & Skip",
     integrations = "Detection",
     testmode = "Test Mode",
@@ -1497,8 +1497,8 @@ local SEARCH_GROUP_TO_PAGE = {
 
 local SEARCH_NATIVE_ENTRIES = {
     dashboard = {
-        { "User profile", "profile character AceDB setup" },
-        { "Environment", "automatic mode Open World Dungeon Follower Mythic+ Raid PvP" },
+		{ "Active setup", "dashboard summary current setup" },
+		{ "Active context", "current environment Open World Dungeon Follower Mythic+ Raid PvP" },
         { "Test MUFs", "micro unit frames diagnostics preview" },
     },
     testmode = {
@@ -1546,17 +1546,25 @@ local SEARCH_NATIVE_ENTRIES = {
         { "Unit filtering", "player only other friendly units" },
     },
     profiles = {
-        { "User profile", "AceDB profile character setup" },
+		{ "Decursive Profiles", "named AceDB saved setup management" },
+		{ "Current profile", "AceDB user named saved setup switch" },
         { "Create / Switch", "new profile profile management" },
         { "Copy Current", "clone duplicate profile" },
         { "Reset Current", "profile defaults reset" },
-        { "Environment Mode", "Automatic Open World Dungeon Follower Mythic+ Raid PvP provider profile" },
-        { "Mode selection", "environment behavior override automatic" },
-        { "PvP on-screen text alerts", "disable DISPEL Soul Link center-screen profile text" },
-    },
-    sharing = {
-        { "Generate Export", "profile share serialize copy" },
-        { "Import Into Current Profile", "profile paste import sharing" },
+		{ "Rename Current", "rename named profile" },
+		{ "Delete Selected Profile", "delete unused named profile" },
+		{ "Generate & Select", "profile export share serialize copy" },
+		{ "Import Into Current Profile", "profile paste import sharing" },
+	},
+	environmentprofiles = {
+		{ "Environment Profiles", "assignment inheritance account character specialization fallback" },
+		{ "Account default", "profile assignment inheritance fallback" },
+		{ "This character", "character profile assignment account fallback" },
+		{ "Per-specialization profiles", "specialization spec assignment enable" },
+		{ "Current specialization", "spec profile assignment character fallback" },
+		{ "Activation mode", "Automatic Open World Dungeon Follower Mythic+ Raid PvP" },
+		{ "Edit environment", "content behavior profile Open World Dungeon Follower Mythic+ Raid PvP" },
+		{ "Reset Edited Environment", "environment behavior defaults" },
     },
     lists = {
         { "Priority List", "priority players units add target move order" },
@@ -2425,13 +2433,15 @@ function ZD:BuildProfiles(parent)
 
     local function profileValues()
         local out = {}
-        for _, name in ipairs(ZD:GetProfiles()) do out[#out + 1] = { key = name, name = name } end
-        if #out == 0 then out[1] = { key = ZD:GetUserProfileName(), name = ZD:GetUserProfileName() } end
+        for _, profile in ipairs(ZD:GetProfileCatalog()) do
+            out[#out + 1] = { key = profile.id, name = profile.name }
+        end
+        if #out == 0 then out[1] = { key = "default", name = "Default" } end
         return out
     end
     p.profileCycle = cycleButton(p, "User profile", -158, profileValues,
-        function() return ZD:GetUserProfileName() end,
-        function(name) ZD:SetUserProfile(name) end)
+        function() return ZD:GetUserProfileID() end,
+        function(profileID) ZD:SetUserProfile(profileID) end)
 
     local user = section(p, "Profile Management", -202, 172)
     user.nameBox = editBox(user, 270, 36, false)
@@ -2878,23 +2888,13 @@ function ZD:BuildBindings(parent)
 
     local function assignmentSummary()
         local lines = {}
-        local byPriority = {}
-        for spellName, prio in pairs((D.Status and D.Status.CuringSpellsPrio) or {}) do
-            if type(prio) == "number" then byPriority[prio] = spellName end
-        end
-        for prio = 1, 7 do
-            local spellName = byPriority[prio]
-            if spellName then
-                local types = {}
-                for _, afflictionType in ipairs((D.Status and D.Status.ReversedCureOrder) or {}) do
-                    if D.Status.CuringSpells and D.Status.CuringSpells[afflictionType] == spellName then
-                        local locKey = DC.TypeToLocalizableTypeNames and DC.TypeToLocalizableTypeNames[afflictionType]
-                        types[#types + 1] = (D.L and locKey and D.L[locKey]) or (DC.TypeNames and DC.TypeNames[afflictionType]) or tostring(afflictionType)
-                    end
-                end
-                local click = D.db and D.db.global and D.db.global.MouseButtons and mouseReadable(D.db.global.MouseButtons[prio]) or "Unassigned"
-                lines[#lines + 1] = format("Priority %d  -  %s  -  %s  ->  %s", prio, table.concat(types, " / "), click, spellName)
-            end
+        local actions = D.GetCureBindingActions and D:GetCureBindingActions(true) or {}
+        for prio, action in ipairs(actions) do
+            if prio > 7 then break end
+            local types = type(action.coveredTypeLabels) == "table" and table.concat(action.coveredTypeLabels, " / ") or ""
+            if types == "" then types = action.category == "AREA_UTILITY" and "Area utility" or action.category or "Additional action" end
+            local click = mouseReadable(action.gesture)
+            lines[#lines + 1] = format("Slot %d  -  %s  -  %s  ->  %s", prio, types, click, action.spellName)
         end
         if #lines == 0 then lines[1] = "No active cure assignments are currently available for this class/spec." end
         return lines
@@ -2947,7 +2947,9 @@ function ZD:BuildBindings(parent)
 
     local function bindingRenderKey()
         local parts = { "expanded:" .. tostring(p.expandedSpellID or 0) }
-        appendStableValue(parts, D.db and D.db.global and D.db.global.MouseButtons or {}, 2, {})
+        appendStableValue(parts, D.profile and D.profile.MouseButtons or {}, 2, {})
+        appendStableValue(parts, D.profile and D.profile.CureBindingMode or "AUTO", 1, {})
+        appendStableValue(parts, D.profile and D.profile.CureBindingManual or {}, 2, {})
         appendStableValue(parts, D.classprofile and D.classprofile.UserSpells or {}, 4, {})
         appendStableValue(parts, assignmentSummary(), 2, {})
         return table.concat(parts, "|")
@@ -3012,8 +3014,8 @@ function ZD:BuildBindings(parent)
         mouseCard:SetPoint("TOPRIGHT", -8, y)
         mouseCard:SetHeight(390)
         makeBackdrop(mouseCard, C.card, C.border)
-        label(mouseCard, "Secure MUF Mouse Assignments", 14, C.text, "TOPLEFT", 16, -14)
-        local mouseDesc = label(mouseCard, "Choose which mouse/modifier combination activates each cure priority. Selecting an in-use combo swaps the two assignments, preventing duplicate secure bindings.", 10, C.muted, "TOPLEFT", 16, -36)
+        label(mouseCard, "Advanced Secure MUF Assignments", 14, C.text, "TOPLEFT", 16, -14)
+        local mouseDesc = label(mouseCard, "This compatibility editor preserves unusual, additional, self-only, enemy, area-utility, and custom actions. Changing a row switches this environment to Manual Cure Bindings. Use the Cure page for the clearer automatic layout and inline conflict checks.", 10, C.muted, "TOPLEFT", 16, -36)
         mouseDesc:SetWidth(470); mouseDesc:SetJustifyH("LEFT"); mouseDesc:SetWordWrap(true)
 
         local resetMouse = button(mouseCard, "Reset Bindings", 118, 28, function()
@@ -3025,7 +3027,7 @@ function ZD:BuildBindings(parent)
         end, "danger")
         resetMouse:SetPoint("TOPRIGHT", -16, -14)
 
-        local mouseButtons = (D.db and D.db.global and D.db.global.MouseButtons) or {}
+        local mouseButtons = D.profile and D.profile.MouseButtons or {}
         local mouseChoices = {}
         for i, code in ipairs(mouseButtons) do mouseChoices[#mouseChoices + 1] = { key = i, name = mouseReadable(code) } end
         local bindingRows = { 1, 2, 3, 4, 5, 6, 7, math.max(1, #mouseButtons - 1), #mouseButtons }
@@ -3096,7 +3098,7 @@ function ZD:BuildBindings(parent)
         end)
         if DC.TWELVEONE then setDisabledVisual(macroToggle, true) end
         attachTooltip(macroToggle, "Editable internal macro", DC.TWELVEONE
-            and "Unavailable on WoW 12.1: arbitrary SecureActionButton macrotext was removed. Decursive binds the underlying cure spell/item directly to the MUF unit."
+            and "Unavailable in this editor on WoW 12.1. Decursive still uses supported secure macro attributes internally for conditional cure and resurrection actions, but arbitrary user-authored macro text is kept in the advanced compatibility path."
             or "For advanced users: when adding a spell, create Decursive's internal macro text so it can be customized. The macro must continue to contain UNITID.")
         y = y - addCard:GetHeight() - 12
 

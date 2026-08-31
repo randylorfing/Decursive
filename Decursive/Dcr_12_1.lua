@@ -80,7 +80,11 @@ end
 local function safe(label, fn, ...)
     local ok, a, b, c = pcall(fn, ...)
     if not ok then
-        if D and D.errln then D:errln("12.1 compatibility:", label, a) end
+        -- The raw error may carry protected data. Record only the public static
+        -- operation label in /dcralertdiag's copyable window, never chat.
+        if D and D.AlertDiag then
+            D:AlertDiag("12.1 compatibility operation FAILED (%s)", tostring(label))
+        end
         return false
     end
     return true, a, b, c
@@ -350,6 +354,20 @@ end
 
 local function ensureEnvironmentProfiles()
     if not D.profile then return end
+    -- The v13 profile manager stores every environment as a complete AceDB
+    -- profile. Legacy nested behavior blocks remain readable only for schema
+    -- migration and must never overwrite the effective full variant.
+    if D.ProfileManager and D.ProfileManager.SCHEMA_VERSION >= 3 then
+        D.profile.Detection121Mode = "STRICT_MANAGED"
+        if not D.profile.Alert121DispelDuration2sMigrated then
+            local oldDuration = tonumber(D.profile.Alert121DispelDuration)
+            if oldDuration == nil or math.abs(oldDuration - 3) < 0.001 then
+                D.profile.Alert121DispelDuration = 2
+            end
+            D.profile.Alert121DispelDuration2sMigrated = true
+        end
+        return
+    end
     D.profile.Environment121Profiles = D.profile.Environment121Profiles or {}
     for key, defaults in pairs(ENVIRONMENT_DEFAULTS) do
         local env = D.profile.Environment121Profiles[key]
@@ -429,6 +447,9 @@ local function ensureEnvironmentProfiles()
 end
 
 local function getEnvironmentModeSetting()
+    if D.ProfileManager and D.ProfileManager.GetEnvironmentMode then
+        return D.ProfileManager:GetEnvironmentMode()
+    end
     local mode = D.profile and D.profile.Environment121Mode or "AUTO"
     if mode ~= "AUTO" and mode ~= "RAID" and mode ~= "MYTHIC_PLUS" and mode ~= "DUNGEON" and mode ~= "PVP" and mode ~= "OPEN_WORLD" then
         mode = "AUTO"
@@ -437,6 +458,9 @@ local function getEnvironmentModeSetting()
 end
 
 local function detectAutomaticEnvironment()
+    if D.ProfileManager and D.ProfileManager.DetectEnvironment then
+        return D.ProfileManager:DetectEnvironment()
+    end
     if IsInInstance then
         local inInstance, instanceType = IsInInstance()
         if inInstance == true then
@@ -465,7 +489,12 @@ end
 
 function D:Get121EnvironmentMode()
     local setting = getEnvironmentModeSetting()
-    local active = setting == "AUTO" and detectAutomaticEnvironment() or setting
+    local active
+    if self.ProfileManager and self.ProfileManager.ResolveEnvironment then
+        active = self.ProfileManager:ResolveEnvironment(self.ProfileManager:ResolveActiveProfileID())
+    else
+        active = setting == "AUTO" and detectAutomaticEnvironment() or setting
+    end
     return setting, active, ENVIRONMENT_NAMES[active] or active
 end
 
@@ -482,6 +511,9 @@ end
 
 local function getActiveEnvironmentProfile()
     ensureEnvironmentProfiles()
+    if D.ProfileManager and D.ProfileManager.SCHEMA_VERSION >= 3 then
+        return D.profile, D.ProfileManager:GetRuntimeEnvironment()
+    end
     local _, active = D:Get121EnvironmentMode()
     return D.profile and D.profile.Environment121Profiles and D.profile.Environment121Profiles[active], active
 end
@@ -517,6 +549,7 @@ end
 
 local function applyActiveEnvironmentProfile()
     if not D.profile then return end
+    if D.ProfileManager and D.ProfileManager.SCHEMA_VERSION >= 3 then return end
     local env = getActiveEnvironmentProfile()
     if not env then return end
     D.profile.OutOfRange121Enabled = env.OutOfRange121Enabled ~= false
@@ -540,6 +573,10 @@ end
 
 function D:Set121EnvironmentVisualSetting(key, value)
     if not D.profile then return end
+    if D.ProfileManager and D.ProfileManager.SCHEMA_VERSION >= 3 then
+        D.profile[key] = type(value) == "table" and copyColor(value) or value
+        return
+    end
     local env = getActiveEnvironmentProfile()
     if env then env[key] = type(value) == "table" and copyColor(value) or value end
     D.profile[key] = type(value) == "table" and copyColor(value) or value
@@ -547,6 +584,12 @@ end
 
 function D:Reset121EnvironmentProfile()
     if not D.profile then return end
+    if D.ProfileManager and D.ProfileManager.ResetEnvironment then
+        local profileID = D.ProfileManager:GetActiveProfileID()
+        local environment = D.ProfileManager:GetRuntimeEnvironment()
+        D.ProfileManager:ResetEnvironment(profileID, environment)
+        return
+    end
     ensureEnvironmentProfiles()
     local _, active = self:Get121EnvironmentMode()
     local defaults = ENVIRONMENT_DEFAULTS[active] or ENVIRONMENT_DEFAULTS.OPEN_WORLD
@@ -638,6 +681,11 @@ end
 
 function D:Set121EnvironmentMode(mode)
     if mode ~= "AUTO" and mode ~= "RAID" and mode ~= "MYTHIC_PLUS" and mode ~= "DUNGEON" and mode ~= "PVP" and mode ~= "OPEN_WORLD" then return end
+    if D.ProfileManager and D.ProfileManager.SetEnvironmentMode then
+        D.ProfileManager:SetEnvironmentMode(mode)
+        refreshEnvironmentVisuals(true)
+        return
+    end
     if not D.profile then return end
     D.profile.Environment121Mode = mode
     refreshEnvironmentVisuals(true)
@@ -661,7 +709,18 @@ T._MUFDeath121 = {
     frames = setmetatable({}, { __mode = "k" }),
     UnitIsDeadOrGhost = _G.UnitIsDeadOrGhost,
 }
-local managedCooldownDurationObjects = { [1] = nil, [2] = nil, [3] = nil }
+local managedCooldownDurationObjects = {
+    [1] = nil,
+    [2] = nil,
+    [3] = nil,
+    pending = {},
+    activeSpellIDs = {},
+    activeActionKeys = {},
+    activePublicUnits = {},
+    configuredActionsByPriority = {},
+    configuredActionBySpellID = {},
+    retryDelays = { .04, .10, .22, .45, .75, 1.40, 2.80 },
+}
 
 -- ---------------------------------------------------------------------------
 -- WoW 12.1 protected-aura sound trigger
@@ -848,7 +907,9 @@ local function resolveNativeRangeSpellID()
             seen[spellName] = true
             local data = status.FoundSpells[spellName]
             local spellID = data and data[2]
-            local prio = status.CuringSpellsPrio[spellName]
+            local prio = D.GetCureBindingPriorityForType
+                and D:GetCureBindingPriorityForType(debuffType)
+                or status.CuringSpellsPrio[spellName]
             if spellID and spellID > 0 and prio and prio >= 1 and prio <= 3 then
                 local better = tonumber(data[4]) or 0
                 if not best or better > best.better or (better == best.better and prio < best.prio) then
@@ -1618,7 +1679,9 @@ local function refreshRangeOverlays()
                 if D.IsSpellInRange and status and status.CuringSpells and status.CuringSpellsPrio then
                     local seen = {}
                     for debuffType, spellName in pairs(status.CuringSpells) do
-                        local prio = spellName and status.CuringSpellsPrio[spellName]
+                        local prio = spellName and (D.GetCureBindingPriorityForType
+                            and D:GetCureBindingPriorityForType(debuffType)
+                            or status.CuringSpellsPrio[spellName])
                         local friendlyType = debuffType == DC.MAGIC
                             or debuffType == DC.CURSE
                             or debuffType == DC.DISEASE
@@ -1808,7 +1871,6 @@ local cooldownActive = false
 local finishPriorityCooldown
 local cooldownGeneration = { [1] = 0, [2] = 0, [3] = 0 }
 local priorityCooldownActive = { [1] = false, [2] = false, [3] = false }
-local trackedDispelSpellID = nil
 local trackedPrioritySpellIDs = { [1] = nil, [2] = nil, [3] = nil }
 -- The cooldown belongs to the player's spell. Keep the MUF that initiated the
 -- successful cleanse only as an EXCLUSION marker: that square must clear
@@ -1834,16 +1896,44 @@ function D:Begin121SecureActionAttempt(MF, button, requestedPriority)
     end
 
     local configured = false
-    local priorities = self.Status and self.Status.CuringSpellsPrio
-    if type(priorities) == "table" then
-        for _, priority in pairs(priorities) do
-            if priority == requestedPriority then
-                configured = true
-                break
+    local configuredAction
+    local actions = self.Status and self.Status.CureBindingActions
+    if type(actions) == "table" then
+        local action = actions[requestedPriority]
+        configured = action and action.gesture ~= nil and action.category == "FRIENDLY_CURE" or false
+        if configured then configuredAction = action end
+    else
+        local priorities = self.Status and self.Status.CuringSpellsPrio
+        if type(priorities) == "table" then
+            for _, priority in pairs(priorities) do
+                if priority == requestedPriority then
+                    configured = true
+                    break
+                end
             end
         end
     end
     if not configured then return false end
+
+    -- Cure aliases are resolved only while the public binding model is rebuilt
+    -- outside combat. Snapshot that immutable map into this concrete click so a
+    -- profile/spec refresh cannot make an unrelated UNIT_SPELLCAST_SUCCEEDED
+    -- look like the action SecureActionButtonTemplate just executed.
+    local configuredState = managedCooldownDurationObjects.configuredActionsByPriority[requestedPriority]
+    local actionKey = configuredAction and configuredAction.actionKey
+        or configuredState and configuredState.actionKey
+    if not actionKey or type(configuredState) ~= "table" or configuredState.actionKey ~= actionKey then
+        return false
+    end
+    local aliasSpellIDs = {}
+    for aliasSpellID in pairs(configuredState.aliasSpellIDs or {}) do
+        aliasSpellIDs[aliasSpellID] = true
+    end
+
+    local publicUnit = MF.Decursive121ExpectedUnit or MF.CurrUnit
+    if not isAccessiblePublicValue(publicUnit) or type(publicUnit) ~= "string" or publicUnit == "" then
+        return false
+    end
 
     local now = GetTime and GetTime() or 0
     lastClickedMUF = MF
@@ -1854,6 +1944,10 @@ function D:Begin121SecureActionAttempt(MF, button, requestedPriority)
         priority = requestedPriority,
         button = isAccessiblePublicValue(button) and button or nil,
         startedAt = now,
+        actionKey = actionKey,
+        actionID = configuredState.actionID,
+        aliasSpellIDs = aliasSpellIDs,
+        publicUnit = publicUnit,
     }
     if self.AlertDiag then
         clickDiagGeneration = clickDiagGeneration + 1
@@ -1889,13 +1983,37 @@ local DISPEL_TYPE_NAME_BY_DT = {
     [DC.BLEED] = "Bleed",
 }
 
+-- DCR_NATIVE_DISPEL_FILTER_V1_BEGIN
+-- Decursive already narrows every native slot with the exact dispel types its
+-- current cure configuration assigns to that priority. DISPELLABLE is therefore
+-- the correct broad engine gate: unlike RAID_PLAYER_DISPELLABLE, it does not
+-- discard configured cure types before the secure includeDispelTypes matcher
+-- can evaluate them. Targeted friendly actions are selected by the binding
+-- model; area utilities remain available through the advanced action path but
+-- do not claim a targeted MUF color slot. Read the token live, as
+-- AuraUtil is owned by Blizzard and may not exist when this file is first read.
+-- A client without the token keeps alpha.2's narrower fail-safe behavior.
+local function getNativeConfiguredDispelFilterString()
+    local auraUtil = _G.AuraUtil
+    local auraFilters = auraUtil and auraUtil.AuraFilters
+    local token = auraFilters and auraFilters.Dispellable
+    if isAccessiblePublicValue(token) and type(token) == "string" and token ~= "" then
+        return "HARMFUL|" .. token
+    end
+    return "HARMFUL|RAID_PLAYER_DISPELLABLE"
+end
+-- DCR_NATIVE_DISPEL_FILTER_V1_END
+
 local function getPriorityDispelTypeFilter(priority)
     local include = {}
     local status = D.Status
     if not status or not status.CuringSpells or not status.CuringSpellsPrio then return include end
     for debuffType, spellName in pairs(status.CuringSpells) do
         local typeName = DISPEL_TYPE_NAME_BY_DT[debuffType]
-        if typeName and spellName and status.CuringSpellsPrio[spellName] == priority then
+        local bindingPriority = D.GetCureBindingPriorityForType
+            and D:GetCureBindingPriorityForType(debuffType)
+            or spellName and status.CuringSpellsPrio[spellName]
+        if typeName and spellName and bindingPriority == priority then
             include[typeName] = true
         end
     end
@@ -2061,7 +2179,7 @@ local function attachNativeVerificationCarriers(MF, Unit)
                     candidateFilters = { includeDispelTypes = getPriorityDispelTypeFilter(p) },
                 }
                 if container.AddAuraSlot then
-                    safe("Native verification AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+                    safe("Native verification AddAuraSlot", container.AddAuraSlot, container, key, getNativeConfiguredDispelFilterString(), options)
                 end
                 -- SetEnabled LAST: this arms Blizzard's aura parsing/event registration
                 -- only after SetUnit, AddAuraSlot and the slot geometry are complete.
@@ -2077,7 +2195,9 @@ end
 local function resolveCurePriorityFromSpellName(spellName)
     local status = D.Status
     if spellName and status and status.CuringSpellsPrio then
-        local priority = status.CuringSpellsPrio[spellName]
+        local priority = D.GetCureBindingPriorityForSpell
+            and D:GetCureBindingPriorityForSpell(spellName)
+            or status.CuringSpellsPrio[spellName]
         if type(priority) == "number" and priority >= 1 and priority <= 3 then return priority end
     end
     if lastClickedPriority and lastClickedMUF and (GetTime() - (lastClickedAt or 0)) <= 1.5 then
@@ -2404,7 +2524,9 @@ local function resolveConfiguredDispelSpellID()
     -- This excludes Purge/Spellsteal/Consume Magic and charm-only utilities.
     for debuffType, spellName in pairs(status.CuringSpells) do
         if FRIENDLY_DISPEL_TYPES[debuffType] and spellName
-            and status.CuringSpellsPrio and status.CuringSpellsPrio[spellName]
+            and status.CuringSpellsPrio and (D.GetCureBindingPriorityForType
+                and D:GetCureBindingPriorityForType(debuffType)
+                or status.CuringSpellsPrio[spellName])
         then
             local data = status.FoundSpells[spellName]
             local spellID = data and data[2]
@@ -2416,7 +2538,9 @@ local function resolveConfiguredDispelSpellID()
                         id = spellID,
                         types = 0,
                         better = tonumber(data[4]) or 0,
-                        prio = status.CuringSpellsPrio and status.CuringSpellsPrio[spellName] or 99,
+                        prio = D.GetCureBindingPriorityForSpell
+                            and D:GetCureBindingPriorityForSpell(spellName)
+                            or status.CuringSpellsPrio and status.CuringSpellsPrio[spellName] or 99,
                         pet = data[1] and true or false,
                     }
                     candidates[spellName] = c
@@ -2452,7 +2576,10 @@ local function resolveConfiguredDispelSpellIDByPriority(priority)
 
     local best
     for debuffType, spellName in pairs(status.CuringSpells) do
-        if FRIENDLY_DISPEL_TYPES[debuffType] and spellName and status.CuringSpellsPrio[spellName] == priority then
+        local bindingPriority = spellName and (D.GetCureBindingPriorityForType
+            and D:GetCureBindingPriorityForType(debuffType)
+            or status.CuringSpellsPrio[spellName])
+        if FRIENDLY_DISPEL_TYPES[debuffType] and spellName and bindingPriority == priority then
             local data = status.FoundSpells[spellName]
             local spellID = data and data[2]
             if spellID and spellID > 0 then
@@ -2475,7 +2602,9 @@ local function isFriendlyConfiguredDispelSpellID(spellID)
 
     for debuffType, spellName in pairs(D.Status.CuringSpells) do
         if FRIENDLY_DISPEL_TYPES[debuffType] and spellName
-            and D.Status.CuringSpellsPrio and D.Status.CuringSpellsPrio[spellName]
+            and D.Status.CuringSpellsPrio and (D.GetCureBindingPriorityForType
+                and D:GetCureBindingPriorityForType(debuffType)
+                or D.Status.CuringSpellsPrio[spellName])
         then
             local data = D.Status.FoundSpells[spellName]
             if data and data[2] == spellID then
@@ -2502,8 +2631,41 @@ local function resetTrackedDispelSpell()
     if type(D.Refresh121MUFStateSoundBaseline) == "function" then
         D:Refresh121MUFStateSoundBaseline()
     end
-    local id = resolveConfiguredDispelSpellID()
-    trackedDispelSpellID = id
+    local configuredActionsByPriority = {}
+    local configuredActionBySpellID = {}
+    local actions = D.Status and D.Status.CureBindingActions
+    local foundSpells = D.Status and D.Status.FoundSpells
+    if type(actions) == "table" and type(foundSpells) == "table" then
+        for priority, action in ipairs(actions) do
+            if priority <= 3 and type(action) == "table" and action.category == "FRIENDLY_CURE"
+                and type(action.actionKey) == "string" and action.actionKey ~= ""
+            then
+                local aliases = {}
+                if isAccessiblePublicValue(action.actionID) and type(action.actionID) == "number" and action.actionID > 0 then
+                    aliases[action.actionID] = true
+                end
+                for spellName in pairs(type(action.spellNames) == "table" and action.spellNames or {}) do
+                    local foundSpell = foundSpells[spellName]
+                    local aliasSpellID = foundSpell and foundSpell[2]
+                    if isAccessiblePublicValue(aliasSpellID) and type(aliasSpellID) == "number" and aliasSpellID > 0 then
+                        aliases[aliasSpellID] = true
+                    end
+                end
+                local state = {
+                    actionKey = action.actionKey,
+                    actionID = action.actionID,
+                    aliasSpellIDs = aliases,
+                }
+                configuredActionsByPriority[priority] = state
+                for aliasSpellID in pairs(aliases) do
+                    configuredActionBySpellID[aliasSpellID] = state
+                end
+            end
+        end
+    end
+    managedCooldownDurationObjects.configuredActionsByPriority = configuredActionsByPriority
+    managedCooldownDurationObjects.configuredActionBySpellID = configuredActionBySpellID
+
     trackedPrioritySpellIDs[1] = resolveConfiguredDispelSpellIDByPriority(1)
     trackedPrioritySpellIDs[2] = resolveConfiguredDispelSpellIDByPriority(2)
     trackedPrioritySpellIDs[3] = resolveConfiguredDispelSpellIDByPriority(3)
@@ -2546,11 +2708,21 @@ local function clearClickedCooldownVisual(MF)
     if MF.Decursive121CooldownOverlay then MF.Decursive121CooldownOverlay:Hide() end
 end
 
+-- DCR_COOLDOWN_TX_V1_BEGIN
+-- A successful secure cure first creates a bounded pending transaction. Spell
+-- cooldown state can lag UNIT_SPELLCAST_SUCCEEDED on the first query, so every
+-- scheduled retry and public cooldown/charge event is allowed to promote it.
+-- Once promoted, the transaction pins the exact successful event spell ID and
+-- action key; mutable resolver/profile caches are never consulted to finish it.
 finishPriorityCooldown = function(priority, generation)
-    if generation and generation ~= cooldownGeneration[priority] then return end
+    if generation and generation ~= cooldownGeneration[priority] then return false end
     local targetMF = activePriorityMUF[priority]
+    managedCooldownDurationObjects.pending[priority] = nil
     priorityCooldownActive[priority] = false
     managedCooldownDurationObjects[priority] = nil
+    managedCooldownDurationObjects.activeSpellIDs[priority] = nil
+    managedCooldownDurationObjects.activeActionKeys[priority] = nil
+    managedCooldownDurationObjects.activePublicUnits[priority] = nil
     activePriorityMUF[priority] = nil
 
     if targetMF then clearClickedCooldownVisual(targetMF) end
@@ -2559,44 +2731,214 @@ finishPriorityCooldown = function(priority, generation)
     refreshManagedAfflictedCooldownVisuals()
     refreshSharedPriorityCooldownGates(priority)
     D:Apply121CooldownAppearance()
+    return true
 end
 
-local function armPriorityCooldown(priority, spellID, targetMF)
+managedCooldownDurationObjects.PendingObservation = function(priority, generation, confirmedNone)
+    local pending = managedCooldownDurationObjects.pending[priority]
+    if not pending or pending.generation ~= generation then return false end
+    local now = GetTime and GetTime() or 0
+    if confirmedNone then
+        pending.confirmedNone = (pending.confirmedNone or 0) + 1
+        if now - pending.startedAt >= .55 and pending.confirmedNone >= 3 then
+            finishPriorityCooldown(priority, generation)
+            if D.AlertDiag then
+                D:AlertDiag("COOLDOWN priority=%s generation=%s state=NO_REAL_COOLDOWN",
+                    tostring(priority), tostring(generation))
+            end
+            return false
+        end
+    end
+    if now >= pending.expiresAt then
+        finishPriorityCooldown(priority, generation)
+        if D.AlertDiag then
+            D:AlertDiag("COOLDOWN priority=%s generation=%s state=EXPIRED",
+                tostring(priority), tostring(generation))
+        end
+        return false
+    end
+    return true
+end
+
+managedCooldownDurationObjects.GetPublicSpellCooldownState = function(spellID)
+    if not C_Spell or type(C_Spell.GetSpellCooldown) ~= "function" then return nil end
+    local ok, info = pcall(C_Spell.GetSpellCooldown, spellID)
+    if not ok or type(info) ~= "table" then return nil end
+    -- SpellCooldownInfo is a mixed table: start/duration fields may be secret
+    -- while isActive, isOnGCD and maxCharges are explicitly public. Never reject
+    -- the whole table with canaccesstable(); copy only those documented fields.
+    local fieldsOK, isActive, isOnGCD, maxCharges = pcall(function()
+        return info.isActive, info.isOnGCD, info.maxCharges
+    end)
+    if not fieldsOK then return nil end
+    if not isAccessiblePublicValue(isActive) or type(isActive) ~= "boolean"
+        or not isAccessiblePublicValue(isOnGCD) or type(isOnGCD) ~= "boolean"
+    then
+        return nil
+    end
+    if not isAccessiblePublicValue(maxCharges) or type(maxCharges) ~= "number" then maxCharges = nil end
+    return { maxCharges = maxCharges }, isActive, isOnGCD
+end
+
+managedCooldownDurationObjects.GetPublicChargeState = function(spellID, cooldownInfo)
+    local maxCharges = cooldownInfo and cooldownInfo.maxCharges
+    local chargeInfo
+    if C_Spell and type(C_Spell.GetSpellCharges) == "function" then
+        local ok, value = pcall(C_Spell.GetSpellCharges, spellID)
+        if ok and type(value) == "table" then
+            local fieldsOK, currentCharges, publicMaxCharges = pcall(function()
+                return value.currentCharges, value.maxCharges
+            end)
+            if fieldsOK then
+                chargeInfo = {
+                    currentCharges = currentCharges,
+                    maxCharges = publicMaxCharges,
+                }
+            end
+        end
+    end
+    if chargeInfo and isAccessiblePublicValue(chargeInfo.maxCharges)
+        and type(chargeInfo.maxCharges) == "number"
+    then
+        maxCharges = chargeInfo.maxCharges
+    end
+    if not isAccessiblePublicValue(maxCharges) or type(maxCharges) ~= "number" or maxCharges <= 1 then
+        return false
+    end
+    local currentCharges = chargeInfo and chargeInfo.currentCharges
+    if not isAccessiblePublicValue(currentCharges) or type(currentCharges) ~= "number" then
+        return true, nil
+    end
+    return true, currentCharges
+end
+
+managedCooldownDurationObjects.GetRenderDuration = function(spellID, charged)
+    if not C_Spell then return nil end
+    local getter = charged and C_Spell.GetSpellChargeDuration or C_Spell.GetSpellCooldownDuration
+    if type(getter) ~= "function" then return nil end
+    local ok, durationObject
+    if charged then
+        -- ignoreGCD is documented only for the charge-duration API in 12.0.5+.
+        ok, durationObject = pcall(getter, spellID, true)
+    else
+        ok, durationObject = pcall(getter, spellID)
+    end
+    if not ok or not durationObject then return nil end
+
+    -- A cold API read can briefly return a public zero-span object even though
+    -- isActive already reports the real cooldown. Keep the transaction pending;
+    -- secret duration values are never inspected or branched on.
+    if durationObject.GetRemainingDuration then
+        local remainingOK, remaining = pcall(durationObject.GetRemainingDuration, durationObject)
+        if remainingOK and isAccessiblePublicValue(remaining) and type(remaining) == "number"
+            and remaining <= .05
+        then
+            return nil
+        end
+    end
+    if durationObject.IsZero then
+        local zeroOK, isZero = pcall(durationObject.IsZero, durationObject)
+        if zeroOK and isAccessiblePublicValue(isZero) and isZero == true then return nil end
+    end
+    return durationObject
+end
+
+managedCooldownDurationObjects.PromotePending = function(priority, generation, durationObject)
+    local pending = managedCooldownDurationObjects.pending[priority]
+    if not modernSecureUIRunning or not pending or pending.generation ~= generation or not durationObject then
+        return false
+    end
+    managedCooldownDurationObjects.pending[priority] = nil
+    priorityCooldownActive[priority] = true
+    managedCooldownDurationObjects[priority] = durationObject
+    managedCooldownDurationObjects.activeSpellIDs[priority] = pending.spellID
+    managedCooldownDurationObjects.activeActionKeys[priority] = pending.actionKey
+    managedCooldownDurationObjects.activePublicUnits[priority] = pending.publicUnit
+    activePriorityMUF[priority] = pending.targetMF
+    cooldownActive = true
+
+    if pending.targetMF then
+        initializePriorityCooldownVisuals(pending.targetMF)
+        clearClickedCooldownVisual(pending.targetMF)
+    end
+    refreshSharedPriorityCooldownGates(priority)
+    D:Apply121CooldownAppearance()
+    if D.AlertDiag then
+        D:AlertDiag("COOLDOWN priority=%s generation=%s state=ACTIVE",
+            tostring(priority), tostring(generation))
+    end
+    return true
+end
+
+managedCooldownDurationObjects.RetryPending = function(priority, generation)
     if not modernSecureUIRunning then return false end
-    if not isAccessiblePublicValue(spellID) or type(spellID) ~= "number"
-        or not C_Spell or not C_Spell.GetSpellCooldownDuration
+    local pending = managedCooldownDurationObjects.pending[priority]
+    if not pending or pending.generation ~= generation then return false end
+    if not managedCooldownDurationObjects.PendingObservation(priority, generation, false) then return false end
+
+    local cooldownInfo, isActive, isOnGCD = managedCooldownDurationObjects.GetPublicSpellCooldownState(pending.spellID)
+    if not cooldownInfo then return true end
+    if not isActive or isOnGCD then
+        return managedCooldownDurationObjects.PendingObservation(priority, generation, true)
+    end
+
+    local charged, currentCharges = managedCooldownDurationObjects.GetPublicChargeState(pending.spellID, cooldownInfo)
+    if charged and currentCharges == nil then return true end
+    if charged and currentCharges > 0 then
+        return managedCooldownDurationObjects.PendingObservation(priority, generation, true)
+    end
+    pending.confirmedNone = 0
+    local durationObject = managedCooldownDurationObjects.GetRenderDuration(pending.spellID, charged)
+    if not durationObject then return true end
+    return managedCooldownDurationObjects.PromotePending(priority, generation, durationObject)
+end
+
+managedCooldownDurationObjects.BeginPending = function(priority, spellID, targetMF, attempt)
+    if not modernSecureUIRunning or type(attempt) ~= "table" then return false end
+    if not isAccessiblePublicValue(spellID) or type(spellID) ~= "number" or spellID <= 0
+        or not attempt.aliasSpellIDs or attempt.aliasSpellIDs[spellID] ~= true
+        or type(attempt.actionKey) ~= "string" or attempt.actionKey == ""
+        or not isAccessiblePublicValue(attempt.publicUnit) or type(attempt.publicUnit) ~= "string"
     then
         return false
     end
 
-    local durationOK, durationObject = pcall(C_Spell.GetSpellCooldownDuration, spellID, true)
-    if not durationOK or not durationObject then return false end
-
-    if durationObject.GetRemainingDuration then
-        local ok, remaining = pcall(durationObject.GetRemainingDuration, durationObject)
-        if ok and isAccessiblePublicValue(remaining) and type(remaining) == "number" and remaining <= 0.05 then
-            return false
-        end
+    if priorityCooldownActive[priority] or managedCooldownDurationObjects.pending[priority] then
+        finishPriorityCooldown(priority, cooldownGeneration[priority])
     end
-
     cooldownGeneration[priority] = cooldownGeneration[priority] + 1
     local generation = cooldownGeneration[priority]
-    priorityCooldownActive[priority] = true
-    managedCooldownDurationObjects[priority] = durationObject
-    activePriorityMUF[priority] = targetMF
-    cooldownActive = true
-
-    -- The just-cleansed square must clear immediately. Never paint the player's
-    -- cooldown back onto the MUF that initiated the successful cleanse.
+    local now = GetTime and GetTime() or 0
+    managedCooldownDurationObjects.pending[priority] = {
+        generation = generation,
+        spellID = spellID,
+        actionKey = attempt.actionKey,
+        actionID = attempt.actionID,
+        priority = priority,
+        targetMF = targetMF,
+        publicUnit = attempt.publicUnit,
+        startedAt = now,
+        expiresAt = now + 2.8,
+        confirmedNone = 0,
+    }
     if targetMF then
         initializePriorityCooldownVisuals(targetMF)
         clearClickedCooldownVisual(targetMF)
     end
+    if D.AlertDiag then
+        D:AlertDiag("COOLDOWN priority=%s generation=%s state=PENDING",
+            tostring(priority), tostring(generation))
+    end
 
-    -- Mirror the player's cooldown only to OTHER units that STILL match the
-    -- native priority-filtered AuraContainer dispel carrier.
-    refreshSharedPriorityCooldownGates(priority)
-    D:Apply121CooldownAppearance()
+    if C_Timer and C_Timer.After then
+        for _, delay in ipairs(managedCooldownDurationObjects.retryDelays) do
+            C_Timer.After(delay, function()
+                managedCooldownDurationObjects.RetryPending(priority, generation)
+            end)
+        end
+    else
+        managedCooldownDurationObjects.RetryPending(priority, generation)
+    end
     return true, generation
 end
 
@@ -2604,15 +2946,16 @@ local function refreshCooldownOverlay()
     if not modernSecureUIRunning then return end
     if D.profile and D.profile.CooldownOverlay121Enabled == false then
         cooldownActive = false
-        priorityCooldownActive[1] = false
-        priorityCooldownActive[2] = false
-        priorityCooldownActive[3] = false
-        activePriorityMUF[1] = nil
-        activePriorityMUF[2] = nil
-        activePriorityMUF[3] = nil
-        managedCooldownDurationObjects[1] = nil
-        managedCooldownDurationObjects[2] = nil
-        managedCooldownDurationObjects[3] = nil
+        for priority = 1, 3 do
+            cooldownGeneration[priority] = cooldownGeneration[priority] + 1
+            priorityCooldownActive[priority] = false
+            activePriorityMUF[priority] = nil
+            managedCooldownDurationObjects[priority] = nil
+            managedCooldownDurationObjects.pending[priority] = nil
+            managedCooldownDurationObjects.activeSpellIDs[priority] = nil
+            managedCooldownDurationObjects.activeActionKeys[priority] = nil
+            managedCooldownDurationObjects.activePublicUnits[priority] = nil
+        end
         refreshManagedAfflictedCooldownVisuals()
         refreshAllSharedPriorityCooldownGates()
         for MF in pairs(cooldownMUFs) do
@@ -2640,15 +2983,16 @@ function D:Set121CooldownOverlayEnabled(enabled)
     D.profile.CooldownOverlay121Enabled = enabled and true or false
     if not D.profile.CooldownOverlay121Enabled then
         cooldownActive = false
-        priorityCooldownActive[1] = false
-        priorityCooldownActive[2] = false
-        priorityCooldownActive[3] = false
-        activePriorityMUF[1] = nil
-        activePriorityMUF[2] = nil
-        activePriorityMUF[3] = nil
-        managedCooldownDurationObjects[1] = nil
-        managedCooldownDurationObjects[2] = nil
-        managedCooldownDurationObjects[3] = nil
+        for priority = 1, 3 do
+            cooldownGeneration[priority] = cooldownGeneration[priority] + 1
+            priorityCooldownActive[priority] = false
+            activePriorityMUF[priority] = nil
+            managedCooldownDurationObjects[priority] = nil
+            managedCooldownDurationObjects.pending[priority] = nil
+            managedCooldownDurationObjects.activeSpellIDs[priority] = nil
+            managedCooldownDurationObjects.activeActionKeys[priority] = nil
+            managedCooldownDurationObjects.activePublicUnits[priority] = nil
+        end
         refreshManagedAfflictedCooldownVisuals()
         refreshAllSharedPriorityCooldownGates()
         for MF in pairs(cooldownMUFs) do
@@ -2670,65 +3014,48 @@ function D:Refresh121CooldownOverlay()
     refreshCooldownOverlay()
 end
 
-local function getReadableRemainingDuration(durationObject)
-    if not durationObject or not durationObject.GetRemainingDuration then return nil end
-    local ok, remaining = pcall(durationObject.GetRemainingDuration, durationObject)
-    if not ok or not isAccessiblePublicValue(remaining) or remaining == nil then return nil end
-    if type(remaining) ~= "number" then return nil end
-    return remaining
-end
-
 local function reconcilePriorityCooldown(priority)
     if not modernSecureUIRunning then return end
     if not priorityCooldownActive[priority] then return end
 
-    local spellID = trackedPrioritySpellIDs[priority]
+    local generation = cooldownGeneration[priority]
+    local spellID = managedCooldownDurationObjects.activeSpellIDs[priority]
     local targetMF = activePriorityMUF[priority]
     if not spellID then
-        finishPriorityCooldown(priority, cooldownGeneration[priority])
+        finishPriorityCooldown(priority, generation)
         return
     end
 
-    if C_Spell and C_Spell.GetSpellCharges then
-        local ok, chargeInfo = pcall(C_Spell.GetSpellCharges, spellID)
-        local charges
-        if ok and isAccessiblePublicValue(chargeInfo) and type(chargeInfo) == "table" then
-            charges = chargeInfo.currentCharges
-        end
-        if isAccessiblePublicValue(charges) and type(charges) == "number" then
-            if charges > 0 then
-                finishPriorityCooldown(priority, cooldownGeneration[priority])
-                return
-            end
-        end
-    end
-
-    if not C_Spell or not C_Spell.GetSpellCooldownDuration then return end
-    local durationOK, durationObject = pcall(C_Spell.GetSpellCooldownDuration, spellID, true)
-    if not durationOK or not durationObject then
-        -- Failure/unknown is not proof that the cooldown ended. Preserve the
-        -- last safe DurationObject until a public zero span, charge, or
-        -- remaining-duration observation confirms completion.
+    local cooldownInfo, isActive, isOnGCD = managedCooldownDurationObjects.GetPublicSpellCooldownState(spellID)
+    if not cooldownInfo then return end
+    if not isActive or isOnGCD then
+        finishPriorityCooldown(priority, generation)
         return
     end
 
-    local remaining = getReadableRemainingDuration(durationObject)
-    if remaining ~= nil and remaining <= 0.05 then
-        finishPriorityCooldown(priority, cooldownGeneration[priority])
+    local charged, currentCharges = managedCooldownDurationObjects.GetPublicChargeState(spellID, cooldownInfo)
+    if charged and currentCharges == nil then return end
+    if charged and currentCharges > 0 then
+        finishPriorityCooldown(priority, generation)
         return
     end
 
+    local durationObject = managedCooldownDurationObjects.GetRenderDuration(spellID, charged)
+    if not durationObject then return end
     managedCooldownDurationObjects[priority] = durationObject
     if targetMF then clearClickedCooldownVisual(targetMF) end
     refreshSharedPriorityCooldownGates(priority)
 end
 
 local function reconcileActivePriorityCooldowns()
-    reconcilePriorityCooldown(1)
-    reconcilePriorityCooldown(2)
-    reconcilePriorityCooldown(3)
+    for priority = 1, 3 do
+        local pending = managedCooldownDurationObjects.pending[priority]
+        if pending then managedCooldownDurationObjects.RetryPending(priority, pending.generation) end
+        reconcilePriorityCooldown(priority)
+    end
     D:Apply121CooldownAppearance()
 end
+-- DCR_COOLDOWN_TX_V1_END
 
 local cooldownEvents = CreateFrame("Frame")
 cooldownEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -2849,28 +3176,21 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
 
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
         if not isAccessiblePublicValue(unit) or unit ~= "player" then return end
-        if isFriendlyConfiguredDispelSpellID(spellID) then
+        local attempt = secureActionAttempt
+        local now = GetTime and GetTime() or 0
+        if attempt and attempt.MF and attempt.priority
+            and now - (attempt.startedAt or 0) <= 1.5
+            and isAccessiblePublicValue(spellID) and type(spellID) == "number"
+            and attempt.aliasSpellIDs and attempt.aliasSpellIDs[spellID] == true
+        then
             secureActionAttempt = nil
-            trackedDispelSpellID = trackedDispelSpellID or spellID
+            local priority = attempt.priority
 
-            local priority
-            if lastClickedPriority and (GetTime() - (lastClickedAt or 0)) <= 1.5 then
-                priority = lastClickedPriority
-            elseif trackedPrioritySpellIDs[1] == spellID then priority = 1
-            elseif trackedPrioritySpellIDs[2] == spellID then priority = 2
-            elseif trackedPrioritySpellIDs[3] == spellID then priority = 3
-            else priority = 1 end
-
-            -- The cooldown object may update a fraction after the successful
-            -- cast event. Retry the SAFE DurationObject bind without reading
-            -- protected numeric/boolean cooldown state. The clicked MUF is only
-            -- remembered so it can be excluded; remaining provider-matched MUFs
-            -- receive the cooldown indication.
-            local targetMF = nil
-            if lastClickedMUF and (GetTime() - (lastClickedAt or 0)) <= 1.5 then
-                targetMF = lastClickedMUF
-            end
-            if not targetMF then return end
+            -- Associate success with the exact PreClick action and public unit
+            -- token captured before SecureActionButtonTemplate executed. The
+            -- event spell ID may be any public alias snapshotted for that action
+            -- during the last out-of-combat binding rebuild.
+            local targetMF = attempt.MF
 
             clickDiagGeneration = clickDiagGeneration + 1
             if D.AlertDiag then D:AlertDiag("CLICK outcome: SUCCESS (priority=%s)", tostring(priority)) end
@@ -2886,24 +3206,8 @@ cooldownEvents:SetScript("OnEvent", function(_, event, unit, castGUID, spellID)
             -- repeat cast against an already-cleared target commonly errors
             -- instantly ("Nothing to Dispel"), which would otherwise paint red
             -- over the green result from the click that actually worked.
-            targetMF.Decursive121SuppressFailureUntil = GetTime() + 2.0
-
-            local function arm() armPriorityCooldown(priority, spellID, targetMF) end
-            if C_Timer and C_Timer.After then
-                -- Allow Blizzard's cooldown/charge state to settle before the
-                -- first visible arm, then repeatedly reconcile. Empty-target
-                -- dispels often restore their hidden charge shortly afterward;
-                -- these delayed reconciles retire the shared cooldown promptly.
-                C_Timer.After(.08, arm)
-                C_Timer.After(.16, function() reconcilePriorityCooldown(priority); D:Apply121CooldownAppearance() end)
-                C_Timer.After(.35, function() reconcilePriorityCooldown(priority); D:Apply121CooldownAppearance() end)
-                C_Timer.After(.70, function() reconcilePriorityCooldown(priority); D:Apply121CooldownAppearance() end)
-                C_Timer.After(1.25, function() reconcilePriorityCooldown(priority); D:Apply121CooldownAppearance() end)
-                C_Timer.After(1.75, function() reconcilePriorityCooldown(priority); D:Apply121CooldownAppearance() end)
-                C_Timer.After(2.50, function() reconcilePriorityCooldown(priority); D:Apply121CooldownAppearance() end)
-            else
-                arm()
-            end
+            targetMF.Decursive121SuppressFailureUntil = now + 2.0
+            managedCooldownDurationObjects.BeginPending(priority, spellID, targetMF, attempt)
         end
         return
     end
@@ -2918,10 +3222,9 @@ end)
 -- active spell set.  This keeps the overlay correct after spec/talent swaps,
 -- learning/unlearning spells, and Decursive curing-order changes.
 local function scheduleDispelResolverRefresh()
-    trackedDispelSpellID = nil
-    trackedPrioritySpellIDs[1] = nil
-    trackedPrioritySpellIDs[2] = nil
-    trackedPrioritySpellIDs[3] = nil
+    -- Keep the last complete public action/alias snapshot until its out-of-
+    -- combat replacement is ready. Active and pending cooldown transactions
+    -- pin their own spell IDs and never depend on this mutable resolver cache.
     if C_Timer and C_Timer.After then
         C_Timer.After(.10, function()
             resetTrackedDispelSpell()
@@ -2979,10 +3282,16 @@ cooldownEvents:SetScript("OnEvent", function(frame, event, ...)
         or event == "CHALLENGE_MODE_COMPLETED"
         or event == "CHALLENGE_MODE_RESET"
     then
-        if C_Timer and C_Timer.After then
-            C_Timer.After(.10, function() refreshEnvironmentVisuals(true) end)
-        else
+        local function refreshEnvironmentVariant()
+            if D.ProfileManager then
+                D.ProfileManager:RefreshIdentity("environment-event:" .. event)
+            end
             refreshEnvironmentVisuals(true)
+        end
+        if C_Timer and C_Timer.After then
+            C_Timer.After(.10, refreshEnvironmentVariant)
+        else
+            refreshEnvironmentVariant()
         end
         return originalCooldownEventScript(frame, event, ...)
     end
@@ -3146,7 +3455,7 @@ function D:Get121CompatibilityStatusText()
         "|cFFFFFFFFDecursive WoW 12.1 Compatibility Status|r",
         "",
         "Patch version: |cFF55DDDD@project-version@|r",
-        "AceDB profile: |cFFFFFFFF" .. tostring((D.db and D.db.GetCurrentProfile and D.db:GetCurrentProfile()) or "Unknown") .. "|r",
+        "Decursive profile: |cFFFFFFFF" .. tostring((D.ProfileManager and D.ProfileManager:GetProfileName(D.ProfileManager:GetActiveProfileID())) or "Unknown") .. "|r",
         "Environment setting: |cFFFFFFFF" .. getEnvironmentModeSetting() .. "|r",
         "Active environment: |cFFFFFFFF" .. select(3, D:Get121EnvironmentMode()) .. "|r",
         "PvP restricted-aura mode active: |cFFFFFFFF" .. (D:Is121PvPRestrictedMode() and "Yes" or "No") .. "|r",
@@ -3159,7 +3468,7 @@ function D:Get121CompatibilityStatusText()
         "Detected friendly dispel: |cFF55FF55" .. spellText .. "|r",
         "Priority #1 inner/timer: |cFF55FF55" .. p1Text .. "|r",
         "Priority #2 border: |cFF55FF55" .. p2Text .. "|r",
-        "Managed aura filter: |cFF55FF55HARMFUL|RAID_PLAYER_DISPELLABLE|r",
+        "Managed aura filter: |cFF55FF55" .. getNativeConfiguredDispelFilterString() .. "|r",
         "Native Decursive carriers: |cFFFFFFFF" .. tostring(managed) .. "|r",
         "Native verification carriers: |cFFFFFFFF" .. tostring(nativeVerificationCarriers) .. "|r",
         "Native owner binding: |cFFFFFFFF" .. (bindingStatus.ok and "PASS" or "FAIL")
@@ -3340,10 +3649,20 @@ local function setPriorityGateActive(MF, priority, active, durationObject)
 
     -- The clicked/cleansed MUF is ALWAYS excluded. This is based only on our
     -- known secure click target; no protected aura value is inspected.
+    local clickedPublicUnit = managedCooldownDurationObjects.activePublicUnits[priority]
+    local currentPublicUnit = MF.Decursive121ExpectedUnit or MF.CurrUnit
     local excludeClicked = activePriorityMUF[priority] == MF
+        and isAccessiblePublicValue(currentPublicUnit)
+        and currentPublicUnit == clickedPublicUnit
+    local activeActionKey = managedCooldownDurationObjects.activeActionKeys[priority]
+    local configuredAction = managedCooldownDurationObjects.configuredActionsByPriority[priority]
+    local actionStillConfigured = type(activeActionKey) == "string"
+        and type(configuredAction) == "table"
+        and configuredAction.actionKey == activeActionKey
     local shouldActivate = active
         and (not D.profile or D.profile.CooldownOverlay121Enabled ~= false)
         and (not D.Is121SharedPriorityCooldownEnabled or D:Is121SharedPriorityCooldownEnabled())
+        and actionStillConfigured
         and not excludeClicked
     MF.Decursive121PriorityGateAppliedActive = MF.Decursive121PriorityGateAppliedActive or {}
     if MF.Decursive121PriorityGateAppliedActive[priority] ~= shouldActivate then
@@ -3454,7 +3773,11 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
         end
     end
 
-    if MF.Decursive121PriorityGateContainers[priority] then return end
+    if MF.Decursive121PriorityGateContainers[priority] then
+        local active = priorityCooldownActive[priority] and managedCooldownDurationObjects[priority] ~= nil
+        setPriorityGateActive(MF, priority, active, managedCooldownDurationObjects[priority])
+        return true
+    end
     -- Blizzard owns the AuraSlot filter continuously; Decursive only changes
     -- the alpha of an addon-owned holder when the public cleanse spell
     -- enters/leaves cooldown.
@@ -3487,17 +3810,29 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
         candidateFilters = { includeDispelTypes = getPriorityDispelTypeFilter(priority) },
     }
     local gateFrame
+    local slotConfigured = false
     if container.AddAuraSlot then
-        local success, returned = safe("Priority AuraContainer AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+        local success, returned = safe("Priority AuraContainer AddAuraSlot", container.AddAuraSlot, container, key, getNativeConfiguredDispelFilterString(), options)
         if success then
             gateFrame = returned
+            slotConfigured = true
         end
     else
-        D:errln("12.1 managed priority gate: AuraContainer has no AddAuraSlot method")
+        if D.AlertDiag then D:AlertDiag("12.1 managed priority gate AddAuraSlot unavailable") end
+    end
+    if not slotConfigured then
+        setNativeContainerEnabled(container, false)
+        holder:SetAlpha(0)
+        MF.Decursive121PriorityGateContainers[priority] = nil
+        MF.Decursive121PriorityGateHolders[priority] = nil
+        return false
     end
     MF.Decursive121PriorityGateFrames[priority] = gateFrame
     if container.SetEnabled then safe("Priority AuraContainer SetEnabled", container.SetEnabled, container, true) end
     if container.Show then safe("Priority AuraContainer initial Show", container.Show, container) end
+    local active = priorityCooldownActive[priority] and managedCooldownDurationObjects[priority] ~= nil
+    setPriorityGateActive(MF, priority, active, managedCooldownDurationObjects[priority])
+    return true
 end
 
 refreshPriorityGateFilters = function(MF)
@@ -3546,7 +3881,7 @@ refreshNativeCarrierFilters = function(MF)
                 candidateFilters = { includeDispelTypes = include },
             }
             local ok = safe("Native add detection priority after reconfigure", detector.AddAuraSlot, detector, key,
-                "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+                getNativeConfiguredDispelFilterString(), options)
             if ok then keys[p] = key end
         end
     end
@@ -3615,14 +3950,14 @@ local function attachNativeManagedAura(MF, Unit)
                     initializeFrame = function(btn) initializeProviderPriorityButton(btn, p, MF, getMUFInnerAnchor(MF)) end,
                     candidateFilters = { includeDispelTypes = include },
                 }
-                local slotOK = safe("Native detector AddAuraSlot", container.AddAuraSlot, container, key, "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+                local slotOK = safe("Native detector AddAuraSlot", container.AddAuraSlot, container, key, getNativeConfiguredDispelFilterString(), options)
                 if slotOK then
                     MF.Decursive121NativeDetectionKeys[p] = key
                 end
             end
         end
     else
-        D:errln("12.1 native managed aura: AuraContainer has no AddAuraSlot method")
+        if D.AlertDiag then D:AlertDiag("12.1 native managed aura AddAuraSlot unavailable") end
     end
     -- SetEnabled LAST, after the unit, slot declarations and slot anchors exist.
     if container.SetEnabled then safe("Native detector SetEnabled", container.SetEnabled, container, true) end
@@ -4868,6 +5203,10 @@ function D:ShutdownModernSecureUI()
         cooldownGeneration[priority] = cooldownGeneration[priority] + 1
         priorityCooldownActive[priority] = false
         managedCooldownDurationObjects[priority] = nil
+        managedCooldownDurationObjects.pending[priority] = nil
+        managedCooldownDurationObjects.activeSpellIDs[priority] = nil
+        managedCooldownDurationObjects.activeActionKeys[priority] = nil
+        managedCooldownDurationObjects.activePublicUnits[priority] = nil
         activePriorityMUF[priority] = nil
     end
     if self.Hide121AlertWarning then self:Hide121AlertWarning() end

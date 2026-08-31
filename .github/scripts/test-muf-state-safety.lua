@@ -1,4 +1,7 @@
 local function readFile(path)
+    if type(readfile) == "function" then
+        return assert(readfile(path))
+    end
     local file = assert(io.open(path, "rb"))
     local text = assert(file:read("*a"))
     file:close()

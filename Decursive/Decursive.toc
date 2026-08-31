@@ -22,9 +22,10 @@
 
 ## Version: @project-version@
 ## X-Zhaohu-Build: Zhaohu-Decursive
-## X-Zhaohu-12.1-Patch: v12.1.3-package-hygiene
+## X-Zhaohu-12.1-Patch: v12.1.4-alpha.3-native-detection
 ## X-Zhaohu-Backend: v13-hardened-compat-runtime
 ## X-Zhaohu-UI: v13-command-center-primary
+## X-Zhaohu-Profiles: full-environment-variants-v4
 ## Author: John Wellesz, Randy Lorfing
 
 ## X-License: GNU GPL V3
@@ -59,12 +60,14 @@ Dcr_DIAG.xml
 Localization\load.xml
 
 DCR_init.lua
+Dcr_ProfileManager.lua
 Dcr_LDB.lua
 Dcr_utils.lua
 Dcr_ProfileIO.lua
 
 
 Dcr_opt.lua
+Dcr_CureBindings.lua
 Dcr_Events.lua
 
 Dcr_Raid.lua
