@@ -1,4 +1,18 @@
 local inCombat = false
+
+local function readSource(path)
+	if type(_G.readfile) == "function" then
+		return assert(_G.readfile(path))
+	end
+	local file, openError = io.open(path, "rb")
+	assert(file, openError)
+	local source, readError = file:read("*a")
+	local closed, closeError = file:close()
+	assert(source, readError)
+	assert(closed, closeError)
+	return source
+end
+
 UnitFullName = function() return "Tester", "Test Realm" end
 UnitName = function() return "Tester" end
 UnitClass = function() return "Priest", "PRIEST" end
@@ -160,7 +174,7 @@ assert(not futureManager:ResetProfile("default"))
 assert(futureManager:HandleCombatEnded() == false)
 assert(snapshot(future) == before, "future schema changed")
 
-local initSource = assert(readfile("Decursive/DCR_init.lua"))
+local initSource = readSource("Decursive/DCR_init.lua")
 assert(initSource:find('profileManager:IsFutureStorage'))
 assert(initSource:find('futureStorage, futureVersion = profileManager:IsFutureStorage', 1, true))
 assert(not initSource:find('profileManager and profileManager:IsFutureStorage', 1, true))
