@@ -386,7 +386,8 @@ end
 
 function ZD:SetEnvironmentSetting(mode)
     if not self:CanConfigure() then return false end
-    local ok, code = D.ProfileManager and D.ProfileManager:SetEnvironmentMode(mode)
+    if not D.ProfileManager then self:SetStatus(managerFailure("unavailable"), true) return false end
+    local ok, code = D.ProfileManager:SetEnvironmentMode(mode)
     if not ok then self:SetStatus(managerFailure(code), true) return false end
     self:SetStatus("Environment mode set to " .. (mode == "AUTO" and "Automatic" or (ENV_NAMES[mode] or mode)) .. ".")
     return true
@@ -398,7 +399,8 @@ end
 
 function ZD:SetEditEnvironment(key)
     if not self:CanConfigure() then return false end
-    local ok, code = D.ProfileManager and D.ProfileManager:SetEditEnvironment(key, true)
+    if not D.ProfileManager then self:SetStatus(managerFailure("unavailable"), true) return false end
+    local ok, code = D.ProfileManager:SetEditEnvironment(key, true)
     if not ok then self:SetStatus(managerFailure(code), true) return false end
     self:SetStatus("Editing and previewing the complete " .. (ENV_NAMES[key] or key) .. " variant.")
     if self.RefreshUI then self:RefreshUI() end
@@ -439,9 +441,10 @@ end
 
 function ZD:ResetEnvironmentProfile(key)
     if not self:CanConfigure() then return false end
+    if not D.ProfileManager then self:SetStatus(managerFailure("unavailable"), true) return false end
     key = key or self:GetEditEnvironment()
-    local profileID = D.ProfileManager and D.ProfileManager:ResolveActiveProfileID()
-    local ok, code = D.ProfileManager and D.ProfileManager:ResetEnvironment(profileID, key)
+    local profileID = D.ProfileManager:ResolveActiveProfileID()
+    local ok, code = D.ProfileManager:ResetEnvironment(profileID, key)
     if not ok then self:SetStatus(managerFailure(code), true) return false end
     self:SetStatus((ENV_NAMES[key] or key) .. " behavior reset.")
     return true
@@ -449,9 +452,10 @@ end
 
 function ZD:CopyEnvironmentProfile(sourceEnvironment)
     if not self:CanConfigure() then return false end
-    local profileID = D.ProfileManager and D.ProfileManager:ResolveActiveProfileID()
+    if not D.ProfileManager then self:SetStatus(managerFailure("unavailable"), true) return false end
+    local profileID = D.ProfileManager:ResolveActiveProfileID()
     local targetEnvironment = self:GetEditEnvironment()
-    local ok, code = D.ProfileManager and D.ProfileManager:CopyEnvironment(
+    local ok, code = D.ProfileManager:CopyEnvironment(
         profileID, targetEnvironment, profileID, sourceEnvironment)
     if not ok then self:SetStatus(managerFailure(code), true) return false end
     self:SetStatus((ENV_NAMES[targetEnvironment] or targetEnvironment)
