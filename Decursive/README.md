@@ -6,9 +6,11 @@
 
 Zhaohu's Decursive is a fast, focused dispel assistant for **World of Warcraft Retail 12.1**. It preserves Decursive's compact Micro Unit Frames (MUFs) and click-to-cure workflow while adding a modern settings interface, Blizzard-native protected-aura support, combat alerts, sound notifications, cooldown feedback, and automatic environment profiles.
 
-Profile schema 4 stores five complete environment variants per logical profile.
+Profile schema 6 stores five complete Environment Profiles per Decursive Profile.
 See [Full Environment Profiles](FULL_ENVIRONMENT_PROFILES.md) for resolution,
-migration, editing, storage growth, and scope details.
+reset behavior, editing, storage growth, and scope details. The first build using
+schema 6 intentionally removes all older Decursive settings and requires full
+reconfiguration; this is a clean break rather than a legacy migration.
 
 [Download on CurseForge](https://www.curseforge.com/wow/addons/decursive-12-1-compatibility-patch) | [Source on GitHub](https://github.com/randylorfing/Decursive) | [Report an issue](https://github.com/randylorfing/Decursive/issues)
 
@@ -58,7 +60,9 @@ Install Zhaohu's Decursive normally through the CurseForge App. The package incl
 
 6. Start World of Warcraft and enable both addons on the character-selection screen.
 
-Keep the folder names exactly as shown. The main folder must remain `Decursive` so existing `DecursiveDB` settings continue to work.
+Keep the folder names exactly as shown. The main folder must remain `Decursive`
+so WoW loads the expected SavedVariables table. The first schema-6 build
+intentionally resets that table's older Decursive settings as described above.
 
 Do not install GitHub's automatic **Source code** archive. Install a packaged release so version tokens, dependencies, localization, and release directives are processed correctly.
 
@@ -67,11 +71,11 @@ Replacing the addon folders does not normally delete your settings. WoW stores S
 ## Quick start
 
 1. Type `/dcr` to open the settings window.
-2. Open **MUFs**, enable **Show MUFs**, and turn off **Lock position**.
+2. Open **MUF Setup > Units & Visibility**, enable **Show MUFs**, and turn off **Lock position**.
 3. Drag the MUF handle to the desired location, then lock it again.
 4. Set separate party and raid sizes, spacing, growth direction, and grid layout if desired.
-5. Open **Cure** and verify the spells and mouse buttons assigned to each cure priority.
-6. Open **Alerts**, choose a sound, and press **Test Sound**.
+5. Open **Cures & Mouse Bindings** and verify the spells and mouse buttons assigned to each cure priority.
+6. Open **Alerts & Feedback**, choose a sound, and press **Test Sound**.
 7. Enter a party, dungeon, or raid and click an afflicted player's MUF with the assigned mouse button.
 
 The same settings window opens with `/decursive`, `/dcr`, `/zd`, or `/zdecursive`.
@@ -85,7 +89,7 @@ Each MUF represents a player or pet. When Blizzard reports an affliction your ch
 | Visual | Meaning |
 | --- | --- |
 | Colored inner square | The primary dispellable affliction and its configured cure priority |
-| Red, blue, orange, or another fill color | A cure-priority color; orange is normally priority 3. Colors are customizable under **All Settings > Curing** |
+| Red, blue, orange, or another fill color | A cure-priority color; orange is normally priority 3. Colors are customizable under **MUF Setup > Layout & Appearance > Colors** |
 | Colored or pulsing border | A second simultaneous dispellable affliction, when enabled |
 | Dark shading or countdown number | The relevant cure is on cooldown for another player who still needs it |
 | Yellow tint or dimming | The unit is outside the usable range of the configured cure |
@@ -95,7 +99,7 @@ Cooldown, range, and affliction visuals stay inside the MUF's inner square so th
 
 ### Optional status light
 
-The small status light above a MUF is disabled by default. Enable it under **MUFs** or **All Settings > Range & Visibility** if you want additional feedback.
+The small status light above a MUF is disabled by default. Enable it under **MUF Setup > Units & Visibility** if you want additional feedback.
 
 | Light | Meaning |
 | --- | --- |
@@ -119,15 +123,32 @@ Zhaohu's Decursive detects the targeted friendly cures available to your current
 - Middle click targets the MUF unit and Ctrl+Middle focuses it.
 - Button5 is reserved when a verified PvP bandage action is available. Mending Bandage is detected from the player's spellbook. Outside combat, Decursive also scans only the backpack, equipped bag slots, and reagent bag for usable items whose public use-spell ID matches Mending Bandage; bank, reagent-bank, and account-bank storage is never considered. The usable candidate with the highest public item level wins. If item level is unavailable, Decursive makes no quality claim and deterministically falls back to the lowest public item ID, then earliest bag and slot. A registered resolver may nominate a future bandage family, but its result must still be a public on-use item physically present and usable in carried bags. No item ID is guessed or built into the scan.
 
-Switch the current environment variant to **Manual Cure Bindings** on the **Cure** page to assign supported gestures explicitly. Duplicate available gestures are rejected and unavailable specialization actions remain visible without receiving an unsafe binding. Use **All Settings > Spells & Bindings** for unusual area, self-only, enemy, and custom actions. Poison Cleansing Totem is labeled as area utility and never receives targeted cure or resurrection clauses.
+Switch the current Environment Profile to **Manual Cure Bindings** under **Cures & Mouse Bindings > Automatic / Manual** to assign supported gestures explicitly. Duplicate available gestures are rejected and unavailable specialization actions remain visible without receiving an unsafe binding. Use **Custom / Additional Actions** there for unusual area, self-only, enemy, and custom actions. Poison Cleansing Totem is labeled as area utility and never receives targeted cure or resurrection clauses.
 
 Secure binding and frame-structure changes cannot be applied during combat. The active secure layout, including the last verified carried-bandage item ID, remains unchanged until Zhaohu's Decursive applies the queued specialization, talent, environment, bag, item-data, or settings refresh after combat. An out-of-combat scan that finds no valid bandage clears Button5.
+
+### Affliction priority colors
+
+Open **MUF Setup > Layout & Appearance > Colors** to edit the color of every
+assigned targeted cure that can own a native MUF affliction slot. The editor is
+generated from the selected Environment Profile's current cure actions: changing
+a Manual Cure Binding gesture changes the row's gesture label but does not move
+the cure priority's color. Duplicate affliction types handled by one spell share
+one row. Unassigned cures and target, focus, resurrection, bandage, area,
+self-only, enemy, or custom utility actions do not paint an affliction color and
+are not shown.
+
+The highest visible cure priority fills the MUF center. A simultaneous lower
+priority appears as the managed border. **Restore Default Colors** restores the
+established red, blue, and orange defaults. Color storage, environment copy,
+reset, and import/export use the existing complete `MF_colors` profile table;
+there is no separate global color profile.
 
 ## Alerts and sounds
 
 ### Dispel text alert
 
-The on-screen **DISPEL** notification can be enabled per environment. Its size, position, duration, and related chat notice are configurable under **Alerts**. Test and live notifications use the same display pipeline.
+The on-screen **DISPEL** notification can be enabled per environment. Its size, position, duration, and related chat notice are configurable under **Alerts & Feedback**. Test and live notifications use the same display pipeline.
 
 PvP environment profiles disable addon-owned text and chat alerts by default. MUF detection and secure curing remain active.
 
@@ -161,10 +182,10 @@ Cooldown visibility, opacity, numbers, and secondary-affliction borders can be c
 
 ## Profiles and environments
 
-Named profiles and environment profiles are separate systems:
+Decursive Profiles are containers for Environment Profiles:
 
-- **Named profiles** store your overall Decursive configuration and support create, copy, reset, delete, import, and export.
-- **Environment profiles** select one of five complete variants of the logical profile. Every profile-scoped option can differ between Open World, Party/Dungeon, Mythic+, Raid, and PvP.
+- A **Decursive Profile** owns all five Environment Profiles and supports create, copy, reset, delete, import, and export as one container.
+- Each **Environment Profile** is a complete settings workspace. MUFs, visibility, pets, layout, colors, cures, click bindings, cure order, custom actions, alerts, range, line of sight, cooldowns, and advanced profile settings can differ between Open World, Party/Dungeon, Mythic+, Raid, and PvP.
 
 Named profiles use stable internal identities, so renaming a profile does not
 move or recreate its AceDB settings table. Runtime selection resolves in the
@@ -181,21 +202,20 @@ Automatic mode recognizes:
 - Raid
 - PvP
 
-You can keep automatic detection or lock Decursive to one environment from **Profiles**.
+You can keep automatic detection or lock Decursive to one environment from **Profiles**. Selecting **Edit** opens that Environment Profile's Overview; the persistent context bar distinguishes the Environment Profile being edited from the one currently active in gameplay.
 
 ## Settings guide
 
 | Page | What it controls |
 | --- | --- |
 | **Overview** | Current profile, environment, runtime status, and shortcuts |
-| **MUFs** | Visibility, movement, order, size, spacing, grid, border, tooltip, and status light |
-| **Cure** | Cure assignments and essential click behavior |
-| **Alerts** | Text, sound, channel, debounce, range, and cooldown feedback |
-| **Profiles** | Named profiles, automatic environments, import, and export |
-| **All Settings** | Complete legacy-compatible settings catalog, lists, custom spells, filters, colors, and database tools |
-| **Advanced** | Diagnostics, runtime health, compatibility status, and support tools |
+| **Profiles** | Decursive Profile container administration and the five Environment Profiles |
+| **MUF Setup** | Environment-specific units, visibility, pets, layout, appearance, range, line of sight, and cooldowns |
+| **Cures & Mouse Bindings** | Environment-specific automatic/manual bindings, cure order, lists, custom actions, and macro behavior |
+| **Alerts & Feedback** | Environment-specific text, sound, chat, range, and result feedback |
+| **Advanced & Diagnostics** | Environment-specific profile settings plus progressive diagnostics, compatibility, database, and support tools |
 
-Use the search box at the top of the settings window to find controls across the modern pages and complete settings catalog.
+Use the search box at the top of the settings window to find controls in their canonical Environment Profile workspace.
 
 ## Priority and Skip Lists
 
@@ -207,7 +227,7 @@ that addon's visible order when it is installed.
 
 The **Skip List** excludes selected players from normal curing consideration.
 
-Both lists can be managed from **All Settings > Priority & Skip** or with slash commands.
+Both lists can be managed from **Cures & Mouse Bindings > Priority & Skip Lists** or with slash commands.
 
 ## Optional battle resurrection
 

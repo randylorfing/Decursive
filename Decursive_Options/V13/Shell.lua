@@ -85,8 +85,10 @@ local function updateContext(frame)
         and V13.SettingsSchema.environmentNames[context.editEnvironment] or context.editEnvironment or "Open World"
     local activeName = V13.SettingsSchema and V13.SettingsSchema.environmentNames
         and V13.SettingsSchema.environmentNames[context.activeEnvironment] or context.activeEnvironment or "Open World"
-    local prefix = context.previewing and "EDIT PREVIEW" or "RUNTIME"
-    frame.header.context.text:SetText(profile .. "  /  " .. prefix .. ": " .. editName .. "  /  Active: " .. activeName .. "  >")
+    frame.header.profileContext.text:SetText("Decursive Profile: " .. profile)
+    frame.header.editContext.text:SetText("Editing Environment Profile: " .. editName
+        .. (context.previewing and " (settings preview)" or ""))
+    frame.header.activeContext.text:SetText("Active Environment Profile: " .. activeName)
 end
 
 local function buildTestRail(parent)
@@ -190,6 +192,7 @@ function UI:SelectSearchResult(result)
     local frame = self.frame
     if not result and frame then result = (frame.searchMatches or {})[frame.searchSelection or 1] end
     if type(result) ~= "table" or type(result.page) ~= "string" then return false end
+    ZD.pendingOptionTab = result.tab
     UI:OpenLegacyRoute(result.page)
     self:SetStatus((localized("SEARCH", "Search") .. ": " .. (result.label or result.pageName or result.page)), "success")
     if frame and frame.search then frame.search:ClearFocus() end
@@ -236,10 +239,24 @@ function UI:CreateShell()
 
     header.close = Controls:Button(header, "X", 30, function() frame:Hide() end)
     header.close:SetPoint("RIGHT", -16, 0)
-    header.context = Controls:Pill(header, "Default  /  Open World", Theme.color.cyan)
-    header.context:SetWidth(360)
-    header.context:SetPoint("RIGHT", header.close, "LEFT", -10, 0)
-    header.contextSelector = CreateFrame("Button", nil, header.context)
+    local contextBar = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+    contextBar:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
+    contextBar:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", 0, 0)
+    contextBar:SetHeight(Theme.size.contextBarHeight)
+    Controls:SetBackdrop(contextBar, Theme.color.canvas, Theme.color.border)
+    frame.contextBar = contextBar
+
+    header.profileContext = Controls:Pill(contextBar, "Decursive Profile: Default", Theme.color.cyan)
+    header.profileContext:SetWidth(210)
+    header.profileContext:SetPoint("LEFT", 12, 0)
+    header.editContext = Controls:Pill(contextBar, "Editing Environment Profile: Open World", Theme.color.warning)
+    header.editContext:SetWidth(330)
+    header.editContext:SetPoint("LEFT", header.profileContext, "RIGHT", 8, 0)
+    header.activeContext = Controls:Pill(contextBar, "Active Environment Profile: Open World", Theme.color.success)
+    header.activeContext:SetWidth(280)
+    header.activeContext:SetPoint("LEFT", header.editContext, "RIGHT", 8, 0)
+
+    header.contextSelector = CreateFrame("Button", nil, header.editContext)
     header.contextSelector:SetAllPoints()
     header.contextSelector:RegisterForClicks("LeftButtonUp")
     header.contextSelector:SetScript("OnClick", function()
@@ -258,21 +275,21 @@ function UI:CreateShell()
         end
     end)
     header.contextSelector:SetScript("OnEnter", function()
-        header.context:SetBackdropBorderColor(unpack(Theme.color.text))
+        header.editContext:SetBackdropBorderColor(unpack(Theme.color.text))
         if GameTooltip then
             GameTooltip:SetOwner(header.contextSelector, "ANCHOR_BOTTOM")
-            GameTooltip:SetText("Click to edit the next complete environment variant")
+            GameTooltip:SetText("Click to edit the next complete Environment Profile")
             GameTooltip:Show()
         end
     end)
     header.contextSelector:SetScript("OnLeave", function()
-        header.context:SetBackdropBorderColor(unpack(Theme.color.cyan))
+        header.editContext:SetBackdropBorderColor(unpack(Theme.color.warning))
         if GameTooltip then GameTooltip:Hide() end
     end)
 
     local search = CreateFrame("EditBox", nil, header, "BackdropTemplate")
     search:SetSize(286, 30)
-    search:SetPoint("RIGHT", header.context, "LEFT", -10, 0)
+    search:SetPoint("RIGHT", header.close, "LEFT", -12, 0)
     search:SetAutoFocus(false)
     search:SetFontObject(GameFontHighlight)
     search:SetTextInsets(12, 12, 0, 0)
@@ -348,32 +365,40 @@ function UI:CreateShell()
     frame.searchMatches = {}
     frame.searchSelection = 1
 
-    local commandBar = CreateFrame("Frame", nil, frame, "BackdropTemplate")
-    commandBar:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
-    commandBar:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", 0, 0)
-    commandBar:SetHeight(Theme.size.commandBarHeight)
-    Controls:SetBackdrop(commandBar, Theme.color.canvas, Theme.color.border)
-    frame.commandBar = commandBar
+    local navigation = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+    navigation:SetPoint("TOPLEFT", contextBar, "BOTTOMLEFT", 0, 0)
+    navigation:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, Theme.size.footerHeight)
+    navigation:SetWidth(Theme.size.navigationWidth)
+    Controls:SetBackdrop(navigation, Theme.color.surface, Theme.color.border)
+    frame.navigation = navigation
     frame.navButtons = {}
 
     local previous
+    local nextTop = -18
     for _, item in ipairs(Theme.navigation) do
         -- WoW's Lua runtime reuses generic-for control variables. Store the
         -- destination on the button instead of closing over `item`, otherwise
         -- every command-bar button can resolve to the final navigation entry.
         local navigationKey = item.key
-        local button = CreateFrame("Button", nil, commandBar)
+        if item.groupLabel then
+            local group = Controls:Label(navigation, item.groupLabel, 9, Theme.color.cyan)
+            group:SetPoint("TOPLEFT", 16, nextTop)
+            nextTop = nextTop - 30
+        end
+        local button = CreateFrame("Button", nil, navigation, "BackdropTemplate")
         button:RegisterForClicks("LeftButtonUp")
-        button:SetHeight(Theme.size.commandBarHeight - 2)
-        button:SetWidth(navigationKey == "PROFILES" and 108 or 96)
-        if previous then button:SetPoint("LEFT", previous, "RIGHT", 2, 0)
-        else button:SetPoint("LEFT", 12, 0) end
-        button.label = Controls:Label(button, item.label:upper(), 10, Theme.color.muted)
-        button.label:SetPoint("CENTER")
+        button:SetHeight(42)
+        button:SetPoint("TOPLEFT", 10, nextTop)
+        button:SetPoint("TOPRIGHT", -10, nextTop)
+        Controls:SetBackdrop(button, Theme.color.surface, Theme.color.border)
+        button.label = Controls:Label(button, item.label, 10, Theme.color.muted)
+        button.label:SetPoint("LEFT", 12, 0)
+        button.label:SetPoint("RIGHT", -12, 0)
+        button.label:SetJustifyH("LEFT")
         button.line = button:CreateTexture(nil, "ARTWORK")
-        button.line:SetHeight(2)
-        button.line:SetPoint("BOTTOMLEFT", 8, 0)
-        button.line:SetPoint("BOTTOMRIGHT", -8, 0)
+        button.line:SetWidth(3)
+        button.line:SetPoint("TOPLEFT", 0, -4)
+        button.line:SetPoint("BOTTOMLEFT", 0, 4)
         button.line:SetColorTexture(unpack(Theme.color.cyan))
         button.line:Hide()
         button.navigationKey = navigationKey
@@ -386,10 +411,11 @@ function UI:CreateShell()
         end)
         frame.navButtons[navigationKey] = button
         previous = button
+        nextTop = nextTop - 48
     end
 
     local body = CreateFrame("Frame", nil, frame)
-    body:SetPoint("TOPLEFT", commandBar, "BOTTOMLEFT", 0, 0)
+    body:SetPoint("TOPLEFT", navigation, "TOPRIGHT", 0, 0)
     body:SetPoint("BOTTOMRIGHT", 0, Theme.size.footerHeight)
     frame.body = body
     frame.testRail = buildTestRail(body)
@@ -515,11 +541,25 @@ function UI:Toggle()
 end
 
 local LEGACY_ROUTES = {
-    general = true, sounds = true, frames = true, curing = true, bleeds = true,
-    cooldowns = true, range = true, bindings = true, filtering = true,
-    livelist = true, messages = true, macro = true, profiles = true,
-    sharing = true, lists = true, integrations = true, testmode = true,
-    compat121 = true, diagnostics = true, dispeldb = true, about = true,
+    general = { page = "ADVANCED", route = "general" },
+    sounds = { page = "ALERTS", route = "sounds" },
+    frames = { page = "MUFS", route = "frames" },
+    curing = { page = "CURE", route = "curing" },
+    bleeds = { page = "ADVANCED", route = "bleeds" },
+    cooldowns = { page = "MUFS", route = "cooldowns" },
+    range = { page = "MUFS", route = "units" },
+    bindings = { page = "CURE", route = "bindings" },
+    filtering = { page = "ADVANCED", route = "filtering" },
+    livelist = { page = "MUFS", route = "livelist" },
+    messages = { page = "ALERTS", route = "messages" },
+    macro = { page = "CURE", route = "macro" },
+    lists = { page = "CURE", route = "lists" },
+    integrations = { page = "ADVANCED", route = "integrations" },
+    testmode = { page = "ADVANCED", route = "testmode" },
+    compat121 = { page = "ADVANCED", route = "compat121" },
+    diagnostics = { page = "ADVANCED", route = "diagnostics" },
+    dispeldb = { page = "ADVANCED", route = "dispeldb" },
+    about = { page = "ADVANCED", route = "about" },
 }
 
 function UI:OpenProfilesRoute(route)
@@ -544,13 +584,13 @@ function UI:OpenLegacyRoute(route)
 	if route == "environmentprofiles" or route == "environment_profiles" then
 		return self:OpenProfilesRoute("ENVIRONMENT")
 	end
-    if not LEGACY_ROUTES[route] then route = "general" end
-    self.pendingLegacyRoute = route
-    local frame = self:CreateShell()
-    frame:Show()
-    self:ShowPage("SETTINGS")
-    local page = self.pages.SETTINGS
-    if page and page.SetRoute then page:SetRoute(route) end
+	local destination = LEGACY_ROUTES[route] or LEGACY_ROUTES.general
+	self.pendingTaskRoute = destination.route
+	local frame = self:CreateShell()
+	frame:Show()
+	self:ShowPage(destination.page)
+	local page = self.pages[destination.page]
+	if page and page.SetRoute then page:SetRoute(destination.route) end
 end
 
 -- The v13 shell is the only user-facing settings window. The mature settings
@@ -570,16 +610,12 @@ function UI:InstallAsPrimary()
     end
     ZD.MarkOptionsDirty = function()
         ZD.searchIndex = nil
-        local settings = UI.pages.SETTINGS
-        if settings then
-            local activeRoutePage = settings.routePages
-                and settings.routePages[settings.currentRoute or "general"]
-            for _, page in pairs(settings.routePages or {}) do
-                if page and page ~= activeRoutePage and page.optionCanvas then
-                    page._needsRebuild = true
-                end
-            end
-        end
+		for _, workspace in pairs(UI.pages) do
+			local activeRoutePage = workspace.routePages and workspace.routePages[workspace.currentRoute]
+			for _, page in pairs(workspace.routePages or {}) do
+				if page and page ~= activeRoutePage and page.optionCanvas then page._needsRebuild = true end
+			end
+		end
         ZD:RefreshUI()
     end
     ZD.RefreshUI = function()

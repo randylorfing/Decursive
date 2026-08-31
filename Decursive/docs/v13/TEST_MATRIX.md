@@ -18,12 +18,30 @@ as proof that the live combat path works.
 - No raw packager tokens remain in the ZIP.
 - Every runtime Lua file parses, not only the v13 directory.
 - Every XML file parses.
+- Schema-2, schema-4, schema-5, nil, and malformed fixtures lose every legacy
+  sentinel across all 13 classes and every AceDB scope/namespace, then produce
+  exactly one Default logical profile and five fresh Environment Profiles.
+- Schema-6 reload/restart preserves divergent variant tables and values; a
+  schema-7 fixture remains byte-for-byte unchanged and starts no AceDB/runtime
+  registration path.
+- Serialized ProfileIO tests cover valid complete and single-environment round
+  trips plus oversized, deeply nested, truncated, malformed, multi-root,
+  future-format, cyclic, shared-reference, and excessive-node inputs. Every
+  rejected import leaves all five target variants byte-for-byte unchanged, and
+  an apply failure restores the previous Environment Profile exactly.
 - The v13 shell installs itself as primary and `/dcrv13` is absent.
-- Every legacy settings route resolves inside the v13 All Settings workspace.
+- Every legacy settings route resolves to its canonical Environment Profile workspace.
 - v13 protected-aura calls occur only in the approved platform adapter.
 - v13 contains no legacy aura enumeration path.
 
 ## In-game matrix
+
+Before gameplay checks, use copied test SavedVariables only. Verify one startup
+from alpha.3/schema 4 or interim schema 5 shows the one-time reset notice,
+contains no old profile or assignment, and produces five fresh Default
+environments. Reconfigure, fully restart twice, and verify the new schema-6
+values remain divergent and stable. Never use a tester's only SavedVariables
+copy for this destructive upgrade check.
 
 Test at minimum with one representative capable specialization for every dispel
 type and confirm a non-dispelling specialization fails closed.
@@ -58,10 +76,29 @@ type and confirm a non-dispelling specialization fails closed.
 - With DandersFrames installed, DandersFrames order follows its visible
   party/raid layout after an `OnFramesSorted` callback. Without DandersFrames,
   selecting that mode falls back to Group / roster without an error.
-- In **All Settings > Visuals & Alerts > Micro Unit Frames**, all four tabs
+- In **MUF Setup > Layout & Appearance**, all four tabs
   reveal their controls immediately. Resize the window to its shortest allowed
   height and confirm one scrollbar remains usable and never overlaps either
   Party/Raid size `+` button.
+- In **MUF Setup > Layout & Appearance > Colors**, **Affliction Priority
+  Colors** lists every assigned targeted cure that owns one of Retail's three
+  native color slots. Duplicate dispel types handled by one spell produce one
+  row. Target, focus, resurrection, bandage, area, self-only, enemy, custom,
+  unassigned, and cure actions beyond the detector's native capacity do not
+  produce misleading color rows.
+- Reassign each visible cure to an arbitrary supported modified gesture and
+  switch between Automatic and Manual modes. The row label follows the
+  gesture, while its priority color remains unchanged. Removing/unassigning a
+  cure hides its row without destroying the retained `MF_colors` value.
+- Give Open World and Raid different priority colors, copy one Environment
+  Profile into another, reset one to defaults, and round-trip single and full
+  profile exports. Confirm isolation, copy/reset behavior, and the established
+  red/blue/orange defaults.
+- Search for **Affliction Priority Colors** and **Restore Default Colors**;
+  each result opens the canonical MUF Colors tab. Open the color picker before
+  combat, enter combat, and confirm a late callback cannot mutate the profile
+  or any protected region. During an active addon restriction, a saved color
+  queues only the protected visual refresh and reports that deferral.
 - Native debuff-identity tooltips work in dungeon/raid combat through
   Blizzard's managed AuraButton, without addon-side inspection of protected
   tooltip or aura values.

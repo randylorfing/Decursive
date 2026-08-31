@@ -114,7 +114,7 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 	page:RegisterRoute("DECURSIVE",
 		localized("PROFILE_DECURSIVE_PAGE", "Decursive Profiles"), 1330)
 	page:RegisterRoute("ENVIRONMENT",
-		localized("PROFILE_ENVIRONMENT_PAGE", "Environment Profiles"), 900)
+		localized("PROFILE_ENVIRONMENT_PAGE", "Environment Profiles"), 1040)
 
 	page.eyebrow = Controls:Label(page, "PROFILES", 9, Theme.color.cyan)
 	page.eyebrow:SetPoint("TOPLEFT", 0, -2)
@@ -278,8 +278,8 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 	deleteProfile:SetPoint("BOTTOMLEFT", 16, 16)
 
 	local export = Controls:Card(decursive,
-		localized("PROFILE_EXPORT_CARD", "Export complete logical profile"),
-		localized("PROFILE_EXPORT_CARD_DESC", "Generate one portable string containing all five full environment variants."))
+		localized("PROFILE_EXPORT_CARD", "Export complete Decursive Profile"),
+		localized("PROFILE_EXPORT_CARD_DESC", "Generate one portable string containing all five complete Environment Profiles."))
 	export:SetPoint("TOPLEFT", deletion, "BOTTOMLEFT", 0, -12)
 	export:SetPoint("TOPRIGHT", deletion, "BOTTOMRIGHT", 0, -12)
 	export:SetHeight(275)
@@ -296,8 +296,8 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 	generate:SetPoint("BOTTOMLEFT", 16, 16)
 
 	local import = Controls:Card(decursive,
-		localized("PROFILE_IMPORT_CARD", "Import complete logical profile"),
-		localized("PROFILE_IMPORT_CARD_DESC", "Import transactionally replaces all five variants of the active logical profile. Global, locale and class-scoped data are not overwritten."))
+		localized("PROFILE_IMPORT_CARD", "Import complete Decursive Profile"),
+		localized("PROFILE_IMPORT_CARD_DESC", "Import transactionally replaces all five Environment Profiles, including class and specialization cure settings. Account assignments, locale, diagnostics, and caches are not overwritten."))
 	import:SetPoint("TOPLEFT", export, "BOTTOMLEFT", 0, -12)
 	import:SetPoint("TOPRIGHT", export, "BOTTOMRIGHT", 0, -12)
 	import:SetHeight(320)
@@ -331,7 +331,7 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 		localized("PROFILE_ENVIRONMENT_PAGE", "Environment Profiles"), 16, Theme.color.text)
 	environmentHeading:SetPoint("TOPLEFT", 0, 0)
 	local environmentDescription = Controls:Label(environment,
-		localized("PROFILE_ENVIRONMENT_PAGE_DESC", "Assignments choose the logical profile. Environment activation chooses its runtime variant. Editing previews one complete variant across every settings page."),
+		localized("PROFILE_ENVIRONMENT_PAGE_DESC", "A Decursive Profile contains five complete Environment Profiles. Select one below and choose Edit to open all of its settings."),
 		10, Theme.color.muted)
 	environmentDescription:SetPoint("TOPLEFT", environmentHeading, "BOTTOMLEFT", 0, -5)
 	environmentDescription:SetPoint("RIGHT", -8, 0)
@@ -339,12 +339,12 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 
 	local assignments = Controls:Card(environment,
 		localized("PROFILE_RUNTIME_ASSIGNMENTS", "Runtime assignments"),
-		localized("PROFILE_RUNTIME_ASSIGNMENTS_DESC", "Choose account, character, and specialization fallbacks without replacing saved profiles."))
+		localized("PROFILE_RUNTIME_ASSIGNMENTS_DESC", "Choose account-wide, character, and specialization selection metadata. Gameplay settings remain inside the five Environment Profiles."))
 	assignments:SetPoint("TOPLEFT", 0, -52)
 	assignments:SetPoint("TOPRIGHT", -8, -52)
 	assignments:SetHeight(285)
 	Controls:Cycle(assignments,
-		localized("PROFILE_ACCOUNT_DEFAULT", "Account default"),
+		localized("PROFILE_ACCOUNT_DEFAULT", "Account-wide default Decursive Profile"),
 		function() return assignmentValues() end,
 		function()
 			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
@@ -397,11 +397,11 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 		end)
 
 	local behavior = Controls:Card(environment,
-		localized("PROFILE_AUTOMATIC_BEHAVIOR", "Full environment variants"),
+		localized("PROFILE_AUTOMATIC_BEHAVIOR", "Five complete Environment Profiles"),
 		localized("PROFILE_AUTOMATIC_BEHAVIOR_DESC", "Every setting is independent in Open World, Party/Dungeon, Mythic+, Raid and PvP. Automatic precedence is PvP > Raid > Mythic+ > Party/Dungeon > Open World."))
 	behavior:SetPoint("TOPLEFT", assignments, "BOTTOMLEFT", 0, -12)
 	behavior:SetPoint("TOPRIGHT", assignments, "BOTTOMRIGHT", 0, -12)
-	behavior:SetHeight(330)
+	behavior:SetHeight(430)
 	Controls:Cycle(behavior,
 		localized("PROFILE_ACTIVATION_MODE", "Activation mode"),
 		function() return environmentValues end,
@@ -417,17 +417,46 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 			local _, name = ZD:GetActiveEnvironment()
 			return name or "Open World"
 		end, function() return Theme.color.success end)
-	Controls:Cycle(behavior,
-		localized("PROFILE_EDIT_ENVIRONMENT", "Edit and preview complete variant"),
-		function() return editEnvironmentValues end,
-		function() return ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD" end,
-		function(value)
-			local applied = ZD.SetEditEnvironment and ZD:SetEditEnvironment(value) or false
-			if applied then
-				UI:SetStatus("Editing " .. (V13.SettingsSchema.environmentNames[value] or value) .. ".", "success")
-			end
-			return applied
+	local selectedEnvironment = ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD"
+	local configurationRow = CreateFrame("Frame", nil, behavior)
+	configurationRow:SetPoint("TOPLEFT", 16, behavior.nextY)
+	configurationRow:SetPoint("RIGHT", -16, 0)
+	configurationRow:SetHeight(62)
+	behavior.nextY = behavior.nextY - 70
+	configurationRow.label = Controls:Label(configurationRow, "Environment Profiles", 10, Theme.color.muted)
+	configurationRow.label:SetPoint("TOPLEFT", 0, 0)
+	configurationRow.buttons = {}
+	local previousEnvironmentButton
+	for _, entry in ipairs(editEnvironmentValues) do
+		local environmentKey = entry.key
+		local environmentLabel = entry.label
+		local button = Controls:Button(configurationRow, entry.label, 88, function()
+			selectedEnvironment = environmentKey
+			behavior:Refresh()
+			UI:SetStatus("Selected Environment Profile: " .. environmentLabel .. ".", "success")
 		end)
+		button.environmentKey = environmentKey
+		button:SetPoint("TOP", 0, -26)
+		if previousEnvironmentButton then button:SetPoint("LEFT", previousEnvironmentButton, "RIGHT", 6, 0)
+		else button:SetPoint("LEFT", 0, 0) end
+		configurationRow.buttons[environmentKey] = button
+		previousEnvironmentButton = button
+	end
+	behavior:AddRefresher(function()
+		for environmentKey, button in pairs(configurationRow.buttons) do
+			setRouteButtonActive(button, environmentKey == selectedEnvironment)
+		end
+	end)
+
+	local editSelected = Controls:Button(behavior, "Edit Selected Environment Profile", 240, function()
+		if ZD.SetEditEnvironment and ZD:SetEditEnvironment(selectedEnvironment) then
+			UI:SetStatus("Editing Environment Profile: "
+				.. (V13.SettingsSchema.environmentNames[selectedEnvironment] or selectedEnvironment) .. ".", "success")
+			UI:ShowPage("OVERVIEW")
+		end
+	end, "primary")
+	editSelected:SetPoint("TOPLEFT", 16, behavior.nextY)
+	behavior.nextY = behavior.nextY - 42
 
 	local copySource = "OPEN_WORLD"
 	Controls:Cycle(behavior,
@@ -437,20 +466,23 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 		function(value) copySource = value return true end)
 
 	local copyEnvironment = Controls:ConfirmButton(behavior,
-		localized("PROFILE_COPY_ENVIRONMENT", "Copy Into Edited Variant"), 205, function()
-			if ZD.CopyEnvironmentProfile and ZD:CopyEnvironmentProfile(copySource) then
-				UI:SetStatus("Copied the complete " .. (V13.SettingsSchema.environmentNames[copySource] or copySource)
-					.. " variant into the edited variant.", "success")
+		localized("PROFILE_COPY_ENVIRONMENT", "Copy Into Selected"), 180, function()
+			local selected = ZD.SetEditEnvironment and ZD:SetEditEnvironment(selectedEnvironment)
+			if selected and ZD.CopyEnvironmentProfile and ZD:CopyEnvironmentProfile(copySource) then
+				UI:SetStatus("Copied Environment Profile " .. (V13.SettingsSchema.environmentNames[copySource] or copySource)
+					.. " into " .. (V13.SettingsSchema.environmentNames[selectedEnvironment] or selectedEnvironment) .. ".", "success")
 				page:Refresh()
 			end
 		end)
 	copyEnvironment:SetPoint("BOTTOMLEFT", 16, 16)
 
 	local resetEnvironment = Controls:ConfirmButton(behavior,
-		localized("PROFILE_RESET_ENVIRONMENT", "Reset Edited to Preset"), 190, function()
-			local key = ZD.GetEditEnvironment and ZD:GetEditEnvironment() or "OPEN_WORLD"
-			if ZD.ResetEnvironmentProfile and ZD:ResetEnvironmentProfile(key) then
-				UI:SetStatus((V13.SettingsSchema.environmentNames[key] or key) .. " reset.", "warning")
+		localized("PROFILE_RESET_ENVIRONMENT", "Reset Selected to Defaults"), 220, function()
+			local selected = ZD.SetEditEnvironment and ZD:SetEditEnvironment(selectedEnvironment)
+			if selected and ZD.ResetEnvironmentProfile and ZD:ResetEnvironmentProfile(selectedEnvironment) then
+				UI:SetStatus("Environment Profile "
+					.. (V13.SettingsSchema.environmentNames[selectedEnvironment] or selectedEnvironment)
+					.. " reset to defaults.", "warning")
 				page:Refresh()
 			end
 		end)

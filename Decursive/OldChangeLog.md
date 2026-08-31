@@ -2,7 +2,7 @@ Decursive prior versions change logs
 ====================================
 
 This historical changelog is retained for project provenance. For current fork
-release notes, see [Zhaohu's Decursive v12.1.3](RELEASE_NOTES_v12.1.3.md). For
+release notes, see [Zhaohu's Decursive v12.1.4-alpha.4](RELEASE_NOTES_v12.1.4-alpha.4.md). For
 current support, use [GitHub Issues](https://github.com/randylorfing/Decursive/issues).
 
 ***

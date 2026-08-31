@@ -8,6 +8,7 @@
 ## LoadOnDemand: 1
 ## RequiredDeps: Decursive
 ## Category: Combat
+## X-Zhaohu-Profile-Schema: 6
 
 # Load-on-demand companion. RequiredDeps + Decursive_ prefix nests under Decursive
 # in the AddOns list. SavedVariables stay on the main Decursive.toc only.

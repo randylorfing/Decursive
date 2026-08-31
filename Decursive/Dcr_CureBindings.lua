@@ -77,6 +77,8 @@ local MANUAL_GESTURES = {
 local TARGET_GESTURE = "*%s3"
 local FOCUS_GESTURE = "ctrl-%s3"
 local PVP_BANDAGE_GESTURE = "*%s5"
+local RETAIL_NATIVE_COLOR_PRIORITY_LIMIT = 3
+local LEGACY_COLOR_PRIORITY_LIMIT = 7
 
 local SUPPORTED_GESTURES = {}
 for _, gesture in ipairs(STOCK_GESTURES) do SUPPORTED_GESTURES[gesture] = true end
@@ -592,6 +594,98 @@ function D:GetCureBindingGestureForPriority(priority)
 	return action and action.gesture or nil
 end
 
+-- Affliction colors belong to the ordered targeted-cure action, not to the
+-- gesture that happens to invoke it. This preserves the established
+-- MF_colors[priority] storage contract while allowing Manual Cure Bindings to
+-- move an action to any supported mouse/modifier gesture without moving its
+-- color. Retail's Blizzard-managed detector currently owns three native
+-- priority slots; legacy clients retain the original seven-color capacity.
+function D:GetAfflictionPriorityColorLimit()
+	return DC.TWELVEONE and RETAIL_NATIVE_COLOR_PRIORITY_LIMIT or LEGACY_COLOR_PRIORITY_LIMIT
+end
+
+function D:GetAfflictionPriorityColorAssignments()
+	local model = self:GetCureBindingModel()
+	local assignments = {}
+	local limit = self:GetAfflictionPriorityColorLimit()
+	for _, action in ipairs(model and model.actions or {}) do
+		if action.category == "FRIENDLY_CURE" and action.assigned == true
+			and type(action.slot) == "number" and action.slot >= 1 and action.slot <= limit
+		then
+			assignments[#assignments + 1] = {
+				actionKey = action.actionKey,
+				priority = action.slot,
+				gesture = action.gesture,
+				spellName = action.spellName,
+				coveredTypeLabels = copyArray(action.coveredTypeLabels),
+			}
+		end
+	end
+	return assignments
+end
+
+function D:GetAfflictionPriorityColor(priority)
+	priority = safeInteger(priority)
+	local limit = self:GetAfflictionPriorityColorLimit()
+	if not priority or priority < 1 or priority > limit then return nil end
+	local colors = self.profile and self.profile.MF_colors
+	local color = type(colors) == "table" and colors[priority]
+	if type(color) == "table" then return color end
+	local defaults = self.defaults and self.defaults.profile and self.defaults.profile.MF_colors
+	return type(defaults) == "table" and defaults[priority] or nil
+end
+
+local function applyAfflictionPriorityColorChange(addon, reason)
+	if addon.MicroUnitF and addon.MicroUnitF.RegisterMUFcolors then
+		addon.MicroUnitF:RegisterMUFcolors()
+	end
+	local applied = true
+	if addon.Apply121AfflictionPriorityColors then
+		applied = addon:Apply121AfflictionPriorityColors(reason) ~= false
+	end
+	if addon.MicroUnitF and addon.MicroUnitF.Delayed_Force_FullUpdate then
+		addon.MicroUnitF:Delayed_Force_FullUpdate()
+	end
+	if addon.NotifyConfigurationChanged then addon:NotifyConfigurationChanged() end
+	return applied
+end
+
+function D:SetAfflictionPriorityColor(priority, red, green, blue)
+	if isCombatLocked() then return false, "combat" end
+	priority = safeInteger(priority)
+	local limit = self:GetAfflictionPriorityColorLimit()
+	if not priority or priority < 1 or priority > limit then return false, "invalid-priority" end
+	for _, component in ipairs({ red, green, blue }) do
+		if not isPublicValue(component) or type(component) ~= "number"
+			or component ~= component or component < 0 or component > 1
+		then
+			return false, "invalid-color"
+		end
+	end
+	if not self.profile then return false, "profile-unavailable" end
+	self.profile.MF_colors = type(self.profile.MF_colors) == "table" and self.profile.MF_colors or {}
+	local current = self:GetAfflictionPriorityColor(priority)
+	self.profile.MF_colors[priority] = { red, green, blue, type(current) == "table" and current[4] or 1 }
+	local applied = applyAfflictionPriorityColorChange(self, "priority-color-" .. tostring(priority))
+	if not applied then return true, "deferred" end
+	return true
+end
+
+function D:ResetAfflictionPriorityColors()
+	if isCombatLocked() then return false, "combat" end
+	if not self.profile then return false, "profile-unavailable" end
+	local defaults = self.defaults and self.defaults.profile and self.defaults.profile.MF_colors
+	if type(defaults) ~= "table" then return false, "defaults-unavailable" end
+	self.profile.MF_colors = type(self.profile.MF_colors) == "table" and self.profile.MF_colors or {}
+	for priority = 1, LEGACY_COLOR_PRIORITY_LIMIT do
+		local color = defaults[priority]
+		if type(color) == "table" then self.profile.MF_colors[priority] = copyArray(color) end
+	end
+	local applied = applyAfflictionPriorityColorChange(self, "priority-colors-reset")
+	if not applied then return true, "deferred" end
+	return true
+end
+
 function D:GetCureTargetGesture()
 	return TARGET_GESTURE
 end
@@ -731,3 +825,5 @@ CureBindings.STOCK_GESTURES = STOCK_GESTURES
 CureBindings.TARGET_GESTURE = TARGET_GESTURE
 CureBindings.FOCUS_GESTURE = FOCUS_GESTURE
 CureBindings.PVP_BANDAGE_GESTURE = PVP_BANDAGE_GESTURE
+CureBindings.RETAIL_NATIVE_COLOR_PRIORITY_LIMIT = RETAIL_NATIVE_COLOR_PRIORITY_LIMIT
+CureBindings.LEGACY_COLOR_PRIORITY_LIMIT = LEGACY_COLOR_PRIORITY_LIMIT

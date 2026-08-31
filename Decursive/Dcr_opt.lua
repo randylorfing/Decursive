@@ -163,64 +163,44 @@ function D:GetDefaultsSettings()
             -- false alerts on a specialization that cannot remove that effect.
             SoundProtectedAuraSpellIDsBySpec = {},
 
-            -- the key to bind the macro to
-            MacroBind = false,
-            NoStartMessages = false,
-
-            MouseButtons = {
-                "*%s1", -- left mouse button
-                "*%s2", -- right mouse button
-                "ctrl-%s1",
-                "ctrl-%s2",
-                "shift-%s1",
-                "shift-%s2",
-                "shift-%s3",
-                "alt-%s1",
-                "alt-%s2",
-                "alt-%s3",
-                "*%s4",
-                "ctrl-%s4",
-                "shift-%s4",
-                "alt-%s4",
-                "*%s5",
-                "ctrl-%s5",
-                "shift-%s5",
-                "alt-%s5",
-                "*%s3",       -- the last two entries are always target and focus
-                "ctrl-%s3",
-            },
-            BleedAutoDetection = true,
-            t_BleedEffectsIDCheck = {
-                [396007] = true, -- Vicious Peck
-                [396093] = true, -- Savage Leap
-                [193092] = true, -- Bloodletting Sweep
-                [375937] = true, -- Rending Strike
-                [376997] = true, -- Savage Peck
-                [381683] = true, -- Swift Stab
-                [388911] = true, -- Severing Slash
-                [371005] = true, -- arcane but dispellable with cauterizing flame
-                [384134] = true, -- Pierce
-                [394628] = true, -- Peck
-                [372860] = true, -- Searing Wounds
-                [393444] = true, -- Gushing Wound
-                [413131] = true, -- Whirling Dagger
-                [413136] = true, -- Whirling Dagger
-            },
-            -- The time between each MUF update
-            DebuffsFrameRefreshRate = 0.10,
-
-            -- The number of MUFs updated every DebuffsFrameRefreshRate
-            DebuffsFramePerUPdate = 10,
-
-            MFScanEverybodyTimer = 1,
-            MFScanEverybodyReport = false,
-
             delayedDebuffOccurences = 0,
             delayedUnDebuffOccurences = 0,
 
         },
 
         profile = {
+            -- Every logical profile owns five complete environment profiles.
+            -- Class and specialization-specific cure configuration lives inside
+            -- the active environment profile so changing environment switches
+            -- cure order and custom actions together with the visual settings.
+            ClassSettings = {},
+
+            -- These settings were account-wide before profile schema v5. They
+            -- are now part of each complete environment profile. The manager
+            -- stores independent values in all five schema-6 variants.
+            NoStartMessages = false,
+            BleedAutoDetection = true,
+            t_BleedEffectsIDCheck = {
+                [396007] = true,
+                [396093] = true,
+                [193092] = true,
+                [375937] = true,
+                [376997] = true,
+                [381683] = true,
+                [388911] = true,
+                [371005] = true,
+                [384134] = true,
+                [394628] = true,
+                [372860] = true,
+                [393444] = true,
+                [413131] = true,
+                [413136] = true,
+            },
+            DebuffsFrameRefreshRate = 0.10,
+            DebuffsFramePerUPdate = 10,
+            MFScanEverybodyTimer = 1,
+            MFScanEverybodyReport = false,
+
             -- Binding policy is profile-scoped in schema v4 so every complete
             -- environment variant can use independent click priorities and a
             -- different optional Decursive macro key.
@@ -653,25 +633,25 @@ local OptionsPostSetActions = { -- {{{
             D.MicroUnitF:SetScale(D.profile.DebuffsFrameElemScale);
         end
     end,
-    ["DebuffsFrameRefreshRate"] = function(v) D:ScheduleRepeatedCall("Dcr_MUFupdate", D.DebuffsFrame_Update, D.db.global.DebuffsFrameRefreshRate, D); D:Debug("MUFs refresh rate changed:", D.db.global.DebuffsFrameRefreshRate, v); end,
+    ["DebuffsFrameRefreshRate"] = function(v) D:ScheduleRepeatedCall("Dcr_MUFupdate", D.DebuffsFrame_Update, D.profile.DebuffsFrameRefreshRate, D); D:Debug("MUFs refresh rate changed:", D.profile.DebuffsFrameRefreshRate, v); end,
     ["MFScanEverybodyTimer"] = function(v)
         if DC.TWELVEONE then
             D:CancelDelayedCall("Dcr_ScanEverybody")
         elseif v > 0 then
-            D:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.db.global.MFScanEverybodyTimer, D);
-            D:Debug("MUFs scan every body timer changed:", D.db.global.MFScanEverybodyTimer, v);
+            D:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.profile.MFScanEverybodyTimer, D)
+            D:Debug("MUFs scan every body timer changed:", D.profile.MFScanEverybodyTimer, v)
         else
             D:CancelDelayedCall("Dcr_ScanEverybody")
-            D:Debug("MUFs scan every body canceled", D.db.global.MFScanEverybodyTimer, v);
+            D:Debug("MUFs scan every body canceled", D.profile.MFScanEverybodyTimer, v)
         end
     end,
     ["MFScanEverybodyReport"] = function(v)
         if DC.TWELVEONE then
             D:CancelDelayedCall("Dcr_ScanEverybody")
-        elseif D.db.global.MFScanEverybodyTimer > 0 then
-            D:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.db.global.MFScanEverybodyTimer, D);
+        elseif D.profile.MFScanEverybodyTimer > 0 then
+            D:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.profile.MFScanEverybodyTimer, D)
         end
-        D:Debug("MUFs scan every body reporting changed:", D.db.global.MFScanEverybodyReport, v);
+        D:Debug("MUFs scan every body reporting changed:", D.profile.MFScanEverybodyReport, v)
     end,
 
     ["Scan_Pets"] = function(v) D:GroupChanged ("opt CURE_PETS"); end,
@@ -689,9 +669,9 @@ function D.GetHandler (info, value) -- {{{
 
         source = D.db.profile;
 
-    elseif D.db.class[info[#info]]~=nil then
+    elseif D.classprofile and D.classprofile[info[#info]]~=nil then
 
-        source = D.db.class;
+        source = D.classprofile
 
     end
 
@@ -708,9 +688,9 @@ function D.SetHandler (info, value) -- {{{
 
         target = D.db.profile;
 
-    elseif D.db.class[info[#info]]~=nil then
+    elseif D.classprofile and D.classprofile[info[#info]]~=nil then
 
-        target = D.db.class;
+        target = D.classprofile
 
     end
 
@@ -1026,7 +1006,7 @@ function D:SetCureOrder (ToChange)
     D.Status.delayedDebuffReportDisabled = true;
     if DC.TWELVEONE then
         D:CancelDelayedCall("scanEverybodyAfterSpellChanged")
-    elseif self.db.global.MFScanEverybodyTimer == 0 or self.db.global.MFScanEverybodyTimer > 1 then
+    elseif self.profile.MFScanEverybodyTimer == 0 or self.profile.MFScanEverybodyTimer > 1 then
         D:Debug("ScanEveryBody delayed call scheduled by SetCureOrder")
         D:ScheduleDelayedCall("scanEverybodyAfterSpellChanged", D.ScanEveryBody, 1, D)
     end
@@ -1084,10 +1064,10 @@ function D:SetDebuffsFrameEnabled(enabled)
             D:Debug("ShowHideDebuffsFrame(): sound re-enabled");
         end
     else
-        D:ScheduleRepeatedCall("Dcr_MUFupdate", D.DebuffsFrame_Update, D.db.global.DebuffsFrameRefreshRate, D);
+        D:ScheduleRepeatedCall("Dcr_MUFupdate", D.DebuffsFrame_Update, D.profile.DebuffsFrameRefreshRate, D)
 
-        if not DC.TWELVEONE and D.db.global.MFScanEverybodyTimer > 0 then
-            self:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.db.global.MFScanEverybodyTimer, D);
+        if not DC.TWELVEONE and D.profile.MFScanEverybodyTimer > 0 then
+            self:ScheduleRepeatedCall("Dcr_ScanEverybody", D.ScanEveryBody, D.profile.MFScanEverybodyTimer, D)
         end
 
         D.Groups_datas_are_invalid = true;
@@ -1629,6 +1609,9 @@ do
 
         D.profile.MF_colors[ColorReason] = {r, g, b, (a and a or 1)};
         D.MicroUnitF:RegisterMUFcolors();
+        if type(ColorReason) == "number" and D.Apply121AfflictionPriorityColors then
+            D:Apply121AfflictionPriorityColors("legacy-priority-color")
+        end
         L_MF_colors = D.profile.MF_colors;
 
         D.MicroUnitF:Delayed_Force_FullUpdate();
@@ -2311,8 +2294,8 @@ do
     }; -- }}}
 
     function D:CreateBleedingDebuffsOptionMenu(where)
-        t_BleedEffectsIDCheck = D.db.global.t_BleedEffectsIDCheck;
-        t_DefaultBleedEffectsIDCheck = D.defaults.global.t_BleedEffectsIDCheck;
+        t_BleedEffectsIDCheck = D.profile.t_BleedEffectsIDCheck
+        t_DefaultBleedEffectsIDCheck = D.defaults.profile.t_BleedEffectsIDCheck
         t_CheckBleedDebuffsActiveIDs = D.Status.t_CheckBleedDebuffsActiveIDs;
         noCasekeywordPatterns = D.Status.P_BleedEffectsKeywords_noCase
 
@@ -2328,7 +2311,7 @@ do
             desc = L["OPT_RESET_DEFAULT_BLEED_EFFECTS_DESC"],
             func = function()
                 D.Status.t_CheckBleedDebuffsActiveIDs = {};
-                table.wipe(D.db.global.t_BleedEffectsIDCheck);
+                table.wipe(D.profile.t_BleedEffectsIDCheck)
 
                 D:readdDefaultsBleedEffects();
             end,
@@ -2351,7 +2334,7 @@ do
 
     function D:reset_t_CheckBleedDebuffsActiveIDs()
         D.Status.t_CheckBleedDebuffsActiveIDs = {};
-        for spellID, isBleed in pairs(D.db.global.t_BleedEffectsIDCheck) do
+        for spellID, isBleed in pairs(D.profile.t_BleedEffectsIDCheck) do
             if isBleed ~= -1 then
                 D.Status.t_CheckBleedDebuffsActiveIDs[spellID] = isBleed;
             end
@@ -2381,8 +2364,8 @@ do
     end
 
     function D:readdDefaultsBleedEffects()
-        local defaults = D.defaults.global.t_BleedEffectsIDCheck;
-        local t_BleedEffectsIDCheck = D.db.global.t_BleedEffectsIDCheck;
+        local defaults = D.defaults.profile.t_BleedEffectsIDCheck
+        local t_BleedEffectsIDCheck = D.profile.t_BleedEffectsIDCheck
         local t_CheckBleedDebuffsActiveIDs = D.Status.t_CheckBleedDebuffsActiveIDs;
 
         for spellID, isBleed in pairs(defaults) do

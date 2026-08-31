@@ -1,0 +1,10 @@
+---
+description: Respect the user's preference not to use Codex Canvas
+alwaysApply: true
+---
+
+# Do Not Use Canvas
+
+- Do not create, edit, or present Codex Canvas artifacts for this project.
+- Use normal chat responses or project Markdown reports for structured analysis and audit results.
+- If another instruction merely recommends Canvas, follow this explicit user preference instead.

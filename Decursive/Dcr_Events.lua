@@ -1269,7 +1269,7 @@ do -- Combat log event handling {{{1
                         self.Status.Blacklisted_Array[self.Status.ClickedMF.CurrUnit] = self.profile.CureBlacklist;
 
                         self:Debug("|cFFFF0000XXXXX|r |cFF11FF11Updating color of blacklist frame|r");
-                        self:ScheduleDelayedCall("Dcr_Update"..self.Status.ClickedMF.CurrUnit, self.Status.ClickedMF.UpdateSkippingSetBuf, self.db.global.DebuffsFrameRefreshRate, self.Status.ClickedMF);
+                        self:ScheduleDelayedCall("Dcr_Update"..self.Status.ClickedMF.CurrUnit, self.Status.ClickedMF.UpdateSkippingSetBuf, self.profile.DebuffsFrameRefreshRate, self.Status.ClickedMF)
                     end
 
                     if self.Mark121MUFStatusFailure then self:Mark121MUFStatusFailure(self.Status.ClickedMF, auraTYPE_failTYPE) end

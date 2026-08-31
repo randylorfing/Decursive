@@ -31,13 +31,14 @@ local ZD = T.ZhaohuModern
 UI:RegisterPage("OVERVIEW", "Overview", function(parent)
     local page = CreateFrame("Frame", nil, parent)
     page:SetAllPoints()
+	page.contentHeight = 880
 
-    page.eyebrow = Controls:Label(page, "COMMAND CENTER", 9, Theme.color.cyan)
+    page.eyebrow = Controls:Label(page, "DECURSIVE PROFILE  >  ENVIRONMENT PROFILE", 9, Theme.color.cyan)
     page.eyebrow:SetPoint("TOPLEFT", 0, -2)
-    page.title = Controls:Label(page, "Decursive at a glance", 20, Theme.color.text)
+    page.title = Controls:Label(page, "Environment Profile Overview", 20, Theme.color.text)
     page.title:SetPoint("TOPLEFT", page.eyebrow, "BOTTOMLEFT", 0, -6)
     page.subtitle = Controls:Label(page,
-        "Current cure readiness, environment behavior and the controls you use most.",
+        "The selected Environment Profile is a complete independent Decursive configuration.",
         10, Theme.color.muted)
     page.subtitle:SetPoint("TOPLEFT", page.title, "BOTTOMLEFT", 0, -6)
 
@@ -45,7 +46,7 @@ UI:RegisterPage("OVERVIEW", "Overview", function(parent)
         "The 12.1 engine fails closed when a required capability is unavailable.")
     readiness:SetPoint("TOPLEFT", 0, -82)
     readiness:SetPoint("TOPRIGHT", -8, -82)
-    readiness:SetHeight(210)
+    readiness:SetHeight(240)
     Controls:StatusRow(readiness, "Detection", function()
         local state = ZD.GetDetectionProviderStatus and ZD:GetDetectionProviderStatus() or {}
         return state.operational == false and "Needs attention" or "Operational"
@@ -60,14 +61,19 @@ UI:RegisterPage("OVERVIEW", "Overview", function(parent)
     Controls:StatusRow(readiness, "Current profile", function()
         return ZD.GetUserProfileName and ZD:GetUserProfileName() or "Default"
     end)
-    Controls:StatusRow(readiness, "Environment", function()
-        if not ZD.GetActiveEnvironment then return "Open World" end
-        local _, name = ZD:GetActiveEnvironment()
-        return name or "Open World"
+    Controls:StatusRow(readiness, "Editing Environment Profile", function()
+		local context = ZD.GetProfileContext and ZD:GetProfileContext() or {}
+		return V13.SettingsSchema.environmentNames[context.editEnvironment]
+			or context.editEnvironment or "Open World"
+    end, function() return Theme.color.warning end)
+    Controls:StatusRow(readiness, "Active Environment Profile", function()
+		local context = ZD.GetProfileContext and ZD:GetProfileContext() or {}
+		return V13.SettingsSchema.environmentNames[context.activeEnvironment]
+			or context.activeEnvironment or "Open World"
     end)
 
     local quick = Controls:Card(page, "Quick controls",
-        "These are profile settings. Environment overrides remain separate.")
+        "These controls are stored directly in the Environment Profile named above.")
     quick:SetPoint("TOPLEFT", readiness, "BOTTOMLEFT", 0, -12)
     quick:SetPoint("TOPRIGHT", readiness, "BOTTOMRIGHT", 0, -12)
     quick:SetHeight(205)
@@ -90,6 +96,20 @@ UI:RegisterPage("OVERVIEW", "Overview", function(parent)
             if D.RefreshProtectedAuraSounds then D:RefreshProtectedAuraSounds("v13 overview") end
             return true
         end)
+
+	local categories = Controls:Card(page, "Complete Environment Profile settings",
+		"Choose a task area. Every page continues editing this same Environment Profile.")
+	categories:SetPoint("TOPLEFT", quick, "BOTTOMLEFT", 0, -12)
+	categories:SetPoint("TOPRIGHT", quick, "BOTTOMRIGHT", 0, -12)
+	categories:SetHeight(165)
+	local muf = Controls:Button(categories, "MUF Setup", 130, function() UI:ShowPage("MUFS") end, "primary")
+	muf:SetPoint("TOPLEFT", 16, -82)
+	local cure = Controls:Button(categories, "Cures & Mouse Bindings", 190, function() UI:ShowPage("CURE") end)
+	cure:SetPoint("LEFT", muf, "RIGHT", 8, 0)
+	local alerts = Controls:Button(categories, "Alerts & Feedback", 150, function() UI:ShowPage("ALERTS") end)
+	alerts:SetPoint("BOTTOMLEFT", 16, 16)
+	local advanced = Controls:Button(categories, "Advanced & Diagnostics", 190, function() UI:ShowPage("ADVANCED") end)
+	advanced:SetPoint("LEFT", alerts, "RIGHT", 8, 0)
 
     function page:Refresh()
         readiness:Refresh()

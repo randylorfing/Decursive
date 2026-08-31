@@ -402,7 +402,7 @@ function ZD:SetEditEnvironment(key)
     if not D.ProfileManager then self:SetStatus(managerFailure("unavailable"), true) return false end
     local ok, code = D.ProfileManager:SetEditEnvironment(key, true)
     if not ok then self:SetStatus(managerFailure(code), true) return false end
-    self:SetStatus("Editing and previewing the complete " .. (ENV_NAMES[key] or key) .. " variant.")
+    self:SetStatus("Editing Environment Profile: " .. (ENV_NAMES[key] or key) .. ".")
     if self.RefreshUI then self:RefreshUI() end
     return true
 end
@@ -446,7 +446,7 @@ function ZD:ResetEnvironmentProfile(key)
     local profileID = D.ProfileManager:ResolveActiveProfileID()
     local ok, code = D.ProfileManager:ResetEnvironment(profileID, key)
     if not ok then self:SetStatus(managerFailure(code), true) return false end
-    self:SetStatus((ENV_NAMES[key] or key) .. " behavior reset.")
+    self:SetStatus("Environment Profile " .. (ENV_NAMES[key] or key) .. " reset to defaults.")
     return true
 end
 
@@ -458,7 +458,7 @@ function ZD:CopyEnvironmentProfile(sourceEnvironment)
     local ok, code = D.ProfileManager:CopyEnvironment(
         profileID, targetEnvironment, profileID, sourceEnvironment)
     if not ok then self:SetStatus(managerFailure(code), true) return false end
-    self:SetStatus((ENV_NAMES[targetEnvironment] or targetEnvironment)
+    self:SetStatus("Environment Profile " .. (ENV_NAMES[targetEnvironment] or targetEnvironment)
         .. " copied from " .. (ENV_NAMES[sourceEnvironment] or sourceEnvironment) .. ".")
     return true
 end
@@ -521,6 +521,39 @@ function ZD:SetProfileOption(key, value)
             D.MicroUnitF:Force_FullUpdate()
         end
     end
+    return true
+end
+
+function ZD:SetAfflictionPriorityColor(priority, color)
+    if not self:CanConfigure() then return false end
+    if not D.SetAfflictionPriorityColor or type(color) ~= "table" then
+        self:SetStatus("Affliction priority colors are unavailable.", true)
+        return false
+    end
+    local ok, reason = D:SetAfflictionPriorityColor(priority, color[1], color[2], color[3])
+    if not ok then
+        self:SetStatus(reason == "combat"
+            and (D.L and D.L["MUF_PRIORITY_COLORS_COMBAT"] or "Affliction priority colors are locked during combat.")
+            or "Affliction priority color could not be applied.", true)
+        return false
+    end
+    self:SetStatus(reason == "deferred"
+        and (D.L and D.L["MUF_PRIORITY_COLORS_DEFERRED"] or "Color saved; protected MUF visuals will refresh when restrictions end.")
+        or (D.L and D.L["MUF_PRIORITY_COLORS_UPDATED"] or "Affliction priority color updated."))
+    return true
+end
+
+function ZD:ResetAfflictionPriorityColors()
+    if not self:CanConfigure() then return false end
+    if not D.ResetAfflictionPriorityColors then return false end
+    local ok, reason = D:ResetAfflictionPriorityColors()
+    if not ok then
+        self:SetStatus("Default affliction priority colors could not be restored.", true)
+        return false
+    end
+    self:SetStatus(reason == "deferred"
+        and (D.L and D.L["MUF_PRIORITY_COLORS_RESET_DEFERRED"] or "Default colors restored; protected MUF visuals will refresh when restrictions end.")
+        or (D.L and D.L["MUF_PRIORITY_COLORS_RESET_DONE"] or "Default affliction priority colors restored."))
     return true
 end
 

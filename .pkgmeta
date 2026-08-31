@@ -48,6 +48,7 @@ ignore:
     # Windows extraction prompts to overwrite. Shipped by mistake in v12.1.2.
     - README.md
     - RELEASE_PROCESS.md
+    - AUDIT_RELEASE_READINESS.md
     # GitHub needs the repository-root GPL text for license discovery, but the
     # addon already ships LICENSE.txt in each packaged addon folder through
     # license-output below.
@@ -63,6 +64,7 @@ ignore:
     - Decursive/RELEASE_NOTES_v11*.md
     - Decursive/RELEASE_NOTES_v12.0*.md
     - Decursive/RELEASE_NOTES_v12.1.2.md
+    - Decursive/RELEASE_NOTES_v12.1.3.md
     - Decursive/12_1_PATCH_NOTES.md
     - Decursive/IMPLEMENTATION_SUMMARY.md
     - Decursive/FULL_ENVIRONMENT_PROFILES.md

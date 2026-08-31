@@ -2036,6 +2036,17 @@ local function getConfiguredDispelTypeFilter()
 end
 
 local providerPriorityInitializedButtons = setmetatable({}, { __mode = "k" })
+local providerPriorityColorRegions = {
+    [1] = setmetatable({}, { __mode = "k" }),
+    [2] = setmetatable({}, { __mode = "k" }),
+    [3] = setmetatable({}, { __mode = "k" }),
+}
+local priorityColorRefreshPending = false
+
+local function rememberProviderPriorityColorRegion(priority, region, role)
+    local regions = providerPriorityColorRegions[priority]
+    if regions and region then regions[region] = role end
+end
 
 local function tableHasAnyKey(t)
     if type(t) ~= "table" then return false end
@@ -2085,6 +2096,7 @@ local function initializeProviderPriorityButton(auraButton, priority, MF, anchor
     local fill = auraButton:CreateTexture(nil, "ARTWORK")
     fill:SetAllPoints(auraButton)
     fill:SetColorTexture(r, g, b, a or 1)
+    rememberProviderPriorityColorRegion(priority, fill, "FILL")
 
     -- Do not call IsShown on Blizzard-owned AuraSlot buttons; presence is
     -- unobservable to addon Lua by design. Trust the parent button's native
@@ -2104,7 +2116,10 @@ local function initializeProviderPriorityButton(auraButton, priority, MF, anchor
             makeManagedBorderStrip(holder, holder, "RIGHT", thickness, 0),
         }
         local alpha = (D.profile and D.profile.CooldownBorder121Alpha) or .95
-        for _, tex in ipairs(edges) do tex:SetColorTexture(r, g, b, alpha) end
+        for _, tex in ipairs(edges) do
+            tex:SetColorTexture(r, g, b, alpha)
+            rememberProviderPriorityColorRegion(priority, tex, "BORDER")
+        end
         -- Do not run an AnimationGroup inside a protected AuraButton subtree.
         auraButton.Decursive121PriorityBorderHolder = holder
         auraButton.Decursive121PriorityBorder = edges
@@ -3723,8 +3738,9 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
     MF.Decursive121PriorityGateAppliedActive = MF.Decursive121PriorityGateAppliedActive or {}
 
     local function initializeGateAuraButton(auraButton, anchor)
-        -- Creation window only. Nothing on this protected aura button or its
-        -- child regions is mutated directly after initialization.
+        -- Creation window for structure and anchoring. The centralized color
+        -- refresh may later recolor this child only after combat/restriction
+        -- and CanBeAccessedInContext guards confirm the region is accessible.
         local innerSize = getMUFInnerBaseSize(MF)
         if auraButton.SetSize then auraButton:SetSize(innerSize, innerSize) end
         -- Positioning must happen inside initializeFrame rather than afterward.
@@ -3750,6 +3766,7 @@ attachPriorityCooldownGate = function(MF, Unit, priority)
         local r, g, b = getPriorityColor(priority)
         local alpha = (D.profile and D.profile.CooldownOverlay121Opacity) or .62
         shade:SetColorTexture(r * .45, g * .45, b * .45, alpha)
+        rememberProviderPriorityColorRegion(priority, shade, "COOLDOWN_SHADE")
 
         -- Secret-safe spell cooldown text. DurationTextBinding updates the text
         -- from a DurationObject in C++ without exposing numeric aura data to Lua.
@@ -3984,6 +4001,9 @@ providerRetryFrame:SetScript("OnEvent", function(_, event)
     local function retryPendingNativeAttach()
         for MF, unit in pairs(pendingNativeAttach) do
             if MF and MF.Frame then attachNativeManagedAura(MF, MF.CurrUnit or unit) end
+        end
+        if D.FlushPending121AfflictionPriorityColors then
+            D:FlushPending121AfflictionPriorityColors()
         end
     end
     if event == "ADDON_RESTRICTION_STATE_CHANGED" and C_Timer and C_Timer.After then
@@ -5135,6 +5155,50 @@ end
 
 function T._SetNativeContainerEnabled121(container, enabled)
     return setNativeContainerEnabled(container, enabled)
+end
+
+-- Refresh only addon-created color regions, never AuraSlot membership,
+-- filters, unit ownership, or protected visibility. A restriction can remain
+-- active after ordinary combat ends, so every region also passes Blizzard's
+-- per-object access check. Failed work is coalesced until the existing native
+-- lifecycle frame observes the next safe transition.
+function D:Apply121AfflictionPriorityColors(_reason)
+    if nativeAuraDisplayMutationBlocked() then
+        priorityColorRefreshPending = true
+        return false
+    end
+
+    local complete = true
+    for priority = 1, 3 do
+        local red, green, blue, alpha = getPriorityColor(priority)
+        for region, role in pairs(providerPriorityColorRegions[priority]) do
+            if canAccessNativeAuraDisplayObject(region) then
+                local applied
+                if role == "COOLDOWN_SHADE" then
+                    local shadeAlpha = (D.profile and D.profile.CooldownOverlay121Opacity) or .62
+                    applied = pcall(region.SetColorTexture, region,
+                        red * .45, green * .45, blue * .45, shadeAlpha)
+                elseif role == "BORDER" then
+                    local borderAlpha = (D.profile and D.profile.CooldownBorder121Alpha) or .95
+                    applied = pcall(region.SetColorTexture, region, red, green, blue, borderAlpha)
+                else
+                    applied = pcall(region.SetColorTexture, region, red, green, blue, alpha or 1)
+                end
+                if not applied then complete = false end
+            else
+                complete = false
+            end
+        end
+    end
+
+    if complete and self.Apply121CooldownAppearance then self:Apply121CooldownAppearance() end
+    priorityColorRefreshPending = not complete
+    return complete
+end
+
+function D:FlushPending121AfflictionPriorityColors()
+    if not priorityColorRefreshPending then return true end
+    return self:Apply121AfflictionPriorityColors("restriction-transition")
 end
 
 function T._ApplyModernSecureUIEnabled121(enabled)

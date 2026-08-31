@@ -175,7 +175,7 @@ navigation("advanced.diagnostics", "ADVANCED", "DIAGNOSTICS", "Runtime diagnosti
 navigation("advanced.reload", "ADVANCED", "TOOLS", "Reload UI")
 
 -- Search/preview metadata only. This is not a persistence allow-list. Profile
--- manager schema 4 stores the complete AceDB profile table for every
+-- manager schema 6 stores the complete AceDB profile table for every
 -- environment, including settings that do not have a V13 schema entry.
 Schema.environmentDefaults = {
     OPEN_WORLD = {

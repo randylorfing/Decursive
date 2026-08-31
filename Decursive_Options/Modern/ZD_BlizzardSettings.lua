@@ -221,7 +221,7 @@ function ZD:RegisterBlizzardSettingsPanel()
     makeButton(panel, "12.1 Status", 145, 266, -426, function()
         openModernPage("compat121")
     end)
-    makeButton(panel, "Profiles & Modes", 145, 423, -426, function()
+    makeButton(panel, "Decursive Profiles", 145, 423, -426, function()
         openModernPage("profiles")
     end)
 

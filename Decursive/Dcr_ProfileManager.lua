@@ -1,7 +1,7 @@
 --[[
     This file is part of Decursive.
 
-    Logical profile and full environment-variant manager. This file was solely
+    Decursive Profile and full Environment Profile manager. This file was solely
     written by Randy Lorfing.
     Copyright (C) 2026 Randy Lorfing
 
@@ -18,10 +18,11 @@
     You should have received a copy of the GNU General Public License
     along with Decursive. If not, see <https://www.gnu.org/licenses/>.
 
-    A user-visible logical profile owns five complete AceDB profiles. AceDB's
-    active profile is always the effective runtime variant or the explicit
-    out-of-combat edit preview. Existing option code therefore reads and writes
-    the selected environment without a setting allow-list.
+    A user-visible Decursive Profile owns five complete Environment Profiles.
+    AceDB's active profile is always the effective runtime Environment Profile
+    or the explicit out-of-combat editing workspace. Existing option code
+    therefore reads and writes the selected environment without a setting
+    allow-list.
 --]]
 
 local addonName, T = ...
@@ -29,7 +30,7 @@ local D = T and T.Dcr
 if not D then return end
 
 local Manager = {
-	SCHEMA_VERSION = 4,
+	SCHEMA_VERSION = 6,
 	DEFAULT_PROFILE_ID = "default",
 	MAX_PROFILES = 50,
 	MAX_PROFILE_NAME_BYTES = 48,
@@ -63,12 +64,23 @@ local function replaceTable(target, source)
 	for key, value in pairs(source or {}) do target[key] = cloneValue(value) end
 end
 
-local function overlayTable(target, source)
+local function mergeTable(target, source)
 	for key, value in pairs(type(source) == "table" and source or {}) do
 		if type(value) == "table" and type(target[key]) == "table" then
-			overlayTable(target[key], value)
+			mergeTable(target[key], value)
 		else
 			target[key] = cloneValue(value)
+		end
+	end
+	return target
+end
+
+local function fillMissing(target, source)
+	for key, value in pairs(type(source) == "table" and source or {}) do
+		if target[key] == nil then
+			target[key] = cloneValue(value)
+		elseif type(value) == "table" and type(target[key]) == "table" then
+			fillMissing(target[key], value)
 		end
 	end
 	return target
@@ -153,28 +165,27 @@ local function currentIdentity()
 	return characterKey, specKeys, specIndex
 end
 
+local function currentClassToken()
+	if type(_G.UnitClass) ~= "function" then return "UNKNOWN" end
+	local ok, _, classToken = pcall(_G.UnitClass, "player")
+	if ok and isPublicValue(classToken) and isSafeText(classToken, 32) then return classToken end
+	return "UNKNOWN"
+end
+
+local function currentSpecializationIndex()
+	if type(_G.GetSpecialization) ~= "function" then return nil end
+	local ok, value = pcall(_G.GetSpecialization)
+	if ok and isPublicValue(value) and type(value) == "number" and value > 0 then return math.floor(value) end
+	return nil
+end
+
 local function isVariantStorageKey(value)
 	return type(value) == "string" and value:match("^DCRPM:") ~= nil
 end
 
-local function discoverAceProfileKeys(saved)
-	local found = { Default = true }
-	if type(saved.profiles) == "table" then
-		for key in pairs(saved.profiles) do
-			if isSafeText(key, 1024) and not isVariantStorageKey(key) then found[key] = true end
-		end
-	end
-	if type(saved.profileKeys) == "table" then
-		for _, key in pairs(saved.profileKeys) do
-			if isSafeText(key, 1024) and not isVariantStorageKey(key) then found[key] = true end
-		end
-	end
-	return found
-end
-
 local function profileIDByStorageKey(data, storageKey)
 	for profileID, record in pairs(data.profiles or {}) do
-		if record.aceKey == storageKey or record.legacyAceKey == storageKey then return profileID end
+		if record.aceKey == storageKey then return profileID end
 		for environment, variantKey in pairs(type(record.variants) == "table" and record.variants or {}) do
 			if variantKey == storageKey then return profileID, environment end
 		end
@@ -218,83 +229,22 @@ local function normalizeOrder(data)
 	data.profileOrder = order
 end
 
-local function buildLegacyCatalog(saved, legacy)
-	local discovered = discoverAceProfileKeys(saved)
-	local names = {}
-	for name in pairs(discovered) do if name ~= "Default" then names[#names + 1] = name end end
-	table.sort(names, function(left, right)
-		local foldedLeft = string.lower(left)
-		local foldedRight = string.lower(right)
-		if foldedLeft == foldedRight then return left < right end
-		return foldedLeft < foldedRight
-	end)
-	local data = {
+local function freshCatalog()
+	return {
 		schemaVersion = Manager.SCHEMA_VERSION,
 		profiles = {
 			[Manager.DEFAULT_PROFILE_ID] = {
-				name = "Default", aceKey = "Default", legacyAceKey = "Default", protected = true,
+				name = "Default", protected = true, variants = {},
 			},
 		},
 		profileOrder = { Manager.DEFAULT_PROFILE_ID },
 		nextProfileID = 0,
 		selection = { account = Manager.DEFAULT_PROFILE_ID, characters = {} },
-		environmentModes = {},
-		editEnvironments = {},
-		compatibility = { libDualSpecMode = "manager-owned", migrated = true },
-		migration = { sourceSchema = tonumber(legacy and legacy.schemaVersion) or 0 },
+		environmentModes = { [Manager.DEFAULT_PROFILE_ID] = "AUTO" },
+		editEnvironments = { [Manager.DEFAULT_PROFILE_ID] = "OPEN_WORLD" },
+		compatibility = { libDualSpecMode = "manager-owned" },
+		reset = { completed = true, schemaVersion = Manager.SCHEMA_VERSION },
 	}
-	local idForName = { Default = Manager.DEFAULT_PROFILE_ID }
-	for _, name in ipairs(names) do
-		local profileID = allocateProfileID(data)
-		if not profileID then break end
-		data.profiles[profileID] = { name = name, aceKey = name, legacyAceKey = name }
-		data.profileOrder[#data.profileOrder + 1] = profileID
-		idForName[name] = profileID
-	end
-	local function mappedID(name)
-		return isSafeText(name, 1024) and idForName[name] or nil
-	end
-	local accountName = type(legacy) == "table" and legacy.accountDefault or "Default"
-	data.selection.account = mappedID(accountName) or Manager.DEFAULT_PROFILE_ID
-	local legacyCharacters = type(legacy) == "table" and legacy.characterAssignments or nil
-	local profileKeys = type(saved.profileKeys) == "table" and saved.profileKeys or {}
-	local characterSet = {}
-	for key in pairs(profileKeys) do if validCharacterKey(key) then characterSet[key] = true end end
-	for key in pairs(type(legacyCharacters) == "table" and legacyCharacters or {}) do
-		if validCharacterKey(key) then characterSet[key] = true end
-	end
-	local legacySpecs = type(legacy) == "table" and legacy.specializationAssignments or nil
-	for key in pairs(type(legacySpecs) == "table" and legacySpecs or {}) do
-		if validCharacterKey(key) then characterSet[key] = true end
-	end
-	local namespaces = type(saved.namespaces) == "table" and saved.namespaces or nil
-	local dualSpec = namespaces and namespaces["LibDualSpec-1.0"] or nil
-	local dualCharacters = type(dualSpec) == "table" and dualSpec.char or nil
-	for key in pairs(type(dualCharacters) == "table" and dualCharacters or {}) do
-		if validCharacterKey(key) then characterSet[key] = true end
-	end
-	for _, characterKey in ipairs(sortedKeys(characterSet)) do
-		local record = { specs = {}, perSpecEnabled = false }
-		local baseName = type(legacyCharacters) == "table" and legacyCharacters[characterKey] or nil
-		record.profileID = mappedID(baseName) or mappedID(profileKeys[characterKey])
-		local sourceSpecs = type(legacySpecs) == "table" and legacySpecs[characterKey] or nil
-		if type(sourceSpecs) == "table" then
-			for spec, name in pairs(sourceSpecs) do
-				local profileID = mappedID(name)
-				if type(spec) == "number" and profileID then record.specs["index:" .. math.floor(spec)] = profileID end
-			end
-		end
-		local dualRecord = type(dualCharacters) == "table" and dualCharacters[characterKey] or nil
-		if type(dualRecord) == "table" then
-			record.perSpecEnabled = dualRecord.enabled == true
-			for spec, name in pairs(dualRecord) do
-				local profileID = mappedID(name)
-				if type(spec) == "number" and profileID then record.specs["index:" .. math.floor(spec)] = profileID end
-			end
-		end
-		data.selection.characters[characterKey] = record
-	end
-	return data
 end
 
 local function normalizeCatalog(saved, source)
@@ -307,24 +257,17 @@ local function normalizeCatalog(saved, source)
 	data.editEnvironments = type(data.editEnvironments) == "table" and data.editEnvironments or {}
 	data.compatibility = type(data.compatibility) == "table" and data.compatibility or {}
 	data.compatibility.libDualSpecMode = "manager-owned"
-	data.compatibility.migrated = true
+	data.reset = type(data.reset) == "table" and data.reset or {}
+	data.reset.completed = true
+	data.reset.schemaVersion = Manager.SCHEMA_VERSION
 	local normalizedProfiles = {}
-	local usedLegacyKeys = {}
 	local usedVariantKeys = {}
 	for _, profileID in ipairs(sortedKeys(data.profiles)) do
 		local record = data.profiles[profileID]
 		if validProfileID(profileID) and type(record) == "table" then
-			local legacyKey = record.legacyAceKey or record.aceKey
-			if profileID == Manager.DEFAULT_PROFILE_ID then legacyKey = "Default" end
-			if isSafeText(legacyKey, 1024) and not usedLegacyKeys[legacyKey] then
-				local normalized = {
-					name = profileID == Manager.DEFAULT_PROFILE_ID and "Default"
-						or isSafeText(record.name, 1024) and record.name or legacyKey,
-					aceKey = legacyKey,
-					legacyAceKey = legacyKey,
-					protected = profileID == Manager.DEFAULT_PROFILE_ID,
-					variants = {},
-				}
+			local name = profileID == Manager.DEFAULT_PROFILE_ID and "Default" or sanitizeNewName(record.name)
+			if name then
+				local normalized = { name = name, protected = profileID == Manager.DEFAULT_PROFILE_ID, variants = {} }
 				for _, environment in ipairs(Manager.ENVIRONMENT_ORDER) do
 					local variantKey = type(record.variants) == "table" and record.variants[environment] or nil
 					if isSafeText(variantKey, 1024) and isVariantStorageKey(variantKey) and not usedVariantKeys[variantKey] then
@@ -333,31 +276,16 @@ local function normalizeCatalog(saved, source)
 					end
 				end
 				normalizedProfiles[profileID] = normalized
-				usedLegacyKeys[legacyKey] = true
 			end
 		end
 	end
 	if not normalizedProfiles[Manager.DEFAULT_PROFILE_ID] then
 		normalizedProfiles[Manager.DEFAULT_PROFILE_ID] = {
-			name = "Default", aceKey = "Default", legacyAceKey = "Default", protected = true, variants = {},
+			name = "Default", protected = true, variants = {},
 		}
-		usedLegacyKeys.Default = true
 	end
 	data.profiles = normalizedProfiles
 	data.nextProfileID = math.max(0, math.min(Manager.MAX_PROFILE_SERIAL, math.floor(tonumber(data.nextProfileID) or 0)))
-	local discovered = discoverAceProfileKeys(saved)
-	local missing = {}
-	for aceKey in pairs(discovered) do if not usedLegacyKeys[aceKey] then missing[#missing + 1] = aceKey end end
-	table.sort(missing, function(left, right)
-		local foldedLeft = string.lower(left)
-		local foldedRight = string.lower(right)
-		if foldedLeft == foldedRight then return left < right end
-		return foldedLeft < foldedRight
-	end)
-	for _, aceKey in ipairs(missing) do
-		local profileID = allocateProfileID(data)
-		if profileID then data.profiles[profileID] = { name = aceKey, aceKey = aceKey, legacyAceKey = aceKey, variants = {} } end
-	end
 	normalizeOrder(data)
 	if not data.profiles[data.selection.account] then data.selection.account = Manager.DEFAULT_PROFILE_ID end
 	local normalizedCharacters = {}
@@ -396,6 +324,27 @@ local function defaultProfile()
 	return type(D.defaults) == "table" and type(D.defaults.profile) == "table" and D.defaults.profile or {}
 end
 
+local function defaultClassProfile()
+	return type(D.defaults) == "table" and type(D.defaults.class) == "table" and D.defaults.class or {}
+end
+
+local function ensureEnvironmentClassSettings(profile, classToken)
+	profile.ClassSettings = type(profile.ClassSettings) == "table" and profile.ClassSettings or {}
+	local classProfile = profile.ClassSettings[classToken]
+	if type(classProfile) ~= "table" then
+		classProfile = cloneValue(defaultClassProfile())
+		profile.ClassSettings[classToken] = classProfile
+	else
+		fillMissing(classProfile, defaultClassProfile())
+	end
+	local specIndex = currentSpecializationIndex()
+	local specKey = specIndex and "CureOrder-" .. specIndex or nil
+	if specKey and type(classProfile[specKey]) ~= "table" then
+		classProfile[specKey] = cloneValue(classProfile.CureOrder or defaultClassProfile().CureOrder or {})
+	end
+	return classProfile
+end
+
 local STOCK_MOUSE_BUTTONS = {
 	"*%s1", "*%s2", "ctrl-%s1", "ctrl-%s2", "shift-%s1", "shift-%s2",
 	"shift-%s3", "alt-%s1", "alt-%s2", "alt-%s3", "*%s4", "ctrl-%s4",
@@ -405,14 +354,6 @@ local STOCK_MOUSE_BUTTONS = {
 
 local VALID_CURE_GESTURES = {}
 for _, gesture in ipairs(STOCK_MOUSE_BUTTONS) do VALID_CURE_GESTURES[gesture] = true end
-
-local function stockMouseButtons(mouseButtons)
-	if type(mouseButtons) ~= "table" or #mouseButtons ~= #STOCK_MOUSE_BUTTONS then return false end
-	for index, gesture in ipairs(STOCK_MOUSE_BUTTONS) do
-		if mouseButtons[index] ~= gesture then return false end
-	end
-	return true
-end
 
 local function normalizeManualBindings(value)
 	local result = {}
@@ -426,68 +367,19 @@ local function normalizeManualBindings(value)
 	return result
 end
 
-local function migrateVariantBindingPolicy(profile, legacyGlobal, rawSource)
-	if type(profile) ~= "table" then return end
-	rawSource = type(rawSource) == "table" and rawSource or profile
-	local rawMode = rawSource.CureBindingMode
-	local sourceButtons = type(rawSource.MouseButtons) == "table" and rawSource.MouseButtons
-		or type(legacyGlobal) == "table" and type(legacyGlobal.MouseButtons) == "table" and legacyGlobal.MouseButtons
-		or STOCK_MOUSE_BUTTONS
-
-	if rawMode == "AUTO" or rawMode == "MANUAL" then
-		profile.CureBindingMode = rawMode
-		profile.CureBindingManual = normalizeManualBindings(rawSource.CureBindingManual)
-		if type(rawSource.CureBindingLegacySlots) == "table" then
-			profile.CureBindingLegacySlots = cloneValue(rawSource.CureBindingLegacySlots)
-		end
-		return
-	end
-
-	if stockMouseButtons(sourceButtons) then
-		profile.CureBindingMode = "AUTO"
-		profile.CureBindingManual = {}
-		profile.CureBindingLegacySlots = nil
-		return
-	end
-
-	profile.CureBindingMode = "MANUAL"
-	profile.CureBindingManual = normalizeManualBindings(rawSource.CureBindingManual)
-	profile.CureBindingLegacySlots = {}
-	for priority = 1, 7 do
-		local gesture = sourceButtons[priority]
-		if VALID_CURE_GESTURES[gesture] then profile.CureBindingLegacySlots[priority] = gesture end
-	end
-	local targetGesture = sourceButtons[#sourceButtons - 1]
-	local focusGesture = sourceButtons[#sourceButtons]
-	if VALID_CURE_GESTURES[targetGesture] then profile.CureBindingLegacySlots.target = targetGesture end
-	if VALID_CURE_GESTURES[focusGesture] then profile.CureBindingLegacySlots.focus = focusGesture end
-end
-
-local function materializeVariant(source, environment, legacyGlobal)
+local function materializeVariant(source, environment, classToken)
 	local result = cloneValue(defaultProfile())
-	overlayTable(result, type(source) == "table" and source or {})
-	-- Mouse click priorities and the Decursive macro key were global before
-	-- schema v3. Copy the user's legacy values into every first-generation
-	-- variant, while leaving the original global table untouched.
-	if (type(source) ~= "table" or source.MouseButtons == nil)
-		and type(legacyGlobal) == "table" and type(legacyGlobal.MouseButtons) == "table"
-	then
-		result.MouseButtons = cloneValue(legacyGlobal.MouseButtons)
-	end
-	if (type(source) ~= "table" or source.MacroBind == nil)
-		and type(legacyGlobal) == "table" and legacyGlobal.MacroBind ~= nil
-	then
-		result.MacroBind = legacyGlobal.MacroBind
-	end
-	local legacyProfiles = type(source) == "table" and source.Environment121Profiles or nil
-	local presetProfiles = type(defaultProfile().Environment121Profiles) == "table" and defaultProfile().Environment121Profiles or nil
-	local environmentOverlay = type(legacyProfiles) == "table" and legacyProfiles[environment]
-		or type(presetProfiles) == "table" and presetProfiles[environment]
-	if type(environmentOverlay) == "table" then overlayTable(result, environmentOverlay) end
+	mergeTable(result, type(source) == "table" and source or {})
+	local legacyEnvironmentDefaults = type(defaultProfile().Environment121Profiles) == "table" and defaultProfile().Environment121Profiles or nil
+	local environmentOverlay = type(legacyEnvironmentDefaults) == "table" and legacyEnvironmentDefaults[environment]
+	if type(environmentOverlay) == "table" then mergeTable(result, environmentOverlay) end
 	result.Environment121Profiles = nil
 	result.Environment121ProfilesInitialized = nil
 	result.Environment121Mode = nil
-	migrateVariantBindingPolicy(result, legacyGlobal, source)
+	result.CureBindingMode = result.CureBindingMode == "MANUAL" and "MANUAL" or "AUTO"
+	result.CureBindingManual = normalizeManualBindings(result.CureBindingManual)
+	result.CureBindingLegacySlots = nil
+	ensureEnvironmentClassSettings(result, classToken or currentClassToken())
 	return result
 end
 
@@ -499,18 +391,20 @@ local function ensureVariants(saved, data)
 		for _, key in pairs(record.variants or {}) do used[key] = true end
 	end
 	local planned = {}
+	local classToken = currentClassToken()
 	for _, profileID in ipairs(data.profileOrder) do
 		local record = data.profiles[profileID]
 		if record then
 			record.variants = type(record.variants) == "table" and record.variants or {}
-			local source = saved.profiles[record.legacyAceKey]
 			for _, environment in ipairs(Manager.ENVIRONMENT_ORDER) do
 				local key = record.variants[environment]
 				if not isSafeText(key, 1024) or not isVariantStorageKey(key) then
 					key = variantStorageKey(profileID, environment, used)
 					record.variants[environment] = key
 				end
-				if type(saved.profiles[key]) ~= "table" then planned[key] = materializeVariant(source, environment, saved.global) end
+					if type(saved.profiles[key]) ~= "table" then
+						planned[key] = materializeVariant(nil, environment, classToken)
+					end
 			end
 			record.aceKey = record.variants.OPEN_WORLD
 		end
@@ -519,7 +413,10 @@ local function ensureVariants(saved, data)
 	for _, record in pairs(data.profiles) do
 		for _, environment in ipairs(Manager.ENVIRONMENT_ORDER) do
 			local profile = saved.profiles[record.variants[environment]]
-			if type(profile) == "table" then migrateVariantBindingPolicy(profile, saved.global, profile) end
+			local key = record.variants[environment]
+			if type(profile) == "table" then
+				ensureEnvironmentClassSettings(profile, classToken)
+			end
 		end
 	end
 	for _, record in pairs(data.profiles) do
@@ -541,17 +438,18 @@ function Manager:InitializeStorage(saved)
 	self.storedVersion = storedVersion or 0
 	self.readOnly = storedVersion and storedVersion > self.SCHEMA_VERSION or false
 	if self.readOnly then
-		self.data = buildLegacyCatalog(saved, nil)
-		local existing = self.characterKey and type(saved.profileKeys) == "table" and saved.profileKeys[self.characterKey]
-		self.futureAceKey = isSafeText(existing, 1024) and existing or "Default"
-		return self.futureAceKey
+		self.data = freshCatalog()
+		self.futureAceKey = nil
+		return nil, "future-schema"
 	end
-	local base
-	if storedVersion and storedVersion >= 2 then
-		base = normalizeCatalog(saved, source)
-	else
-		base = normalizeCatalog(saved, buildLegacyCatalog(saved, type(source) == "table" and source or nil))
+	local resetRequired = storedVersion ~= self.SCHEMA_VERSION
+	if resetRequired then
+		for key in pairs(saved) do saved[key] = nil end
+		saved.profiles = {}
+		source = freshCatalog()
+		saved.profileManager = source
 	end
+	local base = normalizeCatalog(saved, source)
 	local prepared = cloneValue(base)
 	if not ensureVariants(saved, prepared) then
 		self.data = base
@@ -559,10 +457,6 @@ function Manager:InitializeStorage(saved)
 		return "Default"
 	end
 	prepared.schemaVersion = self.SCHEMA_VERSION
-	prepared.migration = type(prepared.migration) == "table" and prepared.migration or {}
-	prepared.migration.completed = true
-	prepared.migration.variantCount = #prepared.profileOrder * #self.ENVIRONMENT_ORDER
-	prepared.migration.storageModel = "five-full-variants"
 	saved.profileManager = prepared
 	self.data = prepared
 	self.storedVersion = self.SCHEMA_VERSION
@@ -573,7 +467,14 @@ function Manager:InitializeStorage(saved)
 	if self.characterKey then saved.profileKeys[self.characterKey] = aceKey end
 	self.activeProfileID = activeID
 	self.activeEnvironment = environment
+	self.resetPerformed = resetRequired
 	return aceKey
+end
+
+function Manager:IsFutureStorage(saved)
+	local source = type(saved) == "table" and saved.profileManager or nil
+	local storedVersion = type(source) == "table" and tonumber(source.schemaVersion) or 0
+	return storedVersion and storedVersion > self.SCHEMA_VERSION or false, storedVersion or 0
 end
 
 function Manager:BindDatabase(db)
@@ -614,8 +515,7 @@ function Manager:GetAceKey(profileID, environment)
 end
 
 function Manager:GetLegacyAceKey(profileID)
-	local record = self.data and self.data.profiles and self.data.profiles[profileID]
-	return record and record.legacyAceKey or nil
+	return nil
 end
 
 function Manager:GetProfileName(profileID)
@@ -969,7 +869,7 @@ function Manager:CreateProfile(name, sourceID)
 	local dataBackup = cloneValue(self.data)
 	local profileID = allocateProfileID(self.data)
 	if not profileID then return nil, "profile-id-unavailable" end
-	local record = { name = clean, legacyAceKey = "DCRPM:LEGACY:" .. profileID, variants = {} }
+	local record = { name = clean, variants = {} }
 	self.data.profiles[profileID] = record
 	self.data.profileOrder[#self.data.profileOrder + 1] = profileID
 	self.data.environmentModes[profileID] = sourceID and self:GetEnvironmentMode(sourceID) or "AUTO"
@@ -980,7 +880,7 @@ function Manager:CreateProfile(name, sourceID)
 		local key = variantStorageKey(profileID, environment, used)
 		record.variants[environment] = key
 		local source = sourceID and self.saved.profiles[self:GetAceKey(sourceID, environment)] or nil
-		self.saved.profiles[key] = source and cloneValue(source) or materializeVariant(nil, environment)
+			self.saved.profiles[key] = source and cloneValue(source) or materializeVariant(nil, environment)
 	end
 	record.aceKey = record.variants.OPEN_WORLD
 	local activated, activateError = self:ActivateProfile(profileID)
@@ -1162,6 +1062,7 @@ function Manager:ImportLogicalProfile(profileID, variants, activationMode)
 			imported.Environment121Profiles = nil
 			imported.Environment121ProfilesInitialized = nil
 			imported.Environment121Mode = nil
+			ensureEnvironmentClassSettings(imported, currentClassToken())
 			replaceTable(self.saved.profiles[self:GetAceKey(profileID, environment)], imported)
 		end
 		if activationMode then self.data.environmentModes[profileID] = activationMode end
@@ -1203,9 +1104,6 @@ function Manager:DeleteProfile(profileID)
 	for _, key in pairs(record.variants or {}) do
 		if self.saved.profiles[key] ~= nil then deletedProfilesBackup[key] = self.saved.profiles[key] end
 	end
-	if record.legacyAceKey and self.saved.profiles[record.legacyAceKey] ~= nil then
-		deletedProfilesBackup[record.legacyAceKey] = self.saved.profiles[record.legacyAceKey]
-	end
 	local profileKeysBackup = cloneValue(self.saved.profileKeys or {})
 	self:RemoveAssignments(profileID)
 	self.data.profiles[profileID] = nil
@@ -1221,9 +1119,7 @@ function Manager:DeleteProfile(profileID)
 	end
 	local deleted, deleteError = pcall(function()
 		for _, key in pairs(record.variants or {}) do self.saved.profiles[key] = nil end
-		if record.legacyAceKey and record.legacyAceKey ~= "Default" then self.saved.profiles[record.legacyAceKey] = nil end
 		for characterKey, key in pairs(self.saved.profileKeys or {}) do
-			if key == record.legacyAceKey then self.saved.profileKeys[characterKey] = nil end
 			for _, variantKey in pairs(record.variants or {}) do
 				if key == variantKey then self.saved.profileKeys[characterKey] = nil end
 			end
@@ -1241,21 +1137,8 @@ function Manager:DeleteProfile(profileID)
 end
 
 function Manager:AdoptAceProfile(aceKey)
-	if self.readOnly or not isSafeText(aceKey, 1024) or isVariantStorageKey(aceKey) then return nil end
-	local existing = profileIDByStorageKey(self.data, aceKey)
-	if existing then return existing end
-	if #self.data.profileOrder >= self.MAX_PROFILES then return nil end
-	local name = sanitizeNewName(aceKey)
-	if not name or self:NameExists(name) then return nil end
-	local profileID = allocateProfileID(self.data)
-	if not profileID then return nil end
-	local record = { name = name, legacyAceKey = aceKey, aceKey = aceKey, variants = {} }
-	self.data.profiles[profileID] = record
-	self.data.profileOrder[#self.data.profileOrder + 1] = profileID
-	self.data.environmentModes[profileID] = "AUTO"
-	self.data.editEnvironments[profileID] = "OPEN_WORLD"
-	ensureVariants(self.saved, self.data)
-	return profileID
+	if self.readOnly or not isSafeText(aceKey, 1024) then return nil end
+	return profileIDByStorageKey(self.data, aceKey)
 end
 
 function Manager:OnAceNewProfile(_, _, aceKey)
@@ -1289,10 +1172,8 @@ function Manager:OnAceProfileDeleted(_, _, aceKey)
 	if not profileID or profileID == self.DEFAULT_PROFILE_ID then return end
 	local record = self.data.profiles[profileID]
 	if environment then
-		self.saved.profiles[aceKey] = materializeVariant(self.saved.profiles[record.legacyAceKey], environment, self.saved.global)
+		self.saved.profiles[aceKey] = materializeVariant(nil, environment, currentClassToken())
 		self:ApplyResolvedProfile("external-variant-repair")
-	else
-		record.legacyAceKey = nil
 	end
 	self:NotifyChanged()
 end

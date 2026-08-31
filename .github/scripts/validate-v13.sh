@@ -64,7 +64,9 @@ fi
 [ -f .github/scripts/test-dcr-12-1-local-budget.lua ] \
     || fail 'The Dcr_12_1 local-budget regression harness is missing.'
 [ -f .github/scripts/test-profile-manager.lua ] \
-    || fail 'The profile migration and assignment regression harness is missing.'
+    || fail 'The profile reset, persistence and assignment regression harness is missing.'
+[ -f .github/scripts/test-profile-io.lua ] \
+    || fail 'The serialized ProfileIO adversarial and rollback harness is missing.'
 [ -f .github/scripts/test-profile-pages.lua ] \
     || fail 'The profile page separation and routing regression harness is missing.'
 [ -f .github/scripts/test-full-environment-variants-static.lua ] \
@@ -136,12 +138,14 @@ if [ "$source_version_tokens" -ne 51 ] || [ "$source_date_tokens" -ne 4 ] \
 fi
 
 if ! rg -q --fixed-strings 'Dcr_ProfileManager.lua' Decursive/Decursive.toc \
-    || ! rg -q --fixed-strings 'SCHEMA_VERSION = 4' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'SCHEMA_VERSION = 6' Decursive/Dcr_ProfileManager.lua \
     || ! rg -q --fixed-strings 'libDualSpecMode = "manager-owned"' Decursive/Dcr_ProfileManager.lua \
     || ! rg -q --fixed-strings 'profileOrder = { Manager.DEFAULT_PROFILE_ID }' Decursive/Dcr_ProfileManager.lua \
     || ! rg -q --fixed-strings 'MAX_PROFILE_NAME_BYTES = 48' Decursive/Dcr_ProfileManager.lua \
     || ! rg -q --fixed-strings 'storedVersion and storedVersion > self.SCHEMA_VERSION' Decursive/Dcr_ProfileManager.lua \
-    || ! rg -q --fixed-strings 'storageModel = "five-full-variants"' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'reset = { completed = true, schemaVersion = Manager.SCHEMA_VERSION }' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'for key in pairs(saved) do saved[key] = nil end' Decursive/Dcr_ProfileManager.lua \
+    || ! rg -q --fixed-strings 'return nil, "future-schema"' Decursive/Dcr_ProfileManager.lua \
     || ! rg -q --fixed-strings 'function Manager:CopyEnvironment' Decursive/Dcr_ProfileManager.lua \
     || ! rg -q --fixed-strings 'function Manager:ImportLogicalProfile' Decursive/Dcr_ProfileManager.lua; then
     fail 'The stable-ID profile manager, compatibility mode, limits, or future-schema guard is incomplete.'
@@ -315,12 +319,11 @@ fi
 if ! rg -q --fixed-strings 'button.navigationKey = navigationKey' Decursive_Options/V13/Shell.lua \
     || ! rg -q --fixed-strings 'UI:ShowPage(self.navigationKey)' Decursive_Options/V13/Shell.lua \
     || rg -q --fixed-strings 'UI:ShowPage(item.key)' Decursive_Options/V13/Shell.lua; then
-    fail 'The v13 command bar can route clicks through a reused loop variable.'
+    fail 'The v13 navigation can route clicks through a reused loop variable.'
 fi
-if ! rg -q --fixed-strings 'button.firstRouteKey = firstRouteKey' Decursive_Options/V13/Pages/Settings.lua \
-    || ! rg -q --fixed-strings 'page:SetRoute(self.firstRouteKey)' Decursive_Options/V13/Pages/Settings.lua \
+if ! rg -q --fixed-strings 'button.routeKey = routeKey' Decursive_Options/V13/Pages/Settings.lua \
     || ! rg -q --fixed-strings 'page:SetRoute(self.routeKey)' Decursive_Options/V13/Pages/Settings.lua; then
-    fail 'All Settings category or route buttons do not retain their own destination.'
+    fail 'Environment Profile workspace route buttons do not retain their own destination.'
 fi
 for capture in \
     'local tabKey = tab.key' \
@@ -643,6 +646,7 @@ if [ -n "$lua_runner" ]; then
     "$lua_runner" .github/scripts/test-live-list-startup-sentinels.lua || status=1
     "$lua_runner" .github/scripts/test-dcr-12-1-local-budget.lua || status=1
     "$lua_runner" .github/scripts/test-profile-manager.lua || status=1
+    "$lua_runner" .github/scripts/test-profile-io.lua || status=1
     "$lua_runner" .github/scripts/test-profile-pages.lua || status=1
     "$lua_runner" .github/scripts/test-full-environment-variants-static.lua || status=1
     "$lua_runner" .github/scripts/test-cure-bindings.lua || status=1
@@ -651,6 +655,11 @@ if [ -n "$lua_runner" ]; then
         fail 'The profile-manager harness failure self-test unexpectedly returned success.'
     else
         echo 'PASS: profile-manager harness failure self-test returned nonzero.'
+    fi
+    if "$lua_runner" .github/scripts/test-profile-io.lua --self-test-failure >/dev/null 2>&1; then
+        fail 'The ProfileIO harness failure self-test unexpectedly returned success.'
+    else
+        echo 'PASS: ProfileIO harness failure self-test returned nonzero.'
     fi
     if "$lua_runner" .github/scripts/test-cure-bindings.lua --self-test-failure >/dev/null 2>&1; then
         fail 'The cure-binding harness failure self-test unexpectedly returned success.'

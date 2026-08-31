@@ -1175,6 +1175,18 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
         return false;
     end
 
+    local profileManager = T.ProfileManager
+    local futureStorage, futureVersion = profileManager and profileManager:IsFutureStorage(_G.DecursiveDB)
+    if futureStorage then
+        profileManager:InitializeStorage(_G.DecursiveDB)
+        D.ProfileSchemaIncompatible = true
+        T._ShowNotice((L["PROFILE_SCHEMA_INCOMPATIBLE"]
+            or "This Decursive build supports profile schema %d, but SavedVariables use newer schema %d. Decursive is disabled and the SavedVariables were not changed.")
+            :format(profileManager.SCHEMA_VERSION, futureVersion))
+        if self.SetEnabledState then self:SetEnabledState(false) end
+        return false
+    end
+
     T._CatchAllErrors = "OnInitialize"; -- During init we catch all the errors else, if a library fails we won't know it.
 
     D:LocalizeBindings ();
@@ -1184,10 +1196,14 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
     D.defaults = D:GetDefaultsSettings();
 
     if type(_G.DecursiveDB) ~= "table" then _G.DecursiveDB = {} end
-    local profileManager = T.ProfileManager
-    local defaultProfile = profileManager and profileManager:InitializeStorage(_G.DecursiveDB) or "Default"
+    local defaultProfile, storageError = profileManager and profileManager:InitializeStorage(_G.DecursiveDB) or "Default"
+    if storageError then return false end
     self.db = LibStub("AceDB-3.0"):New("DecursiveDB", D.defaults, defaultProfile)
     if profileManager then profileManager:BindDatabase(self.db) end
+    if profileManager and profileManager.resetPerformed then
+        T._ShowNotice(L["PROFILE_SCHEMA_RESET_NOTICE"]
+            or "Decursive settings were reset for the new profile system. Please reconfigure Decursive before entering combat.")
+    end
 
 
 
@@ -1480,7 +1496,7 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
         _G.DecursiveTextFrame:Show()
     end
 
-    if FirstEnable and not D.db.global.NoStartMessages then
+    if FirstEnable and not D.profile.NoStartMessages then
         D:ColorPrint(0.3, 0.5, 1, L["IS_HERE_MSG"]);
         -- D:ColorPrint(0.3, 0.5, 1, L["SHOW_MSG"]);
     end
@@ -1497,7 +1513,8 @@ end -- // }}}
 
 function D:SetConfiguration() -- {{{
 
-    if T._SelfDiagnostic() == 2 or not D:IsEnabled() then
+    if D.ProfileSchemaIncompatible or D.ProfileManager and D.ProfileManager:IsReadOnly()
+        or T._SelfDiagnostic() == 2 or not D:IsEnabled() then
         return false;
     end
     local prev_CatchAllErrors = T._CatchAllErrors
@@ -1555,9 +1572,21 @@ function D:SetConfiguration() -- {{{
     end
 
     D.profile = D.db.profile; -- shortcut
-    D.classprofile = D.db.class; -- shortcut
-    -- reset: /run  LibStub("AceAddon-3.0"):GetAddon("Decursive").db.class.CureOrder = {}
-    -- reset: /run  LibStub("AceAddon-3.0"):GetAddon("Decursive").db.class["CureOrder-"..(GetSpecialization or GetActiveTalentGroup)()][64] = nil
+    local _, classToken = UnitClass("player")
+    classToken = classToken or "UNKNOWN"
+    if D.ProfileManager and D.ProfileManager:IsReadOnly() then
+        -- Never mutate a profile catalog written by a newer schema. The legacy
+        -- AceDB class table remains a read-only compatibility source in this
+        -- exceptional mode.
+        D.classprofile = D.db.class
+    else
+        D.profile.ClassSettings = type(D.profile.ClassSettings) == "table" and D.profile.ClassSettings or {}
+        if type(D.profile.ClassSettings[classToken]) ~= "table" then
+            D.profile.ClassSettings[classToken] = {}
+            D:tcopy(D.profile.ClassSettings[classToken], D.defaults.class)
+        end
+        D.classprofile = D.profile.ClassSettings[classToken]
+    end
 
     D:reset_t_CheckBleedDebuffsActiveIDs();
 
@@ -1675,6 +1704,9 @@ function D:SetConfiguration() -- {{{
     end
 
     D.MicroUnitF:RegisterMUFcolors(D.profile.MF_colors); -- set the colors as set in the profile
+    if D.Apply121AfflictionPriorityColors then
+        D:Apply121AfflictionPriorityColors("configuration")
+    end
 
     D.Status.Enabled = true;
 
@@ -1691,10 +1723,10 @@ function D:SetConfiguration() -- {{{
     end
 
     if D.profile.ShowDebuffsFrame then
-        self:ScheduleRepeatedCall("Dcr_MUFupdate", self.DebuffsFrame_Update, self.db.global.DebuffsFrameRefreshRate, self);
+        self:ScheduleRepeatedCall("Dcr_MUFupdate", self.DebuffsFrame_Update, self.profile.DebuffsFrameRefreshRate, self)
 
-        if not DC.TWELVEONE and self.db.global.MFScanEverybodyTimer > 0 then
-            self:ScheduleRepeatedCall("Dcr_ScanEverybody", self.ScanEveryBody, self.db.global.MFScanEverybodyTimer, self, self.db.global.ScanEverybodyReport);
+        if not DC.TWELVEONE and self.profile.MFScanEverybodyTimer > 0 then
+            self:ScheduleRepeatedCall("Dcr_ScanEverybody", self.ScanEveryBody, self.profile.MFScanEverybodyTimer, self, self.profile.MFScanEverybodyReport)
         end
     end
 
@@ -1819,7 +1851,7 @@ function D:Init() --{{{
         D.profile.OutputWindow =  "DEFAULT_CHAT_FRAME";
     end
 
-    if not D.db.global.NoStartMessages then
+    if not D.profile.NoStartMessages then
         D:Println("%s %s by %s", D.name, D.version, D.author);
     end
 

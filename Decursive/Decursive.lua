@@ -1826,7 +1826,7 @@ do
     local function checkSpellIDForBleed()
         -- it appears that sometime SpellID can be nil...
         if not SpellID or D.Status.t_CheckBleedDebuffsActiveIDs[SpellID] ~= nil
-            or not D.db.global.BleedAutoDetection then
+            or not D.profile.BleedAutoDetection then
             return
         end
 
@@ -1836,7 +1836,7 @@ do
         elseif D.Status.P_BleedEffectsKeywords_noCase ~= false then
             if D:hasDescBleedEffectkeyword(GetSpellDescription(SpellID)) then
                 D.Status.t_CheckBleedDebuffsActiveIDs[SpellID] = true;
-                D.db.global.t_BleedEffectsIDCheck[SpellID] = true;
+                D.profile.t_BleedEffectsIDCheck[SpellID] = true
             else
                 D.Status.t_CheckBleedDebuffsActiveIDs[SpellID] = false;
             end
@@ -2247,7 +2247,7 @@ do
                         self.db.global.delayedUnDebuffOccurences = self.db.global.delayedUnDebuffOccurences + 1;
                     end
 
-                    if (not self.Status.delayedDebuffReportDisabled) and self.db.global.MFScanEverybodyReport then
+                    if (not self.Status.delayedDebuffReportDisabled) and self.profile.MFScanEverybodyReport then
                         if IsDebuffed then
                             self:AddDebugText("delayed debuff found by scaneveryone (you can disable this error by unchecking the `Periodic scan debug reporting` option in the MUFs performance options - see Decursive 2.7.16 release notes)", Unit, Debuffs[1].Name);
                             --D:ScheduleDelayedCall("Dcr_lateanalysis" .. Unit, self.MicroUnitF.LateAnalysis, 1, self.MicroUnitF, "ScanEveryone", Debuffs, MUF, MUF.UnitStatus);

@@ -8,7 +8,7 @@ John Wellesz and the packager traps that have shipped broken builds four times.
     Branches     master (stable), alpha (prerelease)
     License      GNU GPL v3
     CurseForge   project 1659159
-    Written at   v12.1.4-alpha.3
+    Reviewed at  v12.1.4-alpha.4
 
 Where this document and the repository disagree, the repository wins. Re-verify
 against `.pkgmeta`, the workflow file, and the `.toc` files before relying on
@@ -608,11 +608,12 @@ baseline; tagging blind would have failed the release build.
 --------------------------------------------------------------------------------
 ## 12. OUTSTANDING
 
-**Environment migrations need real SavedVariables testing.** The schema-4
-manager expands every logical profile to five complete variants while retaining
-legacy tables for rollback. Automated fixtures cover idempotence, partial repair,
-and future-schema read-only behavior, but a prerelease should still be exercised
-against a backup of real account data before promotion to stable.
+**Profile schema 6 needs copied-SavedVariables acceptance.** The first schema-6
+startup intentionally removes every older Decursive setting and creates one
+fresh Default profile with five Environment Profiles. Automated fixtures cover
+the destructive reset, divergent schema-6 reloads, future-schema immutability,
+and serialized import rollback. A prerelease must still be exercised against a
+backup copy of real account data before promotion to stable.
 
 *(Resolved: the broken v11.0.46 / v12.0.4 / v12.0.5 / v12.1.2 files have been
 removed from CurseForge by the maintainer. Deleting a GitHub release does not

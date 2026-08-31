@@ -2012,8 +2012,8 @@ local function GetStaticOptions ()
                                 width = 'full',
                                 name = L["OPT_ENABLE_BLEED_EFFECTS_DETECTION"],
                                 desc = L["OPT_ENABLE_BLEED_EFFECTS_DETECTION_DESC"],
-                                get = function() return D.db.global.BleedAutoDetection; end,
-                                set = function(info, v) D.db.global.BleedAutoDetection = v end,
+                                get = function() return D.profile.BleedAutoDetection; end,
+                                set = function(info, v) D.profile.BleedAutoDetection = v end,
                                 disabled = function () return not D.Status.CuringSpells[DC.BLEED] end,
                                 order = 0,
                             },
@@ -2062,7 +2062,7 @@ local function GetStaticOptions ()
                                         return cleanedError
                                     end
                                 end,
-                                disabled = function() return not D.db.global.BleedAutoDetection or not D.Status.CuringSpells[DC.BLEED]; end,
+                                disabled = function() return not D.profile.BleedAutoDetection or not D.Status.CuringSpells[DC.BLEED]; end,
 
                                 order = 10,
                             },
@@ -2076,7 +2076,7 @@ local function GetStaticOptions ()
                                 name = L["OPT_ADD_BLEED_EFFECT_ID"],
                                 desc = L["OPT_ADD_BLEED_EFFECT_ID_DESC"],
                                 set = function(info, v)
-                                    D.db.global.t_BleedEffectsIDCheck[TN(v)] = true;
+                                    D.profile.t_BleedEffectsIDCheck[TN(v)] = true
                                     D.Status.t_CheckBleedDebuffsActiveIDs[TN(v)] = true;
                                 end,
                                 validate = function(info, v)

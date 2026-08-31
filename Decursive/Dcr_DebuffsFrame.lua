@@ -617,7 +617,7 @@ function MicroUnitF:MFsDisplay_Update () -- {{{
                 MF.Frame:Show();
                 Updated = Updated + 1;
 
-                D:ScheduleDelayedCall("Dcr_Update"..MF.CurrUnit, MF.UpdateWithCS, D.db.global.DebuffsFrameRefreshRate * (0.9 + Updated / D.db.global.DebuffsFramePerUPdate), MF);
+                D:ScheduleDelayedCall("Dcr_Update"..MF.CurrUnit, MF.UpdateWithCS, D.profile.DebuffsFrameRefreshRate * (0.9 + Updated / D.profile.DebuffsFramePerUPdate), MF)
                 --D:Debug("|cFF88AA00Show schedule for MUF", Unit, "UnitShown:", self.UnitShown);
             end
         else
@@ -651,7 +651,7 @@ function MicroUnitF:MFsDisplay_Update () -- {{{
                 self.UnitShown = self.UnitShown - 1;
                 --D:Debug("|cFF88AA00Hiding %d (%s), scheduling update in %f|r", i, MF.CurrUnit, D.db.global.DebuffsFrameRefreshRate * i);
                 Updated = Updated + 1;
-                D:ScheduleDelayedCall("Dcr_Update"..MF.CurrUnit, MF.Update, D.db.global.DebuffsFrameRefreshRate * (0.9 + Updated / D.db.global.DebuffsFramePerUPdate), MF);
+                D:ScheduleDelayedCall("Dcr_Update"..MF.CurrUnit, MF.Update, D.profile.DebuffsFrameRefreshRate * (0.9 + Updated / D.profile.DebuffsFramePerUPdate), MF)
                 MF.Frame:Hide();
             end
 
@@ -701,7 +701,7 @@ function MicroUnitF:Force_FullUpdate () -- {{{
 
         MF.InnerTexture:SetColorTexture(unpack(MF_colors[CHARMED_STATUS]));
 
-        D:ScheduleDelayedCall("Dcr_Update"..MF.CurrUnit, MF.UpdateWithCS, D.db.global.DebuffsFrameRefreshRate * (0.9 + i / D.db.global.DebuffsFramePerUPdate), MF);
+        D:ScheduleDelayedCall("Dcr_Update"..MF.CurrUnit, MF.UpdateWithCS, D.profile.DebuffsFrameRefreshRate * (0.9 + i / D.profile.DebuffsFramePerUPdate), MF)
         i = i + 1;
     end
 
@@ -967,7 +967,7 @@ function MicroUnitF:UpdateMUFUnit(Unitid, CheckStealth, o_auraUpdateInfo)
             D.DebuffUpdateRequest = D.DebuffUpdateRequest + 1;
             D:ScheduleDelayedCall("Dcr_Update"..unit
                 , CheckStealth and MF.UpdateWithCS or MF.Update
-                , D.db.global.DebuffsFrameRefreshRate * (0.9 + D.DebuffUpdateRequest / D.db.global.DebuffsFramePerUPdate)
+                , D.profile.DebuffsFrameRefreshRate * (0.9 + D.DebuffUpdateRequest / D.profile.DebuffsFramePerUPdate)
                 , MF --, o_auraUpdateInfo
             );
 
@@ -2208,7 +2208,7 @@ do
 
 
         -- we don't check all the MUF at each call, only some of them (changed in the options)
-        for pass = 1, self.db.global.DebuffsFramePerUPdate do
+        for pass = 1, self.profile.DebuffsFramePerUPdate do
 
             -- When all frames have been updated, go back to the first
             if (MicroFrameUpdateIndex > UnitNum) then

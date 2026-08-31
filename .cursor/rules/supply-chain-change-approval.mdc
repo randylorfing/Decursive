@@ -1,0 +1,16 @@
+---
+description: Require explicit user approval before mutations and enforce supply-chain safety
+alwaysApply: true
+---
+
+# Change Approval and Supply-Chain Safety
+
+- Before any action that may change files, configuration, dependencies, Git state, builds, releases, deployments, WoW AddOns, or SavedVariables, describe the exact proposed change and obtain explicit user approval.
+- Approval applies only to the described batch of changes. Ask again if the target, scope, source, dependency, command, or expected effect changes materially.
+- Read-only inspection is allowed: read existing files, inspect Git status/diffs, calculate hashes, and report findings. Treat validators or commands that create caches, logs, artifacts, temporary files, or lockfile changes as mutations requiring approval.
+- Never install or update packages, tools, plugins, libraries, actions, or dependencies without approval.
+- Never download, clone, fetch, pull, or execute external code or artifacts without approval. Download approval and execution approval are separate unless the user explicitly authorizes both.
+- For approved external inputs, prefer the official upstream source, pin an exact version or commit, verify available signatures/checksums, inspect install/build scripts, record provenance, and avoid pipe-to-shell execution.
+- Never use `dyne/luabinaries` or any artifact originating from it.
+- Do not weaken security controls, bypass antivirus warnings, or substitute an unverified mirror to complete a task.
+- When uncertain whether an operation writes or introduces external code, stop and ask.

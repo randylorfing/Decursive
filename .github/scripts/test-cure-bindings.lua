@@ -5,6 +5,9 @@ local requestedItemData = {}
 local secretValues = {}
 local inaccessibleValues = {}
 local secretTables = setmetatable({}, { __mode = "k" })
+local colorApplyDeferred = false
+local colorApplyCalls = 0
+local colorRegisterCalls = 0
 
 _G = _G or {}
 _G.InCombatLockdown = function() return combat end
@@ -92,9 +95,31 @@ local D = {
         },
     },
     Status = {},
+    defaults = {
+        profile = {
+            MF_colors = {
+                { 0.8, 0, 0, 1 },
+                { 0.3, 0.3, 0.8, 1 },
+                { 0.8, 0.5, 0.25, 1 },
+                { 1, 0, 1, 1 },
+                { 1, 1, 1, 1 },
+                { 1, 1, 1, 1 },
+                { 1, 1, 1, 1 },
+            },
+        },
+    },
+    MicroUnitF = {
+        RegisterMUFcolors = function() colorRegisterCalls = colorRegisterCalls + 1 end,
+        Delayed_Force_FullUpdate = function() end,
+    },
+    Apply121AfflictionPriorityColors = function()
+        colorApplyCalls = colorApplyCalls + 1
+        return not colorApplyDeferred
+    end,
 }
 
 local DC = {
+    TWELVEONE = true,
     MAGIC = 1,
     CURSE = 2,
     POISON = 3,
@@ -179,6 +204,21 @@ assert(D:GetCureBindingPriorityForType(DC.MAGIC) == 1)
 assert(D:GetCureBindingPriorityForType(DC.DISEASE) == 1)
 assert(D:GetCureBindingPriorityForType(DC.CURSE) == 2)
 assert(D:GetCureBindingPriorityForType(DC.POISON) == 3)
+local colorAssignments = D:GetAfflictionPriorityColorAssignments()
+assert(#colorAssignments == 3, "every assigned Retail native-color cure slot must be listed")
+assert(colorAssignments[1].actionKey == "spell:100" and colorAssignments[1].priority == 1)
+assert(#colorAssignments[1].coveredTypeLabels == 2,
+    "duplicate dispel types handled by one cure action must share one color row")
+assert(D:GetAfflictionPriorityColorLimit() == 3, "Retail must not advertise legacy slots beyond native detector capacity")
+
+local changed, changedReason = D:SetAfflictionPriorityColor(1, 0.12, 0.34, 0.56)
+assert(changed and changedReason == nil)
+assert(D.profile.MF_colors[1][1] == 0.12 and D.profile.MF_colors[1][3] == 0.56)
+assert(colorApplyCalls == 1 and colorRegisterCalls == 1)
+colorApplyDeferred = true
+changed, changedReason = D:SetAfflictionPriorityColor(2, 0.21, 0.43, 0.65)
+assert(changed and changedReason == "deferred", "restricted native recolor must retain profile data and report deferral")
+colorApplyDeferred = false
 local manualGestures = {}
 for _, gesture in ipairs(D:GetSupportedCureBindingGestures()) do manualGestures[gesture] = true end
 assert(manualGestures["*%s5"], "manual Button5 must remain available without a verified PvP bandage")
@@ -189,11 +229,18 @@ assert(not manualGestures["shift-%s3"] and not manualGestures["ctrl-%s4"],
 assert(D:SetCureBindingMode("MANUAL"))
 assert(D.profile.CureBindingManual["spell:100"] == "*%s1")
 assert(D:SetManualCureBinding("spell:100", "ctrl-%s4"))
+colorAssignments = D:GetAfflictionPriorityColorAssignments()
+assert(colorAssignments[1].actionKey == "spell:100" and colorAssignments[1].priority == 1
+    and colorAssignments[1].gesture == "ctrl-%s4",
+    "manual gesture reassignment must not move the cure action's priority color")
 local ok, reason = D:SetManualCureBinding("spell:200", "ctrl-%s4")
 assert(not ok and reason == "duplicate-gesture")
 assert(D:SetManualCureBinding("spell:200", "UNASSIGNED"))
 model = D:GetCureBindingModel()
 assert(model.actions[2].gesture == nil and model.byGesture["*%s2"] == nil)
+colorAssignments = D:GetAfflictionPriorityColorAssignments()
+assert(#colorAssignments == 2 and colorAssignments[1].priority == 1 and colorAssignments[2].priority == 3,
+    "an unassigned cure must hide its row without renumbering retained priority colors")
 D.profile.CureBindingManual["spell:999"] = "alt-%s1"
 D.profile.CureBindingManual["spell:888"] = "alt-%s2"
 local withUnavailable = D:GetCureBindingActions(true)
@@ -204,6 +251,10 @@ D.profile.CureBindingManual["spell:999"] = nil
 D.profile.CureBindingManual["spell:888"] = nil
 
 combat = true
+local combatColor = D.profile.MF_colors[1]
+changed, changedReason = D:SetAfflictionPriorityColor(1, 1, 1, 1)
+assert(not changed and changedReason == "combat" and D.profile.MF_colors[1] == combatColor,
+    "combat must reject profile and protected-region color mutation")
 local before = D:GetCureBindingModel()
 D.Status = {
     FoundSpells = { OnlyCure = found(700) },
@@ -219,7 +270,15 @@ assert(D:FlushPendingCureBindingRefresh())
 assert(D:GetCureBindingActions()[1].spellName == "OnlyCure")
 
 local openWorld = D.profile
-local raid = { CureBindingMode = "AUTO", CureBindingManual = {} }
+local raid = {
+    CureBindingMode = "AUTO",
+    CureBindingManual = {},
+    MF_colors = {
+        { 0.9, 0.1, 0.1, 1 },
+        { 0.1, 0.1, 0.9, 1 },
+        { 0.9, 0.6, 0.2, 1 },
+    },
+}
 D.profile = raid
 D.Status = fullStatus()
 assert(D:RefreshCureBindingModel("raid"))
@@ -227,6 +286,8 @@ assert(D:GetCureBindingModel().mode == "AUTO")
 D.profile = openWorld
 assert(D:RefreshCureBindingModel("open-world"))
 assert(D:GetCureBindingModel().mode == "MANUAL", "environment variants must remain isolated")
+assert(D:GetAfflictionPriorityColor(1)[1] == 0.12,
+    "environment color variants must remain isolated when the active edit profile changes")
 
 D.profile = { CureBindingMode = "AUTO", CureBindingManual = {}, CureBindingLegacySlots = {} }
 D.Status = fullStatus()
@@ -254,6 +315,10 @@ end
 assert(sawTotem and sawBandage and bandageCount == 1,
     "a known Mending Bandage spell action must prevent a duplicate carried-item action")
 assert(D:GetCureBindingPriorityForType(DC.POISON) == nil, "area utility must not own a targeted native color slot")
+for _, assignment in ipairs(D:GetAfflictionPriorityColorAssignments()) do
+    assert(assignment.actionKey ~= "spell:383013" and assignment.actionKey ~= "spell:212640",
+        "area utilities and bandages must never receive affliction color rows")
+end
 manualGestures = {}
 for _, gesture in ipairs(D:GetSupportedCureBindingGestures()) do manualGestures[gesture] = true end
 assert(not manualGestures["*%s5"], "verified PvP bandage must reserve Button5")
@@ -396,6 +461,16 @@ assert(D:RegisterPvPBandageResolver(nil))
 
 assert(D:ResetCureBindingsToAutomatic())
 assert(D.profile.CureBindingMode == "AUTO" and next(D.profile.CureBindingManual) == nil)
+
+D.profile.MF_colors = {
+    { 0.1, 0.2, 0.3, 1 },
+    { 0.4, 0.5, 0.6, 1 },
+    { 0.7, 0.8, 0.9, 1 },
+}
+assert(D:ResetAfflictionPriorityColors())
+assert(D.profile.MF_colors[1][1] == 0.8 and D.profile.MF_colors[2][3] == 0.8
+    and D.profile.MF_colors[3][2] == 0.5,
+    "Restore Default Colors must use the established MF_colors defaults")
 
 if arg and arg[1] == "--self-test-failure" then
     error("intentional cure-binding harness failure")

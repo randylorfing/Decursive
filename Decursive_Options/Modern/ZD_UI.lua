@@ -31,6 +31,10 @@ local floor = math.floor
 local format = string.format
 local unpack = unpack
 
+local function localized(key, fallback)
+    return D.L and D.L[key] or fallback
+end
+
 -- v11.1 Options design system -- a calm midnight shell with bright, accessible
 -- Decursive cyan.  The combat backend is intentionally untouched; this file
 -- owns presentation and settings interaction only.
@@ -396,7 +400,11 @@ local function colorPickerRow(parent, text, y, getter, setter, description)
         local picker = { r=r, g=g, b=b, hasOpacity=false }
         local function commit()
             local nr,ng,nb = ColorPickerFrame:GetColorRGB()
-            if setter then setter({nr,ng,nb}) end
+            local applied = not setter or setter({nr,ng,nb})
+            if applied == false then
+                row:Refresh()
+                return
+            end
             sw.sample:SetColorTexture(nr,ng,nb,1)
         end
         picker.swatchFunc=commit
@@ -1377,9 +1385,10 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
                     or optionValue(node.disabled, inherited.handler, optionInfo(tab.path, node, inherited.handler), false) == true
             end
         end
+        local customSignature = type(tab.signature) == "function" and tab.signature() or ""
         local signature = tab.key .. "|" .. (type(group) == "table"
             and optionStateSignature(group, tab.path, inherited, tab.skipKeys)
-            or "unavailable")
+            or "unavailable") .. "|" .. tostring(customSignature)
         local cached = p._tabRenderCache[signature]
         if cached then return cached end
 
@@ -1409,7 +1418,13 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
             return cached
         end
         local startY = tonumber(p._renderStartY) or -8
+        if type(tab.buildBefore) == "function" then
+            startY = tab.buildBefore(canvas, startY, renderPage) or startY
+        end
         local y = renderOptions(renderPage, group, tab.path, inherited, startY, 0, tab.skipKeys)
+        if type(tab.buildAfter) == "function" then
+            y = tab.buildAfter(canvas, y, renderPage) or y
+        end
         canvas:SetHeight(math.max(520, -y + 24))
         return cached
     end
@@ -1435,6 +1450,7 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
         self.optionScroll:SetScrollChild(cached.canvas)
         cached.canvas:Show()
         refreshRenderedValues(cached.canvas)
+        if cached.renderPage._customRefresh then cached.renderPage._customRefresh() end
         cached.renderPage._needsRebuild = false
         self._needsRebuild = false
     end
@@ -1443,6 +1459,7 @@ function ZD:BuildTabbedOptionPathPage(parent, titleText, subtitleText, tabs, ini
             self:Rebuild()
         elseif self._activeRenderPage then
             refreshRenderedValues(self._activeRenderPage.optionCanvas)
+            if self._activeRenderPage._customRefresh then self._activeRenderPage._customRefresh() end
             self._activeRenderPage._needsRebuild = false
         end
     end
@@ -1458,28 +1475,28 @@ end
 -- field can find settings anywhere in the single v11 UI.
 
 local SEARCH_PAGE_NAMES = {
-    dashboard = "Dashboard",
-    general = "General",
-    sounds = "Sound Notifications",
-    frames = "Micro Unit Frames",
-    curing = "Curing",
-    bleeds = "Bleed Management",
-    cooldowns = "Cooldowns",
-    range = "Range & Visibility",
-    bindings = "Spells & Bindings",
-    filtering = "Affliction Filters",
-    livelist = "Live List",
-    messages = "Messages & Alerts",
-    macro = "Macro",
+    dashboard = "Overview",
+    general = "Advanced & Diagnostics — Profile Settings",
+    sounds = "Alerts & Feedback — Sounds",
+    frames = "MUF Setup — Layout & Appearance",
+    curing = "Cures & Mouse Bindings — Cure Order & Priority",
+    bleeds = "Advanced & Diagnostics — Bleed Detection",
+    cooldowns = "MUF Setup — Range / LoS / Cooldowns",
+    range = "MUF Setup — Units & Visibility",
+    bindings = "Cures & Mouse Bindings — Automatic / Manual",
+    filtering = "Advanced & Diagnostics — Affliction Filtering",
+    livelist = "MUF Setup — Live List",
+    messages = "Alerts & Feedback",
+    macro = "Cures & Mouse Bindings — Mouseover Macro",
 	profiles = "Decursive Profiles",
 	environmentprofiles = "Environment Profiles",
-    lists = "Priority & Skip",
-    integrations = "Detection",
-    testmode = "Test Mode",
-    compat121 = "12.1 Status",
-    diagnostics = "Diagnostics",
-    dispeldb = "Dispel Database",
-    about = "About",
+    lists = "Cures & Mouse Bindings — Priority & Skip Lists",
+    integrations = "Advanced & Diagnostics — Detection & Integrations",
+    testmode = "Advanced & Diagnostics — Test Lab",
+    compat121 = "Advanced & Diagnostics — 12.1 Status",
+    diagnostics = "Advanced & Diagnostics — Diagnostics",
+    dispeldb = "Advanced & Diagnostics — Dispel Database",
+    about = "Advanced & Diagnostics — About",
 }
 
 local SEARCH_GROUP_TO_PAGE = {
@@ -1512,6 +1529,8 @@ local SEARCH_NATIVE_ENTRIES = {
         { "Show MUFs", "micro unit frames display hide" },
         { "Status indicator light", "status light range fail success spacing" },
         { "Lock position", "micro unit frames move unlock handle" },
+        { "Affliction Priority Colors", "MUF center border cure action priority mouse gesture", "colors" },
+        { "Restore Default Colors", "MUF cure priority colors reset", "colors" },
     },
     bleeds = {
         { "Bleed discovery", "bleed auto detection keywords effects" },
@@ -1563,8 +1582,9 @@ local SEARCH_NATIVE_ENTRIES = {
 		{ "Per-specialization profiles", "specialization spec assignment enable" },
 		{ "Current specialization", "spec profile assignment character fallback" },
 		{ "Activation mode", "Automatic Open World Dungeon Follower Mythic+ Raid PvP" },
-		{ "Edit environment", "content behavior profile Open World Dungeon Follower Mythic+ Raid PvP" },
-		{ "Reset Edited Environment", "environment behavior defaults" },
+			{ "Edit Selected Environment Profile", "complete settings Open World Dungeon Follower Mythic+ Raid PvP" },
+			{ "Copy Into Selected", "copy complete Environment Profile" },
+			{ "Reset Selected to Defaults", "complete Environment Profile defaults" },
     },
     lists = {
         { "Priority List", "priority players units add target move order" },
@@ -1608,7 +1628,7 @@ function ZD:BuildSearchIndex(force)
     if self.searchIndex and not force then return self.searchIndex end
 
     local entries, seen = {}, {}
-    local function add(page, name, context, keywords)
+    local function add(page, name, context, keywords, tab)
         name = cleanSearchText(name)
         if name == "" or not SEARCH_PAGE_NAMES[page] then return end
         context = cleanSearchText(context)
@@ -1625,6 +1645,7 @@ function ZD:BuildSearchIndex(force)
             search = lowerSearchText(pageName .. " " .. name .. " " .. context .. " " .. keywords),
             labelSearch = lowerSearchText(name),
             pageSearch = lowerSearchText(pageName),
+            tab = tab,
         }
     end
 
@@ -1636,7 +1657,7 @@ function ZD:BuildSearchIndex(force)
     -- Native v11 controls that do not live in the legacy option model.
     for page, pageEntries in pairs(SEARCH_NATIVE_ENTRIES) do
         for _, entry in ipairs(pageEntries) do
-            add(page, entry[1], "Native v11 setting", entry[2])
+            add(page, entry[1], "Native v11 setting", entry[2], entry[3])
         end
     end
 
@@ -1749,6 +1770,7 @@ end
 
 function ZD:OpenSearchResult(result)
     if not result then return end
+    self.pendingOptionTab = result.tab
     self:ShowPage(result.page)
     if self.frame and self.frame.searchBox then
         self.frame.searchBox.edit:SetText("")
@@ -1966,7 +1988,7 @@ function ZD:CreateUI()
             { "integrations", "Detection", "DE" }, { "dispeldb", "Dispel Database", "DD" },
         }},
         { title = "PROFILES & TOOLS", items = {
-            { "profiles", "Profiles & Modes", "PM" }, { "sharing", "Import / Export", "IE" },
+            { "profiles", "Decursive Profiles", "DP" }, { "sharing", "Import / Export", "IE" },
             { "macro", "Macro", "MC" },
         }},
         { title = "SUPPORT", items = {
@@ -2191,7 +2213,7 @@ function ZD:BuildDashboard(parent)
     local actions = section(p, "QUICK ACTIONS", -412, 90)
     local b1 = button(actions, "Open Test Lab", 140, 30, function() ZD:ShowPage("testmode") end, "primary")
     b1:SetPoint("TOPLEFT", 18, -47)
-    local b2 = button(actions, "Profiles & Modes", 150, 30, function() ZD:ShowPage("profiles") end)
+    local b2 = button(actions, "Decursive Profiles", 150, 30, function() ZD:ShowPage("profiles") end)
     b2:SetPoint("LEFT", b1, "RIGHT", 10, 0)
     local b3 = button(actions, "MUF Settings", 130, 30, function() ZD:ShowPage("frames") end)
     b3:SetPoint("LEFT", b2, "RIGHT", 10, 0)
@@ -2221,6 +2243,87 @@ function ZD:BuildDashboard(parent)
     return p
 end
 
+local function priorityColorAssignmentSignature()
+    local parts = {}
+    local assignments = D.GetAfflictionPriorityColorAssignments
+        and D:GetAfflictionPriorityColorAssignments() or {}
+    for _, assignment in ipairs(assignments) do
+        parts[#parts + 1] = table.concat({
+            tostring(assignment.actionKey),
+            tostring(assignment.priority),
+            tostring(assignment.gesture),
+            tostring(assignment.spellName),
+        }, ":")
+    end
+    return table.concat(parts, "|")
+end
+
+local function buildAfflictionPriorityColorEditor(canvas, startY, renderPage)
+    local assignments = D.GetAfflictionPriorityColorAssignments
+        and D:GetAfflictionPriorityColorAssignments() or {}
+    local rowHeight = 62
+    local cardHeight = 126 + math.max(1, #assignments) * rowHeight
+    local card = section(canvas,
+        localized("MUF_PRIORITY_COLORS_CARD", "Affliction Priority Colors"), startY, cardHeight)
+    local help = label(card,
+        localized("MUF_PRIORITY_COLORS_HELP",
+            "The highest visible cure priority fills the MUF center. A simultaneous lower priority appears as a managed border. Colors follow cure action priority, not its mouse gesture."),
+        10, C.muted, "TOPLEFT", 16, -44)
+    help:SetPoint("RIGHT", -16, 0)
+    help:SetJustifyH("LEFT")
+    help:SetWordWrap(true)
+
+    local rows = {}
+    if #assignments == 0 then
+        local empty = label(card,
+            localized("MUF_PRIORITY_COLORS_EMPTY",
+                "No assigned targeted cure currently owns a native affliction-color slot."),
+            11, C.muted, "TOPLEFT", 16, -88)
+        empty:SetPoint("RIGHT", -16, 0)
+        empty:SetWordWrap(true)
+    else
+        for index, assignment in ipairs(assignments) do
+            local priority = assignment.priority
+            local gesture = DC.MouseButtonsReadable and DC.MouseButtonsReadable[assignment.gesture]
+                or tostring(assignment.gesture or localized("CURE_BINDING_UNASSIGNED", "Unassigned"))
+            local cureName = tostring(assignment.spellName or assignment.actionKey or "Cure")
+            local types = table.concat(assignment.coveredTypeLabels or {}, ", ")
+            local titleText = localized("MUF_PRIORITY_COLOR_ROW", "Priority %d — %s"):format(priority, cureName)
+            local detailText = localized("MUF_PRIORITY_COLOR_ROW_DESC", "%s · Removes %s"):format(
+                gesture, types ~= "" and types or localized("MUF_PRIORITY_COLOR_TYPES_UNKNOWN", "configured afflictions"))
+            local row = colorPickerRow(card, titleText, -82 - ((index - 1) * rowHeight),
+                function()
+                    return D.GetAfflictionPriorityColor and D:GetAfflictionPriorityColor(priority)
+                        or D.profile and D.profile.MF_colors and D.profile.MF_colors[priority]
+                end,
+                function(color) return ZD:SetAfflictionPriorityColor(priority, color) end,
+                detailText)
+            rows[#rows + 1] = row
+        end
+    end
+
+    local reset = button(card,
+        localized("MUF_PRIORITY_COLORS_RESET", "Restore Default Colors"), 176, 28,
+        function()
+            if ZD:ResetAfflictionPriorityColors() ~= false then
+                for _, row in ipairs(rows) do row:Refresh() end
+            end
+        end)
+    reset:SetPoint("BOTTOMLEFT", 16, 14)
+    local utilityHelp = label(card,
+        localized("MUF_PRIORITY_COLORS_UTILITIES",
+            "Target, focus, resurrection, bandage, area, self-only, enemy, and custom utility bindings do not paint affliction colors."),
+        9, C.muted, "BOTTOMLEFT", 208, 17)
+    utilityHelp:SetPoint("RIGHT", -16, 0)
+    utilityHelp:SetJustifyH("LEFT")
+    utilityHelp:SetWordWrap(true)
+
+    renderPage._customRefresh = function()
+        for _, row in ipairs(rows) do row:Refresh() end
+    end
+    return startY - cardHeight - 12
+end
+
 function ZD:BuildFrames(parent)
     local skipDisplay = {
         Environment121Mode=true, Environment121ActiveProfile=true, Detection121Mode=true,
@@ -2242,7 +2345,10 @@ function ZD:BuildFrames(parent)
         "Control MUF visibility, size, ordering, spacing, colors, and performance.", {
             {key="layout", name="Layout & Display", path={"MicroFrameOpt","displayOpts"}, skipKeys=skipDisplay, width=145},
             {key="spacing", name="Spacing & Opacity", path={"MicroFrameOpt","AdvDispOptions"}, width=155},
-            {key="colors", name="Colors", path={"MicroFrameOpt","MUFsColors"}, width=105},
+            {key="colors", name="Colors", path={"MicroFrameOpt","MUFsColors"}, width=105,
+                skipKeys={c1=true,c2=true,c3=true,c4=true,c5=true,c6=true,c7=true},
+                buildBefore=buildAfflictionPriorityColorEditor,
+                signature=priorityColorAssignmentSignature},
             {key="performance", name="Performance", path={"MicroFrameOpt","PerfOptions"}, width=120},
         }, "layout")
 
@@ -2425,10 +2531,10 @@ end
 
 function ZD:BuildProfiles(parent)
     local p = pageFrame(parent)
-    self:PageTitle(p, "Profiles & Modes", "Two layers: your AceDB user profile holds everything; environment modes swap behavior blocks inside it.")
+    self:PageTitle(p, "Decursive Profiles", "Each Decursive Profile contains five complete Environment Profiles.")
 
-    local callout = section(p, "Do not confuse these", -66, 78)
-    local calloutText = label(callout, "User profile = which saved setup is active (Default, Healer, etc.).  Environment = Open World / M+ / Raid / PvP behavior inside that profile.", 11, C.text, "TOPLEFT", 18, -40)
+    local callout = section(p, "Container and workspace", -66, 78)
+    local calloutText = label(callout, "Decursive Profile = the named container. Environment Profile = one complete Open World, Party/Dungeon, Mythic+, Raid, or PvP settings workspace inside it.", 11, C.text, "TOPLEFT", 18, -40)
     calloutText:SetWidth(620)
 
     local function profileValues()
@@ -2439,11 +2545,11 @@ function ZD:BuildProfiles(parent)
         if #out == 0 then out[1] = { key = "default", name = "Default" } end
         return out
     end
-    p.profileCycle = cycleButton(p, "User profile", -158, profileValues,
+    p.profileCycle = cycleButton(p, "Decursive Profile", -158, profileValues,
         function() return ZD:GetUserProfileID() end,
         function(profileID) ZD:SetUserProfile(profileID) end)
 
-    local user = section(p, "Profile Management", -202, 172)
+    local user = section(p, "Decursive Profile Management", -202, 172)
     user.nameBox = editBox(user, 270, 36, false)
     user.nameBox:SetPoint("TOPLEFT", 18, -48)
     user.nameBox.edit:SetText("")
@@ -2471,7 +2577,7 @@ function ZD:BuildProfiles(parent)
             { key = "PVP", name = "PvP" },
         }
     end
-    local behavior = section(p, "Environment Mode", -388, 226)
+    local behavior = section(p, "Environment Profile Activation", -388, 226)
     p.modeCycle = cycleButton(behavior, "Mode selection", -46, modeValues,
         function() return ZD:GetEnvironmentSetting() end,
         function(key) ZD:SetEnvironmentSetting(key) end)
@@ -2495,14 +2601,14 @@ function ZD:BuildProfiles(parent)
         p.pvpTextAlerts.control:Refresh()
         local _, envName = ZD:GetActiveEnvironment()
         p.activeText:SetText("Currently active: " .. tostring(envName))
-        p.modeHelp:SetText("Automatic mode distinguishes Open World, normal/follower dungeons, Mythic+, Raid and PvP without changing your user profile.")
+        p.modeHelp:SetText("Automatic activation selects among the five complete Environment Profiles without changing the Decursive Profile container.")
     end
     return p
 end
 
 function ZD:BuildSharing(parent)
     local p = pageFrame(parent)
-    self:PageTitle(p, "Import / Export", "Share only the active AceDB user profile, including its environment behavior blocks.")
+    self:PageTitle(p, "Import / Export", "Transfer the complete Decursive Profile container, including all five Environment Profiles.")
 
     local export = section(p, "Export", -66, 206)
     export.box = editBox(export, 598, 105, true)
@@ -2532,7 +2638,7 @@ function ZD:BuildSharing(parent)
         end
     end, "primary")
     importBtn:SetPoint("BOTTOMLEFT", 18, 14)
-    label(import, "Import replaces settings in the active user profile. Global and class-scoped data remain untouched.", 10, C.muted, "BOTTOMLEFT", 254, 20)
+    label(import, "Import replaces the active Decursive Profile container. Account metadata and diagnostics remain untouched.", 10, C.muted, "BOTTOMLEFT", 254, 20)
 
     function p:Refresh() end
     return p
