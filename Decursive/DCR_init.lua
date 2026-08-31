@@ -1176,7 +1176,10 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
     end
 
     local profileManager = T.ProfileManager
-    local futureStorage, futureVersion = profileManager and profileManager:IsFutureStorage(_G.DecursiveDB)
+    local futureStorage, futureVersion
+    if profileManager then
+        futureStorage, futureVersion = profileManager:IsFutureStorage(_G.DecursiveDB)
+    end
     if futureStorage then
         profileManager:InitializeStorage(_G.DecursiveDB)
         D.ProfileSchemaIncompatible = true
@@ -1196,7 +1199,10 @@ function D:OnInitialize() -- Called on ADDON_LOADED by AceAddon -- {{{
     D.defaults = D:GetDefaultsSettings();
 
     if type(_G.DecursiveDB) ~= "table" then _G.DecursiveDB = {} end
-    local defaultProfile, storageError = profileManager and profileManager:InitializeStorage(_G.DecursiveDB) or "Default"
+    local defaultProfile, storageError = "Default"
+    if profileManager then
+        defaultProfile, storageError = profileManager:InitializeStorage(_G.DecursiveDB)
+    end
     if storageError then return false end
     self.db = LibStub("AceDB-3.0"):New("DecursiveDB", D.defaults, defaultProfile)
     if profileManager then profileManager:BindDatabase(self.db) end
