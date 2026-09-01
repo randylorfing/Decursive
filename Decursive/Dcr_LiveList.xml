@@ -67,7 +67,7 @@
 
     </Script>
 
-    <Frame name="DcrLiveList" frameStrata="LOW" toplevel="true" enableMouse="true" movable="true" hidden="false" parent="UIParent"> <!-- {{{ -->
+    <Frame name="DcrLiveList" frameStrata="LOW" toplevel="true" enableMouse="true" movable="true" hidden="true" parent="UIParent"> <!-- {{{ -->
         <Anchors>
             <Anchor point="TOP" relativePoint="BOTTOM" relativeTo="DecursiveMainBar">
                 <Offset>

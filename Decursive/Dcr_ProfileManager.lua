@@ -126,6 +126,21 @@ end
 
 local function currentIdentity()
 	local characterKey
+	local aceDBCharacterKey
+	local unitName
+	local displayRealm
+	if type(_G.UnitName) == "function" and type(_G.GetRealmName) == "function" then
+		local nameOK, name = pcall(_G.UnitName, "player")
+		local realmOK, realm = pcall(_G.GetRealmName)
+		if nameOK and realmOK and isPublicValue(name) and isPublicValue(realm)
+			and isSafeText(name, 64) and isSafeText(realm, 64)
+		then
+			unitName = name
+			displayRealm = realm
+			local candidate = name .. " - " .. realm
+			if validCharacterKey(candidate) then aceDBCharacterKey = candidate end
+		end
+	end
 	if type(_G.UnitFullName) == "function" then
 		local ok, name, realm = pcall(_G.UnitFullName, "player")
 		if ok and isPublicValue(name) and isPublicValue(realm) and isSafeText(name, 64) then
@@ -138,15 +153,8 @@ local function currentIdentity()
 			if validCharacterKey(candidate) then characterKey = candidate end
 		end
 	end
-	if not characterKey and type(_G.UnitName) == "function" and type(_G.GetRealmName) == "function" then
-		local nameOK, name = pcall(_G.UnitName, "player")
-		local realmOK, realm = pcall(_G.GetRealmName)
-		if nameOK and realmOK and isPublicValue(name) and isPublicValue(realm)
-			and isSafeText(name, 64) and isSafeText(realm, 64)
-		then
-			local candidate = name .. " - " .. realm
-			if validCharacterKey(candidate) then characterKey = candidate end
-		end
+	if not characterKey and unitName and displayRealm then
+		characterKey = aceDBCharacterKey
 	end
 
 	local specIndex
@@ -162,7 +170,7 @@ local function currentIdentity()
 	local specKeys = {}
 	if specID then specKeys[#specKeys + 1] = "id:" .. specID end
 	if specIndex then specKeys[#specKeys + 1] = "index:" .. specIndex end
-	return characterKey, specKeys, specIndex
+	return characterKey, specKeys, specIndex, aceDBCharacterKey or characterKey
 end
 
 local function currentClassToken()
@@ -432,7 +440,7 @@ function Manager:InitializeStorage(saved)
 	self.saved = saved
 	self.editingPreview = false
 	self.pendingResolution = nil
-	self.characterKey, self.specKeys, self.specIndex = currentIdentity()
+	self.characterKey, self.specKeys, self.specIndex, self.aceDBCharacterKey = currentIdentity()
 	local source = saved.profileManager
 	local storedVersion = type(source) == "table" and tonumber(source.schemaVersion) or 0
 	self.storedVersion = storedVersion or 0
@@ -464,7 +472,15 @@ function Manager:InitializeStorage(saved)
 	local environment = self:ResolveEnvironment(activeID)
 	local aceKey = self:GetAceKey(activeID, environment) or "Default"
 	saved.profileKeys = type(saved.profileKeys) == "table" and saved.profileKeys or {}
-	if self.characterKey then saved.profileKeys[self.characterKey] = aceKey end
+	if self.aceDBCharacterKey then saved.profileKeys[self.aceDBCharacterKey] = aceKey end
+	if self.characterKey and self.characterKey ~= self.aceDBCharacterKey
+		and saved.profileKeys[self.characterKey] ~= nil
+	then
+		-- Keep only the known normalized alias synchronized. AceDB itself uses
+		-- UnitName + GetRealmName, while manager assignments retain UnitFullName's
+		-- normalized realm identity.
+		saved.profileKeys[self.characterKey] = aceKey
+	end
 	self.activeProfileID = activeID
 	self.activeEnvironment = environment
 	self.resetPerformed = resetRequired
@@ -491,7 +507,19 @@ function Manager:BindDatabase(db)
 	local currentID, environment = profileIDByStorageKey(self.data, db.GetCurrentProfile and db:GetCurrentProfile())
 	self.activeProfileID = currentID or self:ResolveActiveProfileID()
 	self.activeEnvironment = environment or self:ResolveEnvironment(self.activeProfileID)
-	return true
+	local expectedProfileID = self:ResolveActiveProfileID()
+	local expectedEnvironment = self:ResolveEnvironment(expectedProfileID)
+	local expectedAceKey = self:GetAceKey(expectedProfileID, expectedEnvironment)
+	if expectedAceKey and db.GetCurrentProfile and db:GetCurrentProfile() ~= expectedAceKey then
+		local reconciled, state = self:ApplyProfileVariant(
+			expectedProfileID, expectedEnvironment, "database-bind-reconcile")
+		if not reconciled then return false, state end
+		if state ~= "queued" and db:GetCurrentProfile() ~= expectedAceKey then
+			return false, "profile-reconcile-failed"
+		end
+		return true, state
+	end
+	return true, "verified"
 end
 
 function Manager:GetSchemaStatus()
@@ -558,21 +586,26 @@ function Manager:GetCatalog()
 	return result
 end
 
-function Manager:ResolveActiveProfileID()
+function Manager:ResolveBaseProfileID()
 	if not self.data then return self.DEFAULT_PROFILE_ID end
 	if self.readOnly then return profileIDByStorageKey(self.data, self.futureAceKey) or self.DEFAULT_PROFILE_ID end
 	local selection = self.data.selection
 	local character = self.characterKey and selection.characters[self.characterKey] or nil
-	if character then
-		if character.perSpecEnabled then
-			for _, specKey in ipairs(self.specKeys or {}) do
-				if self.data.profiles[character.specs[specKey]] then return character.specs[specKey], "spec" end
-			end
-		end
-		if self.data.profiles[character.profileID] then return character.profileID, "character" end
-	end
+	if character and self.data.profiles[character.profileID] then return character.profileID, "character" end
 	if self.data.profiles[selection.account] then return selection.account, "account" end
 	return self.DEFAULT_PROFILE_ID, "fallback"
+end
+
+function Manager:ResolveActiveProfileID()
+	if not self.data then return self.DEFAULT_PROFILE_ID end
+	if self.readOnly then return profileIDByStorageKey(self.data, self.futureAceKey) or self.DEFAULT_PROFILE_ID end
+	local character = self.characterKey and self.data.selection.characters[self.characterKey] or nil
+	if character and character.perSpecEnabled then
+		for _, specKey in ipairs(self.specKeys or {}) do
+			if self.data.profiles[character.specs[specKey]] then return character.specs[specKey], "spec" end
+		end
+	end
+	return self:ResolveBaseProfileID()
 end
 
 function Manager:DetectEnvironment()
@@ -649,12 +682,13 @@ end
 
 function Manager:GetAssignmentSnapshot()
 	local character = self.characterKey and self.data.selection.characters[self.characterKey] or nil
-	local specID
+	local storedSpecID
 	if character then
 		for _, specKey in ipairs(self.specKeys or {}) do
-			if self.data.profiles[character.specs[specKey]] then specID = character.specs[specKey] break end
+			if self.data.profiles[character.specs[specKey]] then storedSpecID = character.specs[specKey] break end
 		end
 	end
+	local specID = character and character.perSpecEnabled and storedSpecID or nil
 	local active, source = self:ResolveActiveProfileID()
 	return {
 		account = self.data.selection.account,
@@ -662,6 +696,7 @@ function Manager:GetAssignmentSnapshot()
 		characterKey = self.characterKey,
 		perSpecEnabled = character and character.perSpecEnabled == true or false,
 		spec = specID,
+		storedSpec = storedSpecID,
 		active = active,
 		activeSource = source,
 		characterAvailable = self.characterKey ~= nil,
@@ -773,8 +808,9 @@ function Manager:RestoreRuntimeEnvironment()
 end
 
 function Manager:RefreshIdentity(reason)
-	local characterKey, specKeys, specIndex = currentIdentity()
+	local characterKey, specKeys, specIndex, aceDBCharacterKey = currentIdentity()
 	self.characterKey = characterKey or self.characterKey
+	self.aceDBCharacterKey = aceDBCharacterKey or self.aceDBCharacterKey
 	self.specKeys = #specKeys > 0 and specKeys or self.specKeys
 	self.specIndex = specIndex or self.specIndex
 	return self:ApplyResolvedProfile(reason or "identity-refresh")
@@ -1200,8 +1236,25 @@ function Manager:InstallCompatibilityAdapter(db)
 	end
 	db.GetDualSpecProfile = function(_, spec)
 		local record = Manager.characterKey and Manager.data.selection.characters[Manager.characterKey]
-		local profileID = record and record.specs["index:" .. tostring(spec or Manager.specIndex)]
-		profileID = profileID or Manager:ResolveActiveProfileID()
+		local profileID
+		if record and record.perSpecEnabled then
+			if spec ~= nil then
+				local candidate = record.specs["index:" .. tostring(spec)]
+				if Manager.data.profiles[candidate] then profileID = candidate end
+				if not profileID and spec == Manager.specIndex then
+					for _, specKey in ipairs(Manager.specKeys or {}) do
+						candidate = record.specs[specKey]
+						if Manager.data.profiles[candidate] then profileID = candidate break end
+					end
+				end
+			else
+				for _, specKey in ipairs(Manager.specKeys or {}) do
+					local candidate = record.specs[specKey]
+					if Manager.data.profiles[candidate] then profileID = candidate break end
+				end
+			end
+		end
+		profileID = profileID or Manager:ResolveBaseProfileID()
 		return Manager:GetAceKey(profileID, Manager:ResolveEnvironment(profileID))
 	end
 	db.SetDualSpecProfile = function(_, value, spec)

@@ -8,7 +8,7 @@ John Wellesz and the packager traps that have shipped broken builds four times.
     Branches     master (stable), alpha (prerelease)
     License      GNU GPL v3
     CurseForge   project 1659159
-    Reviewed at  v12.1.4-alpha.4
+    Reviewed at  v12.1.4-alpha.5 candidate
 
 Where this document and the repository disagree, the repository wins. Re-verify
 against `.pkgmeta`, the workflow file, and the `.toc` files before relying on
@@ -231,7 +231,7 @@ The packager substitutes some tokens at build time and leaves others alone.
 Getting this backwards either breaks versioning or deletes source.
 
     TOKEN                        COUNT      HANDLING
-    @project-version@            50         RESTORE before committing
+    @project-version@            51         RESTORE before committing
     @project-date-iso@           4          RESTORE before committing
     --@debug@ / --@end-debug@    0          MUST STAY ABSENT (section 10)
     @no-lib-strip@               2 pairs    Leave untouched, not substituted here
@@ -242,13 +242,16 @@ Getting this backwards either breaks versioning or deletes source.
 Substitute only in `.lua`, `.xml`, `.toc`. Never blanket-replace in `.md`, where
 the version number appears legitimately in changelog headings.
 
-**Four occurrences of the version string are DELIBERATE LITERALS and must
+**Current release-identity occurrences are DELIBERATE LITERALS and must
 survive:**
 
 1. the `## vX.Y.Z` changelog heading
 2. `## X-Zhaohu-12.1-Patch:` in the TOC
 3. the release-notes title
-4. a dated code comment in `Dcr_12_1.lua`
+4. current-release pointers in `OldChangeLog.md` and `WhatsNew.md`
+
+Historical changelog headings, prior release-note files, audit evidence, test
+fixtures, and published-artifact provenance retain the version they describe.
 
 Restore tokens by matching each line's exact shape, then confirm the counts
 return to baseline:
@@ -296,11 +299,13 @@ the same paths at build time, and the duplicate collides with the self-referenci
 move — `mv` cannot merge a directory onto an existing same-named directory,
 producing a hard `Directory not empty` failure.
 
-**There is no `manual-changelog:`, on purpose.**
-The packager resolves the changelog path ONCE, before `move-folders` runs, and
-never refreshes it. After the self-referencing move the cached path no longer
-exists, which produced an empty changelog, a malformed CurseForge payload
-(`Missing field metadata`), and a failed GitHub release. DBM does not use it either.
+**The manual changelog must remain source-only.**
+The packager resolves the changelog path once, before `move-folders` runs. The
+current `manual-changelog: Decursive/CHANGELOG.md` is safe because the same file
+is ignored from package staging, so its checkout path is not moved. Removing the
+ignore or pointing at a packaged copy can recreate the empty changelog,
+malformed CurseForge payload (`Missing field metadata`), and failed GitHub
+release documented below.
 
 **`ignore:` paths resolve from the REPO ROOT.**
 They are plain shell globs matched against the path as the packager prints it —
@@ -357,13 +362,15 @@ the dispatch ref. Use it before every tag:
 `<assembled-release-directory>` — inspects the BUILT, expanded package directory
 (normally `.release`), not the source checkout or a zip archive. It checks
 structure, duplicated delimiters, every unsubstituted package token including
-the abbreviated hash, a Lua **syntax parse of every packaged file**, TOC
-references, both addon licenses, case-insensitive filename collisions, and
-source-only files that leaked in.
+the abbreviated hash, consistent TOC version/build identity, Interface 120100
+and schema 6, a Lua **syntax parse of every packaged file**, TOC references,
+both addon licenses, case-insensitive filename collisions, a closed Markdown
+allowlist, and source-only files that leaked in.
 
 [.github/scripts/validate-v13.sh](.github/scripts/validate-v13.sh) — repository
 invariants: workflow permissions and immutable action pins, the
-package-token baseline (50 version / 4 date / 1 hash), TOC authorship and licence
+package-token baseline (51 version / 4 date / 1 hash), candidate identity,
+TOC authorship and licence
 metadata, localization format compatibility and coverage, and v13 architecture
 boundaries.
 
@@ -500,8 +507,10 @@ A git-tracked `Libs/` colliding with an externally fetched one during the
 self-referencing move. Remove the `externals` block.
 
 **`Missing field metadata` (HTTP 400) / GitHub release "Problems parsing JSON"**
-Stale `manual-changelog` path, resolved before `move-folders` and never
-refreshed. Remove the directive.
+A `manual-changelog` path was resolved to a packaged file that
+`move-folders` relocated before upload. Keep the changelog source-only through
+`.pkgmeta` ignore rules so its checkout path remains stable, and verify the
+credential-free package stage before publishing.
 
 **No CurseForge line in the log at all**
 Not a credentials fault. The packager did not recognise the project — check

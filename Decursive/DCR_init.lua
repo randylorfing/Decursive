@@ -1502,7 +1502,7 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
         _G.DecursiveTextFrame:Show()
     end
 
-    if FirstEnable and not D.profile.NoStartMessages then
+    if FirstEnable and D.profile and not D.profile.NoStartMessages then
         D:ColorPrint(0.3, 0.5, 1, L["IS_HERE_MSG"]);
         -- D:ColorPrint(0.3, 0.5, 1, L["SHOW_MSG"]);
     end
@@ -1517,12 +1517,66 @@ function D:OnEnable() -- called after PLAYER_LOGIN -- {{{
 
 end -- // }}}
 
+-- DCR_COMBAT_RECOVERY_BEGIN
+function D:RequestConfigurationAfterCombat(reason)
+    self.PendingConfigurationAfterCombat = true
+    self.PendingCombatMUFRecovery = true
+    self.PendingConfigurationReason = type(reason) == "string" and reason or "configuration"
+    return false
+end
+
+function D:RunPostCombatRecovery(reason)
+    if InCombatLockdown and InCombatLockdown() then return false end
+
+    local needsConfiguration = self.PendingConfigurationAfterCombat == true
+    local needsMUFRecovery = self.PendingCombatMUFRecovery == true
+    if needsConfiguration and self:SetConfiguration() ~= true then
+        return false
+    end
+
+    if not self.DcrFullyInitialized then return false end
+    if self.FlushPendingCureBindingRefresh then
+        self:FlushPendingCureBindingRefresh()
+    end
+    if self.MicroUnitF and self.MicroUnitF.PendingContextMUFScale121
+        and self.MicroUnitF.ApplyContextMUFScale
+    then
+        self.MicroUnitF:ApplyContextMUFScale()
+    end
+
+    local pendingOrder = self.GetPendingMUFOrderMode and self:GetPendingMUFOrderMode() or nil
+    if pendingOrder then
+        needsMUFRecovery = true
+        if not self.ApplyPendingMUFOrderMode or self:ApplyPendingMUFOrderMode() ~= true then
+            self.PendingCombatMUFRecovery = true
+            return false
+        end
+    end
+
+    if needsMUFRecovery then
+        local recovered = self.MicroUnitF and self.MicroUnitF.RecoverAfterCombat
+            and self.MicroUnitF:RecoverAfterCombat(reason or "PLAYER_REGEN_ENABLED")
+        if recovered ~= true then
+            self.PendingCombatMUFRecovery = true
+            return false
+        end
+        self.PendingCombatMUFRecovery = nil
+    end
+    return true
+end
+-- DCR_COMBAT_RECOVERY_END
+
 function D:SetConfiguration() -- {{{
 
     if D.ProfileSchemaIncompatible or D.ProfileManager and D.ProfileManager:IsReadOnly()
         or T._SelfDiagnostic() == 2 or not D:IsEnabled() then
         return false;
     end
+    if InCombatLockdown and InCombatLockdown() then
+        return D:RequestConfigurationAfterCombat("SetConfiguration")
+    end
+    D.PendingConfigurationAfterCombat = nil
+    D.PendingConfigurationReason = nil
     local prev_CatchAllErrors = T._CatchAllErrors
     T._CatchAllErrors = "SetConfiguration"; -- During init we catch all the errors else, if a library fails we won't know it.
 
@@ -1700,7 +1754,12 @@ function D:SetConfiguration() -- {{{
 
     D:Debug("Loading profile datas...");
 
-    D:Init(); -- initialize Dcr core (set frames display, scans available cleansing spells)
+    local configured = D:Init() -- initialize Dcr core (set frames display, scans available cleansing spells)
+    if configured ~= true then
+        T._CatchAllErrors = prev_CatchAllErrors
+        D:RequestConfigurationAfterCombat("Init")
+        return false
+    end
 
     D.MicroUnitF.MaxUnit = D.profile.DebuffsFrameMaxCount;
 
@@ -1852,6 +1911,10 @@ end -- }}}
 -------------------------------------------------------------------------------
 function D:Init() --{{{
 
+    if InCombatLockdown and InCombatLockdown() then
+        return D:RequestConfigurationAfterCombat("Init")
+    end
+
     if (D.profile.OutputWindow == nil or not D.profile.OutputWindow) then
         D.Status.OutputWindow = DEFAULT_CHAT_FRAME;
         D.profile.OutputWindow =  "DEFAULT_CHAT_FRAME";
@@ -1892,7 +1955,6 @@ function D:Init() --{{{
 
 
     DcrLiveList:SetScale(D.profile.LiveListScale);
-    DcrLiveList:Show();
     D:PlaceLL();
 
     if D.profile.BarHidden then
@@ -1923,8 +1985,10 @@ function D:Init() --{{{
 
 
     -- Configure spells
-    D:Configure();
+    local configured = D:Configure()
+    if configured ~= true then return false end
 
+    return true
 end --}}}
 
 local function SpellIterator() -- {{{
@@ -2065,10 +2129,7 @@ function D:Configure() --{{{
 
     if InCombatLockdown() then
         D:Debug("|cFFFF0000D:Configure postponed, in combat!|r");
-        D:AddDelayedFunctionCall (
-        "Configure", self.Configure,
-        self);
-        return false;
+        return D:RequestConfigurationAfterCombat("Configure")
     end
 
     -- first empty out the old "spellbook"

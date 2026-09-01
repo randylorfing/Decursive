@@ -13,11 +13,11 @@ local function readSource(path)
 	return source
 end
 
-UnitFullName = function() return "Tester", "Test Realm" end
+UnitFullName = function() return "Tester", "TestRealm" end
 UnitName = function() return "Tester" end
 UnitClass = function() return "Priest", "PRIEST" end
 GetRealmName = function() return "Test Realm" end
-GetNormalizedRealmName = GetRealmName
+GetNormalizedRealmName = function() return "TestRealm" end
 GetSpecialization = function() return 1 end
 GetSpecializationInfo = function() return 256 end
 InCombatLockdown = function() return inCombat end
@@ -141,6 +141,66 @@ for index, environment in ipairs(restarted.ENVIRONMENT_ORDER) do
 	assert(saved.profiles[restarted:GetAceKey("default", environment)].divergent == index)
 end
 
+local identitySaved = {}
+local identityManager = loadManager(identitySaved)
+assert(identityManager.characterKey == "Tester - TestRealm")
+assert(identityManager.aceDBCharacterKey == "Tester - Test Realm")
+local staleID = assert(identityManager:CreateProfile("Stale physical profile"))
+assert(identityManager:SetAssignment("character", nil))
+assert(identityManager:SetAssignment("account", "default"))
+local staleKey = identityManager:GetAceKey(staleID, "OPEN_WORLD")
+identitySaved.profileKeys["Tester - Test Realm"] = staleKey
+identitySaved.profileKeys["Tester - TestRealm"] = staleKey
+identitySaved.profileKeys["Other - Realm"] = "unrelated-profile-key"
+local reloadedIdentityManager, _, expectedKey = loadManager(identitySaved)
+identityManager = reloadedIdentityManager
+assert(expectedKey == identityManager:GetAceKey("default", "OPEN_WORLD"))
+assert(identitySaved.profileKeys["Tester - Test Realm"] == expectedKey,
+	"AceDB display-realm character key was not repaired")
+assert(identitySaved.profileKeys["Tester - TestRealm"] == expectedKey,
+	"known normalized profileKeys alias was not synchronized")
+assert(identitySaved.profileKeys["Other - Realm"] == "unrelated-profile-key",
+	"unrelated AceDB character keys must not be cleaned")
+
+assert(identityManager:SetAssignment("spec", staleID))
+local assignment = identityManager:GetAssignmentSnapshot()
+assert(assignment.perSpecEnabled == false and assignment.spec == nil)
+assert(assignment.storedSpec == staleID and assignment.active == "default" and assignment.activeSource == "account")
+
+local currentIdentityProfile = staleKey
+local boundD
+identityManager, boundD = loadManager(identitySaved)
+local identityDB = { sv = identitySaved, profile = identitySaved.profiles[currentIdentityProfile] }
+function identityDB.RegisterCallback() end
+function identityDB:GetCurrentProfile() return currentIdentityProfile end
+function identityDB:SetProfile(key)
+	currentIdentityProfile = key
+	self.profile = identitySaved.profiles[key]
+	boundD.profile = self.profile
+end
+local bound, bindState = identityManager:BindDatabase(identityDB)
+assert(bound and bindState == "applied" and currentIdentityProfile == expectedKey,
+	"BindDatabase did not reconcile the loaded physical profile")
+assert(identityDB:GetDualSpecProfile() == expectedKey,
+	"disabled compatibility getter exposed a dormant specialization profile")
+assert(identityManager:SetPerSpecEnabled(true))
+assignment = identityManager:GetAssignmentSnapshot()
+assert(assignment.spec == staleID and assignment.storedSpec == staleID and assignment.activeSource == "spec")
+assert(identityDB:GetDualSpecProfile() == staleKey)
+assert(identityDB:GetDualSpecProfile(1) == staleKey)
+assert(identityManager:SetPerSpecEnabled(false))
+assignment = identityManager:GetAssignmentSnapshot()
+assert(assignment.spec == nil and assignment.storedSpec == staleID and assignment.activeSource == "account")
+
+currentIdentityProfile = staleKey
+inCombat = true
+bound, bindState = identityManager:BindDatabase(identityDB)
+assert(bound and bindState == "queued" and currentIdentityProfile == staleKey,
+	"combat reconciliation did not defer the physical profile switch")
+inCombat = false
+assert(identityManager:HandleCombatEnded())
+assert(currentIdentityProfile == expectedKey, "deferred bind reconciliation did not restore the resolved profile")
+
 local currentProfile = saved.profileKeys["Tester - Test Realm"]
 local D
 manager, D = loadManager(saved)
@@ -187,4 +247,4 @@ assert(initSource:find('profileManager:IsFutureStorage') < initSource:find('D:Se
 assert(initSource:find('profileManager:IsFutureStorage') < initSource:find('AceDB%-3%.0'))
 
 if arg and arg[1] == "--self-test-failure" then error("intentional profile-manager harness failure") end
-io.write("PASS: schema-6 reset, thirteen-class destruction, five fresh variants, reload/restart, copy/reset/IO, malformed input, and future immutability\n")
+io.write("PASS: schema-6 reset, exact AceDB identity reconciliation, dormant spec isolation, five fresh variants, copy/reset/IO, malformed input, and future immutability\n")

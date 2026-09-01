@@ -1,5 +1,50 @@
 # Zhaohu-Decursive Changelog
 
+## v12.1.4-alpha.5
+
+### Correct profile assignment and reconciliation
+- Use AceDB's exact `UnitName + GetRealmName` character key for `profileKeys`
+  while retaining the profile manager's normalized identity. Only the known
+  normalized alias is synchronized; unrelated saved keys are preserved.
+- Reconcile the physically loaded AceDB profile with the resolved Decursive
+  Profile and Environment Profile after database binding, including the existing
+  combat-deferred path.
+- Keep dormant specialization mappings saved but inactive while
+  per-specialization profiles are disabled. The assignment UI now distinguishes
+  active, saved-but-inactive, and fallback states, and the LibDualSpec adapter
+  honors the same enabled flag.
+
+### Recover MUFs deterministically after combat startup
+- Treat configuration as one combat-safe transaction. Secure state is not
+  cleared in combat, initialization is reported complete only after secure
+  configuration succeeds, and `PLAYER_REGEN_ENABLED` applies deferred
+  configuration, bindings, sizing, ordering, creation, attributes, and layout in
+  a deterministic order.
+- Preserve the MUF object when a delayed `Create` call is queued, recreate
+  missing public-unit MUFs after combat, and guard protected frame visibility
+  and mouse changes until an out-of-combat boundary.
+- Defer MUF ordering without writing the active profile until its layout can be
+  applied. The settings page reports the pending state.
+- Start the Live List hidden so profile-driven visibility is applied without a
+  startup flash.
+
+### Make MUF sizing follow the edited environment
+- Open World and PvP display both Party and Raid MUF size controls;
+  Party/Dungeon and Mythic+ display Party only; Raid displays Raid only.
+- Switching the edited or previewed Environment Profile refreshes the controls
+  immediately. Hidden values stay saved and cannot be changed through the hidden
+  UI.
+
+### Harden packaging and regression coverage
+- Exclude release notes, changelogs, and internal root documents from player
+  packages while retaining the source changelog as upload metadata. The shipped
+  README now links to its source-only environment-profile guide on GitHub.
+- Expand package validation with a closed Markdown allowlist and consistent
+  TOC version, interface, schema, and alpha5 build-identity checks.
+- Add executable regression coverage for combat-startup recovery, secure MUF
+  attributes, profile-key reconciliation, dormant specialization mappings,
+  environment-aware MUF controls, deferred ordering, and Live List startup.
+
 ## v12.1.4-alpha.4
 
 ### BREAKING: profile schema 6 resets all existing Decursive settings

@@ -413,8 +413,8 @@ end --}}}
 function D:PLAYER_REGEN_DISABLED() -- {{{
     -- this is not reliable for testing unitframe modifications authorization,
     -- this event fires after the player enters in combat, only InCombatLockdown() may be used for critical checks
-    self.Status.Combat = true;
-    if self.MFContainerHandle.isMoving then
+    if self.Status then self.Status.Combat = true end
+    if self.MFContainerHandle and self.MFContainerHandle.isMoving then
         -- PLAYER_REGEN_DISABLED arrives after lockdown is active. The MUF
         -- container owns secure action buttons, so even stopping a drag here
         -- is a protected layout mutation. Clear the Lua drag state now and
@@ -438,20 +438,20 @@ do
     local LastDebugReportNotification = 0;
     function D:PLAYER_REGEN_ENABLED() -- LeaveCombat
         --D:Debug("Leaving combat");
-        self.Status.Combat = false;
+        if self.Status then self.Status.Combat = false end
 
         if self.ProfileManager then
             self.ProfileManager:HandleCombatEnded()
         end
 
-		if self.FlushPendingCureBindingRefresh then
-			self:FlushPendingCureBindingRefresh()
-		end
-
-        -- Apply a Party/Raid size transition that was deferred while secure
-        -- frames were locked by combat.
-        if self.MicroUnitF and self.MicroUnitF.PendingContextMUFScale121 and self.MicroUnitF.ApplyContextMUFScale then
-            self.MicroUnitF:ApplyContextMUFScale();
+        -- Configuration, binding, scale, order, creation, attributes, and
+        -- layout form one deterministic transaction. The legacy 0.3-second
+        -- delayed queue remains available for unrelated low-priority work.
+        if self.RunPostCombatRecovery
+            and self:RunPostCombatRecovery("PLAYER_REGEN_ENABLED") ~= true
+            and not self.DcrFullyInitialized
+        then
+            return
         end
 
         -- Protected MUF/provider mutations mark one shared dirty bit in combat.

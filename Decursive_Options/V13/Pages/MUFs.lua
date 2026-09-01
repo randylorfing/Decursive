@@ -54,7 +54,7 @@ UI:RegisterPage("MUFS", "MUFs", function(parent)
         "Secure frame structure changes are applied outside combat.")
     basics:SetPoint("TOPLEFT", 0, -82)
     basics:SetPoint("TOPRIGHT", -8, -82)
-    basics:SetHeight(342)
+    basics:SetHeight(376)
     Controls:Toggle(basics, "Show MUFs", nil,
         function() return D.profile and D.profile.ShowDebuffsFrame end,
         function(value) return setProfile("ShowDebuffsFrame", value) end)
@@ -70,9 +70,22 @@ UI:RegisterPage("MUFS", "MUFs", function(parent)
     end,
         function() return D.GetMUFOrderMode and D:GetMUFOrderMode() or "GROUP" end,
         function(value)
-            if D.SetMUFOrderMode then return D:SetMUFOrderMode(value) end
+            if D.SetMUFOrderMode then
+                local applied = D:SetMUFOrderMode(value)
+                if applied and D.GetPendingMUFOrderMode and D:GetPendingMUFOrderMode()
+                    and UI.SetStatus
+                then
+                    UI:SetStatus("MUF order will be applied after combat.", "warning")
+                end
+                return applied
+            end
             return setProfile("MUFOrderMode", value)
         end)
+    Controls:StatusRow(basics, "MUF order state", function()
+        local pending = D.GetPendingMUFOrderMode and D:GetPendingMUFOrderMode()
+        if pending then return "Pending " .. pending .. " until combat ends" end
+        return "Active"
+    end)
     Controls:Toggle(basics, "Status indicator light",
         "When disabled, the original tight Decursive spacing is restored.",
         function() return D.profile and D.profile.StatusLight121Enabled == true end,

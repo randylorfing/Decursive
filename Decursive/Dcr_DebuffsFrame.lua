@@ -413,9 +413,10 @@ function MicroUnitF:Create(Unit, ID) -- {{{
 
     if InCombatLockdown() then
         -- if we are fighting, postpone the call
+        D.PendingCombatMUFRecovery = true
         D:AddDelayedFunctionCall (
         "Create"..Unit, self.Create,
-        Unit, ID);
+        self, Unit, ID)
         return false;
     end
 
@@ -665,6 +666,34 @@ function MicroUnitF:MFsDisplay_Update () -- {{{
 
     return true;
 end -- }}}
+
+-- DCR_COMBAT_MUF_RECOVERY_BEGIN
+function MicroUnitF:RecoverAfterCombat()
+    if InCombatLockdown and InCombatLockdown() then return false end
+    if not D.DcrFullyInitialized or not D.profile or not D.Status then return false end
+    if D.profile.ShowDebuffsFrame ~= true then return true end
+
+    D.Groups_datas_are_invalid = true
+    if D.GetUnitArray then D:GetUnitArray() end
+
+    local status = D.Status
+    local units = status.Unit_Array
+    local unitCount = tonumber(status.UnitNum) or #units
+    local maximum = math.min(tonumber(self.MaxUnit) or unitCount, unitCount)
+    for index = 1, maximum do
+        local unit = units[index]
+        if unit then
+            local MF = self.ExistingPerUNIT[unit]
+            if not MF then MF = self:Create(unit, index) end
+            if not MF then return false end
+            if MF.UpdateAttributes then MF:UpdateAttributes(MF.CurrUnit or unit, true) end
+        end
+    end
+
+    if self.MFsDisplay_Update and self:MFsDisplay_Update() == false then return false end
+    return true
+end
+-- DCR_COMBAT_MUF_RECOVERY_END
 
 
 function MicroUnitF:Delayed_Force_FullUpdate ()

@@ -1,7 +1,7 @@
 # Zhaohu's Decursive release notes
 
 The current fork release is documented in
-[Zhaohu's Decursive v12.1.4-alpha.4](RELEASE_NOTES_v12.1.4-alpha.4.md). Installation, commands,
+[Zhaohu's Decursive v12.1.4-alpha.5](RELEASE_NOTES_v12.1.4-alpha.5.md). Installation, commands,
 troubleshooting, and support are covered by the [shipped user guide](README.md).
 
 The entries below are the archived changelog of the original Decursive project.

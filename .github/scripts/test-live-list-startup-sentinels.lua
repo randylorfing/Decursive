@@ -44,5 +44,12 @@ requireText(liveListLua, "T._StartupActiveFile = \"Dcr_LiveList.lua\"")
 local liveListXml = readFile(files[4])
 requireText(liveListXml, "StartupMarkerState(\"Dcr_LiveList.lua\")")
 requireText(liveListXml, "T._StartupActiveFile = \"Dcr_LiveList.xml\"")
+requireText(liveListXml, 'name="DcrLiveList" frameStrata="LOW" toplevel="true" enableMouse="true" movable="true" hidden="true"')
+
+local initSource = readFile("Decursive/DCR_init.lua")
+local liveListScale = assert(initSource:find("DcrLiveList:SetScale(D.profile.LiveListScale)", 1, true))
+local liveListDecision = assert(initSource:find("if (D.profile.HideLiveList) then", liveListScale, true))
+local between = initSource:sub(liveListScale, liveListDecision - 1)
+assert(not between:find("DcrLiveList:Show()", 1, true), "LiveList must remain hidden until the profile visibility decision")
 
 io.write("live-list startup sentinel tests passed\n")

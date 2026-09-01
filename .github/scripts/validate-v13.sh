@@ -61,6 +61,10 @@ fi
     || fail 'The MUF state-safety behavior harness is missing.'
 [ -f .github/scripts/test-live-list-startup-sentinels.lua ] \
     || fail 'The LiveList startup sentinel behavior harness is missing.'
+[ -f .github/scripts/test-combat-startup-recovery.lua ] \
+    || fail 'The combat startup recovery behavior harness is missing.'
+[ -f .github/scripts/test-muf-context-visibility.lua ] \
+    || fail 'The context-aware MUF settings visibility harness is missing.'
 [ -f .github/scripts/test-dcr-12-1-local-budget.lua ] \
     || fail 'The Dcr_12_1 local-budget regression harness is missing.'
 [ -f .github/scripts/test-profile-manager.lua ] \
@@ -179,6 +183,21 @@ for toc in Decursive/Decursive.toc Decursive_Options/Decursive_Options.toc; do
         fail "$toc is missing its GPL or packager-owned version metadata."
     fi
 done
+candidate_version='v12.1.4-alpha.5'
+candidate_patch_identity='v12.1.4-alpha.5-assignment-combat-recovery'
+candidate_notes="Decursive/RELEASE_NOTES_${candidate_version}.md"
+if [ "$(sed -n 's/^## \(v[^[:space:]]*\).*/\1/p' Decursive/CHANGELOG.md | head -n 1)" != "$candidate_version" ] \
+    || [ ! -f "$candidate_notes" ] \
+    || ! rg -q --fixed-strings "# Zhaohu's Decursive $candidate_version" "$candidate_notes" \
+    || ! rg -q "^## X-Zhaohu-12\.1-Patch: ${candidate_patch_identity}\r?$" Decursive/Decursive.toc; then
+    fail 'The alpha5 changelog, release notes, or source build identity is missing or inconsistent.'
+fi
+if ! rg -q '^## Interface: 120100\r?$' Decursive/Decursive.toc \
+    || ! rg -q '^## Interface: 120100\r?$' Decursive_Options/Decursive_Options.toc \
+    || ! rg -q '^## X-Zhaohu-Profile-Schema: 6\r?$' Decursive/Decursive.toc \
+    || ! rg -q '^## X-Zhaohu-Profile-Schema: 6\r?$' Decursive_Options/Decursive_Options.toc; then
+    fail 'The alpha5 candidate must retain Interface 120100 and profile schema 6 in both TOCs.'
+fi
 if ! rg -q '^## X-eMail: randylorfing@gmail\.com\r?$' Decursive/Decursive.toc; then
     fail 'Bug reports are not routed to the fork maintainer in Decursive.toc.'
 fi
@@ -283,9 +302,21 @@ if [ -e Decursive_Options/LICENSE.txt ] \
     fail 'Decursive_Options/LICENSE.txt is packager output and must not be committed in source.'
 fi
 if ! rg -q --fixed-strings 'Decursive/branding' .pkgmeta \
-    || ! rg -q --fixed-strings 'Decursive/RELEASE_NOTES_v12.0*.md' .pkgmeta \
+    || ! rg -q --fixed-strings 'Decursive/RELEASE_NOTES_*.md' .pkgmeta \
+    || ! rg -q --fixed-strings 'Decursive/CHANGELOG.md' .pkgmeta \
+    || ! rg -q '^manual-changelog: Decursive/CHANGELOG\.md\r?$' .pkgmeta \
     || ! rg -q --fixed-strings 'Decursive/docs' .pkgmeta; then
-    fail 'Source-only assets or superseded release notes lack package-ignore rules.'
+    fail 'Source-only assets, repository Markdown, changelogs, or release notes lack future-proof package-ignore rules.'
+fi
+for root_markdown in ./*.md; do
+    [ -f "$root_markdown" ] || continue
+    root_markdown=${root_markdown#./}
+    if ! rg -q --fixed-strings -- "- $root_markdown" .pkgmeta; then
+        fail "Repository-root Markdown lacks an explicit package-ignore rule: $root_markdown"
+    fi
+done
+if ! rg -q --fixed-strings 'https://github.com/randylorfing/Decursive/blob/alpha/Decursive/FULL_ENVIRONMENT_PROFILES.md' Decursive/README.md; then
+    fail 'The shipped README must link to the source-only full-environment guide by an absolute URL.'
 fi
 if ! rg -q --fixed-strings 'license-output: LICENSE.txt' .pkgmeta; then
     fail 'The packager-generated license output is not configured.'
@@ -644,6 +675,8 @@ if [ -n "$lua_runner" ]; then
     "$lua_runner" .github/scripts/test-cooldown-state-machine.lua || status=1
     "$lua_runner" .github/scripts/test-muf-state-safety.lua || status=1
     "$lua_runner" .github/scripts/test-live-list-startup-sentinels.lua || status=1
+    "$lua_runner" .github/scripts/test-combat-startup-recovery.lua || status=1
+    "$lua_runner" .github/scripts/test-muf-context-visibility.lua || status=1
     "$lua_runner" .github/scripts/test-dcr-12-1-local-budget.lua || status=1
     "$lua_runner" .github/scripts/test-profile-manager.lua || status=1
     "$lua_runner" .github/scripts/test-profile-io.lua || status=1

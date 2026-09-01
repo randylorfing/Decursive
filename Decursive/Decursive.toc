@@ -22,7 +22,7 @@
 
 ## Version: @project-version@
 ## X-Zhaohu-Build: Zhaohu-Decursive
-## X-Zhaohu-12.1-Patch: v12.1.4-alpha.4-schema6-environment-profiles
+## X-Zhaohu-12.1-Patch: v12.1.4-alpha.5-assignment-combat-recovery
 ## X-Zhaohu-Backend: v13-hardened-compat-runtime
 ## X-Zhaohu-UI: v13-command-center-primary
 ## X-Zhaohu-Profiles: full-environment-variants-schema6-reset

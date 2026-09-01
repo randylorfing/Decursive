@@ -682,6 +682,10 @@ end -- }}}
 function D.SetHandler (info, value) -- {{{
 
 
+    if info[#info] == "MUFOrderMode" and D.SetMUFOrderMode then
+        return D:SetMUFOrderMode(value)
+    end
+
     local target = D.db.global;
 
     if D.db.profile[info[#info]]~=nil then

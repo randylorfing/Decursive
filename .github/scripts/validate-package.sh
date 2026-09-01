@@ -77,6 +77,32 @@ else
     note "all package tokens substituted"
 fi
 
+# The two addon folders must carry one release identity. The build marker is a
+# source literal, while Version is substituted from the tag by the packager.
+# Requiring the marker to begin with the substituted version rejects a candidate
+# built from the wrong tag even if its ZIP filename was manually relabeled.
+core_toc="$releasedir/Decursive/Decursive.toc"
+options_toc="$releasedir/Decursive_Options/Decursive_Options.toc"
+if [ -f "$core_toc" ] && [ -f "$options_toc" ]; then
+    core_version=$(sed -n 's/^## Version: //p' "$core_toc" | tr -d '\r' | head -n 1)
+    options_version=$(sed -n 's/^## Version: //p' "$options_toc" | tr -d '\r' | head -n 1)
+    patch_identity=$(sed -n 's/^## X-Zhaohu-12\.1-Patch: //p' "$core_toc" | tr -d '\r' | head -n 1)
+    if [ -z "$core_version" ] || [ "$core_version" != "$options_version" ]; then
+        fail "packaged addon versions are missing or inconsistent (core='$core_version', options='$options_version')."
+    elif [ "${patch_identity#"$core_version"-}" = "$patch_identity" ]; then
+        fail "packaged build identity '$patch_identity' does not match version '$core_version'."
+    else
+        note "consistent packaged version and build identity: $core_version"
+    fi
+    for toc in "$core_toc" "$options_toc"; do
+        normalized_toc=$(tr -d '\r' < "$toc")
+        if ! grep -q '^## Interface: 120100$' <<< "$normalized_toc" \
+            || ! grep -q '^## X-Zhaohu-Profile-Schema: 6$' <<< "$normalized_toc"; then
+            fail "${toc#"$releasedir/"} does not retain Interface 120100 and profile schema 6."
+        fi
+    done
+fi
+
 # ---------------------------------------------------------------------------
 # 4. Lua syntax. Parse every packaged Lua file if an interpreter is available.
 #    This is the direct check that would have caught the LibQTip breakage.
@@ -192,8 +218,10 @@ while IFS= read -r pattern; do
     fi
 done <<'PATTERNS'
 RELEASE_PROCESS.md
-RELEASE_NOTES_v11*.md
-RELEASE_NOTES_v12.0*.md
+RELEASE_NOTES_*.md
+CHANGELOG.md
+OldChangeLog.md
+WhatsNew.md
 Todo.txt
 IMPLEMENTATION_SUMMARY.md
 FULL_ENVIRONMENT_PROFILES.md
@@ -207,6 +235,24 @@ V11_*.md
 LICENSE
 PATTERNS
 [ "$leaked" -eq 0 ] && note "no source-only files leaked into the package"
+
+# Markdown that remains in a player installation must be an intentional user
+# guide or a bundled-library notice. A closed allowlist catches future internal
+# repository documents even when their filenames have never appeared before.
+unexpected_markdown=0
+while IFS= read -r markdown; do
+    [ -n "$markdown" ] || continue
+    relative=${markdown#"$releasedir/"}
+    case "$relative" in
+        Decursive/README.md|Decursive/Database/README.md|Decursive/Libs/LibQTip-1.0/README.md|Decursive_Options/README.md)
+            ;;
+        *)
+            fail "unapproved Markdown file shipped in the package: $relative"
+            unexpected_markdown=$((unexpected_markdown + 1))
+            ;;
+    esac
+done < <(find "$releasedir" -type f -iname '*.md' -print 2>/dev/null || true)
+[ "$unexpected_markdown" -eq 0 ] && note "only approved player-facing Markdown shipped"
 
 # The repository's own development docs directory must never be packaged.
 if [ -d "$releasedir/Decursive/docs" ] || [ -d "$releasedir/docs" ]; then

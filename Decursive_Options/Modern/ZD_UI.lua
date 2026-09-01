@@ -2324,6 +2324,35 @@ local function buildAfflictionPriorityColorEditor(canvas, startY, renderPage)
     return startY - cardHeight - 12
 end
 
+-- MUF_CONTEXT_SIZE_VISIBILITY_BEGIN
+local MUF_SIZE_VISIBILITY = {
+    OPEN_WORLD = { party = true, raid = true },
+    DUNGEON = { party = true, raid = false },
+    MYTHIC_PLUS = { party = true, raid = false },
+    RAID = { party = false, raid = true },
+    PVP = { party = true, raid = true },
+}
+
+function ZD:GetMUFSizeVisibilityForEnvironment(environment)
+    local visibility = MUF_SIZE_VISIBILITY[environment]
+    if not visibility then return true, true end
+    return visibility.party == true, visibility.raid == true
+end
+
+function ZD:SetVisibleMUFSizePixels(context, value)
+    local partyVisible, raidVisible = self:GetMUFSizeVisibilityForEnvironment(self:GetEditEnvironment())
+    if context == "PARTY" then
+        if not partyVisible then return false end
+        return self:SetPartyMUFSizePixels(value)
+    end
+    if context == "RAID" then
+        if not raidVisible then return false end
+        return self:SetRaidMUFSizePixels(value)
+    end
+    return false
+end
+-- MUF_CONTEXT_SIZE_VISIBILITY_END
+
 function ZD:BuildFrames(parent)
     local skipDisplay = {
         Environment121Mode=true, Environment121ActiveProfile=true, Detection121Mode=true,
@@ -2397,16 +2426,16 @@ function ZD:BuildFrames(parent)
     -- Built as a dedicated section using ZD:Get/SetPartyMUFSizePixels and
     -- ZD:Get/SetRaidMUFSizePixels (Modern/ZD_Core.lua), which already existed
     -- and worked, just had no control wired to them anywhere.
-    local sizeSection = section(p.optionCanvas, "MUF Size", -230, 188)
+    local sizeSection = section(p.optionCanvas, "Context-aware MUF Size", -230, 188)
     p.partySize = slider(sizeSection, "Party MUF size (px)", -34, 10, 80, 1,
         function() return ZD:GetPartyMUFSizePixels() end,
-        function(v) return ZD:SetPartyMUFSizePixels(v) end, "px")
+        function(v) return ZD:SetVisibleMUFSizePixels("PARTY", v) end, "px")
     p.raidSize = slider(sizeSection, "Raid MUF size (px)", -92, 10, 80, 1,
         function() return ZD:GetRaidMUFSizePixels() end,
-        function(v) return ZD:SetRaidMUFSizePixels(v) end, "px")
-    p.activeSizeContext = label(sizeSection, "", 10, C.muted, "BOTTOMLEFT", 16, 12)
-    p.activeSizeContext:SetPoint("RIGHT", -16, 0)
-    p.activeSizeContext:SetJustifyH("LEFT")
+        function(v) return ZD:SetVisibleMUFSizePixels("RAID", v) end, "px")
+    p.sizeVisibilityHelp = label(sizeSection, "", 10, C.muted, "BOTTOMLEFT", 16, 12)
+    p.sizeVisibilityHelp:SetPoint("RIGHT", -16, 0)
+    p.sizeVisibilityHelp:SetJustifyH("LEFT")
 
     local baseRebuild = p.Rebuild
     function p:Rebuild()
@@ -2418,17 +2447,31 @@ function ZD:BuildFrames(parent)
     end
     local oldRefresh=p.Refresh
     function p:Refresh()
+        local environment = ZD:GetEditEnvironment()
+        local partyVisible, raidVisible = ZD:GetMUFSizeVisibilityForEnvironment(environment)
+        local nextY = -34
+        self.partySize:ClearAllPoints()
+        self.partySize:SetPoint("TOPLEFT", 16, nextY)
+        self.partySize:SetPoint("TOPRIGHT", -16, nextY)
+        self.partySize:SetShown(partyVisible)
+        if partyVisible then nextY = nextY - 58 end
+        self.raidSize:ClearAllPoints()
+        self.raidSize:SetPoint("TOPLEFT", 16, nextY)
+        self.raidSize:SetPoint("TOPRIGHT", -16, nextY)
+        self.raidSize:SetShown(raidVisible)
         if p.basicShow and p.basicShow.control then p.basicShow.control:Refresh() end
         if p.basicLock and p.basicLock.control then p.basicLock.control:Refresh() end
         if p.basicStatusLight and p.basicStatusLight.control then p.basicStatusLight.control:Refresh() end
         if p.basicOrder and p.basicOrder.control then p.basicOrder.control:Refresh() end
         if p.partySize and p.partySize.control then p.partySize.control:Refresh() end
         if p.raidSize and p.raidSize.control then p.raidSize.control:Refresh() end
-        if p.activeSizeContext then
-            local context = D.MicroUnitF and D.MicroUnitF.GetActiveMUFSizeContext and D.MicroUnitF:GetActiveMUFSizeContext() or "PARTY"
-            p.activeSizeContext:SetText(context == "RAID"
-                and "Currently active: Raid size"
-                or "Currently active: Party size (solo, open world, dungeon, or party)")
+        if p.sizeVisibilityHelp then
+            local environmentName = ZD.environmentNames and ZD.environmentNames[environment] or environment
+            local shown = partyVisible and raidVisible and "Party and Raid controls are shown"
+                or partyVisible and "Only the Party control is shown"
+                or "Only the Raid control is shown"
+            p.sizeVisibilityHelp:SetText("Editing " .. tostring(environmentName or "Open World") .. ": "
+                .. shown .. ". Hidden size values stay saved. They are not deleted.")
         end
         if oldRefresh then oldRefresh(self) end
     end

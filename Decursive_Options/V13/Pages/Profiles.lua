@@ -62,6 +62,14 @@ local function profileValues()
 	return result
 end
 
+local function profileLabel(profileID)
+	if not profileID then return nil end
+	for _, profile in ipairs(ZD.GetProfileCatalog and ZD:GetProfileCatalog() or {}) do
+		if profile.id == profileID then return profile.name end
+	end
+	return tostring(profileID)
+end
+
 local function profileExists(name)
 	return type(name) == "string" and D.ProfileManager and D.ProfileManager:FindProfileID(name) ~= nil or false
 end
@@ -385,6 +393,7 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 		end,
 		function()
 			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+			if state.perSpecEnabled ~= true then return USE_CHARACTER_PROFILE end
 			return state.spec or USE_CHARACTER_PROFILE
 		end,
 		function(value)
@@ -394,6 +403,19 @@ UI:RegisterPage("PROFILES", "Profiles", function(parent)
 		function()
 			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
 			return profilesWritable() and state.perSpecEnabled == true
+		end)
+	Controls:StatusRow(assignments,
+		localized("PROFILE_SPEC_ASSIGNMENT_STATE", "Specialization assignment state"), function()
+			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+			if state.perSpecEnabled == true then
+				return state.spec and ("Active: " .. (profileLabel(state.spec) or "Unknown"))
+					or localized("PROFILE_SPEC_USES_FALLBACK", "Active: character/account fallback")
+			end
+			return state.storedSpec and ("Saved, inactive: " .. (profileLabel(state.storedSpec) or "Unknown"))
+				or localized("PROFILE_SPEC_DISABLED", "Disabled")
+		end, function()
+			local state = ZD.GetProfileAssignments and ZD:GetProfileAssignments() or {}
+			return state.perSpecEnabled == true and Theme.color.success or Theme.color.muted
 		end)
 
 	local behavior = Controls:Card(environment,

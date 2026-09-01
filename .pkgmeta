@@ -49,6 +49,7 @@ ignore:
     - README.md
     - RELEASE_PROCESS.md
     - AUDIT_RELEASE_READINESS.md
+    - PROJECT_CONTEXT.md
     # GitHub needs the repository-root GPL text for license discovery, but the
     # addon already ships LICENSE.txt in each packaged addon folder through
     # license-output below.
@@ -61,10 +62,10 @@ ignore:
     # Superseded release notes and development docs are source-only. They stay
     # in the repository as project history but have no business in a user's
     # AddOns folder, and shipping them only inflates the download.
-    - Decursive/RELEASE_NOTES_v11*.md
-    - Decursive/RELEASE_NOTES_v12.0*.md
-    - Decursive/RELEASE_NOTES_v12.1.2.md
-    - Decursive/RELEASE_NOTES_v12.1.3.md
+    - Decursive/RELEASE_NOTES_*.md
+    - Decursive/CHANGELOG.md
+    - Decursive/OldChangeLog.md
+    - Decursive/WhatsNew.md
     - Decursive/12_1_PATCH_NOTES.md
     - Decursive/IMPLEMENTATION_SUMMARY.md
     - Decursive/FULL_ENVIRONMENT_PROFILES.md
@@ -89,13 +90,9 @@ enable-nolib-creation: yes
 
 license-output: LICENSE.txt
 
-# manual-changelog removed: the packager resolves its file path once, before
-# move-folders runs, and never refreshes it -- after the self-referencing
-# Decursive/Decursive: Decursive move relocates everything, the cached path
-# points at a location that no longer exists, which broke the CurseForge
-# upload's JSON payload (empty changelog -> "Missing field `metadata`") and
-# the GitHub release creation entirely. DBM's .pkgmeta -- which has the same
-# self-referencing move-folders entry -- doesn't use manual-changelog either,
-# for the same reason. Falls back to the packager's own auto-generated
-# commit-based changelog instead.
+# The source changelog is intentionally ignored above, so the packager resolves
+# this to the stable checkout path instead of a processed copy under package-as.
+# That gives upload services release text without generating CHANGELOG.md inside
+# the player's addon folder and avoids the stale path moved by move-folders.
+manual-changelog: Decursive/CHANGELOG.md
 

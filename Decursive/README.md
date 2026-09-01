@@ -7,7 +7,7 @@
 Zhaohu's Decursive is a fast, focused dispel assistant for **World of Warcraft Retail 12.1**. It preserves Decursive's compact Micro Unit Frames (MUFs) and click-to-cure workflow while adding a modern settings interface, Blizzard-native protected-aura support, combat alerts, sound notifications, cooldown feedback, and automatic environment profiles.
 
 Profile schema 6 stores five complete Environment Profiles per Decursive Profile.
-See [Full Environment Profiles](FULL_ENVIRONMENT_PROFILES.md) for resolution,
+See [Full Environment Profiles](https://github.com/randylorfing/Decursive/blob/alpha/Decursive/FULL_ENVIRONMENT_PROFILES.md) for resolution,
 reset behavior, editing, storage growth, and scope details. The first build using
 schema 6 intentionally removes all older Decursive settings and requires full
 reconfiguration; this is a clean break rather than a legacy migration.

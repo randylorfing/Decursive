@@ -149,6 +149,7 @@ function D:RefreshMUFOrder(reason)
     end
 
     if InCombatLockdown and InCombatLockdown() then
+        self.PendingCombatMUFRecovery = true
         if self.AddDelayedFunctionCall then
             self:AddDelayedFunctionCall(
                 "Dcr_RefreshMUFOrder",
@@ -192,7 +193,15 @@ end
 
 function D:SetMUFOrderMode(mode)
     if not MUF_ORDER_MODES[mode] or not self.profile then return false; end
-    self.profile.MUFOrderMode = mode;
+    if InCombatLockdown and InCombatLockdown() then
+        self.PendingMUFOrderMode = mode
+        self.PendingCombatMUFRecovery = true
+        return true
+    end
+    if not self.DcrFullyInitialized or not self.MicroUnitF then return false end
+
+    local previous = self:GetMUFOrderMode()
+    self.profile.MUFOrderMode = mode
 
     if mode == "DANDERSFRAMES" then
         if not self:EnsureDandersFramesMUFOrderCallback() then
@@ -200,8 +209,24 @@ function D:SetMUFOrderMode(mode)
         end
     end
 
-    self:RefreshMUFOrder("ordering mode changed to " .. mode);
+    if self:RefreshMUFOrder("ordering mode changed to " .. mode) ~= true then
+        self.profile.MUFOrderMode = previous
+        return false
+    end
+    self.PendingMUFOrderMode = nil
     return true;
+end
+
+function D:GetPendingMUFOrderMode()
+    local mode = self.PendingMUFOrderMode
+    return MUF_ORDER_MODES[mode] and mode or nil
+end
+
+function D:ApplyPendingMUFOrderMode()
+    local mode = self:GetPendingMUFOrderMode()
+    if not mode then return true end
+    if InCombatLockdown and InCombatLockdown() then return false end
+    return self:SetMUFOrderMode(mode)
 end
 -------------------------------------------------------------------------------
 
