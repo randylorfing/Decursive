@@ -178,7 +178,9 @@ fi
 #    With package-as: Decursive the packager stages the entire checkout under
 #    the package folder, so anything left at the repository root lands inside
 #    the addon unless .pkgmeta ignores it. v12.1.2 shipped README.md and
-#    RELEASE_PROCESS.md this way.
+#    RELEASE_PROCESS.md this way. v12.1.4-alpha.4 then shipped CHANGELOG.md,
+#    OldChangeLog.md, WhatsNew.md, and RELEASE_NOTES_v12.1.4-alpha.4.md
+#    because the leak-list denylist only named older RELEASE_NOTES files.
 # ---------------------------------------------------------------------------
 leaked=0
 while IFS= read -r pattern; do
@@ -194,6 +196,10 @@ done <<'PATTERNS'
 RELEASE_PROCESS.md
 RELEASE_NOTES_v11*.md
 RELEASE_NOTES_v12.0*.md
+RELEASE_NOTES*.md
+CHANGELOG.md
+OldChangeLog.md
+WhatsNew.md
 Todo.txt
 IMPLEMENTATION_SUMMARY.md
 FULL_ENVIRONMENT_PROFILES.md

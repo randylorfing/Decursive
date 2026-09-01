@@ -65,6 +65,18 @@ ignore:
     - Decursive/RELEASE_NOTES_v12.0*.md
     - Decursive/RELEASE_NOTES_v12.1.2.md
     - Decursive/RELEASE_NOTES_v12.1.3.md
+    # Durable glob: the filename denylist above missed
+    # RELEASE_NOTES_v12.1.4-alpha.4.md and would miss the next
+    # RELEASE_NOTES_v12.1.4-alpha.N.md as well. Keep the older
+    # specific lines; they already match and existing validators
+    # require Decursive/RELEASE_NOTES_v12.0*.md.
+    - Decursive/RELEASE_NOTES*.md
+    # Maintainer changelog/notes. Confirmed present in the published
+    # v12.1.4-alpha.4 zip. Player-facing Decursive/README.md and
+    # third-party lib READMEs still ship.
+    - Decursive/CHANGELOG.md
+    - Decursive/OldChangeLog.md
+    - Decursive/WhatsNew.md
     - Decursive/12_1_PATCH_NOTES.md
     - Decursive/IMPLEMENTATION_SUMMARY.md
     - Decursive/FULL_ENVIRONMENT_PROFILES.md
