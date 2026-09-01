@@ -752,18 +752,17 @@ local function BuildSlots(enabled, pack, selfOnly)
   if not allMode then
     local gap = ns.GetEngineDispelGaps(selfOnly)
     if type(gap) == "table" then
-      local clean = {}
-      if gap.Poison == true and not (pack and pack.cure and pack.cure.poison == false) then
-        clean.Poison = true
+      if pack and pack.cure and pack.cure.poison == false then
+        gap.Poison = nil
       end
-      if gap.Bleed == true and not (pack and pack.cure and pack.cure.bleed == false) then
-        clean.Bleed = true
+      if pack and pack.cure and pack.cure.bleed == false then
+        gap.Bleed = nil
       end
-      if MapSize(clean) > 0 then
+      if MapSize(gap) > 0 then
         slots[#slots + 1] = {
           key = "gap",
           filter = LiveGapFilter(),
-          candidateFilters = {includeDispelTypes = clean},
+          candidateFilters = {includeDispelTypes = gap},
         }
       end
     end
@@ -822,7 +821,7 @@ function ns.GetDetectionModel(pack)
   for i = 1, #customActions do
     actions[#actions + 1] = customActions[i]
   end
-  local slots = BuildSlots(enabled, pack, false)
+  local slots = BuildSlots(enabled, pack, true)
   local primary = actions[1]
   local model = {
     enabledTypes = enabled,
@@ -835,7 +834,7 @@ function ns.GetDetectionModel(pack)
     primaryName = primary and primary.name or nil,
     primaryId = primary and primary.spellId or nil,
     soulLink = SoulLinkState(pack),
-    engineGaps = ns.GetEngineDispelGaps(false),
+    engineGaps = ns.GetEngineDispelGaps(true),
   }
   cache.signature = sig
   cache.model = model
@@ -845,10 +844,7 @@ end
 function ns.GetDetectionSlots(pack, unit)
   pack = pack or GetPack()
   local model = ns.GetDetectionModel(pack)
-  local selfOnly = false
-  if type(unit) == "string" and unit ~= "" then
-    selfOnly = ns.IsPlayerUnit(unit) == true
-  end
+  local selfOnly = ns.IsPlayerUnit(unit) == true
   return BuildSlots(model.enabledTypes, pack, selfOnly)
 end
 
@@ -876,27 +872,151 @@ function ns.GetSoulLinkState(pack)
   return ns.GetSoulLinkFallback(pack)
 end
 
-local function ProbeSpellRange(spell, spellId, unit)
-  local result
-  if C_Spell and C_Spell.IsSpellInRange then
-    if type(spellId) == "number" then
-      result = C_Spell.IsSpellInRange(spellId, unit)
-    elseif spell then
-      result = C_Spell.IsSpellInRange(spell, unit)
-    end
-  elseif IsSpellInRange and spell then
-    result = IsSpellInRange(spell, unit)
+local RANGE_FRIENDLY_SPEC = {
+  [105] = 774,
+  [102] = 8936,
+  [103] = 8936,
+  [104] = 8936,
+  [256] = 17,
+  [258] = 17,
+  [257] = 2061,
+  [65] = 19750,
+  [66] = 19750,
+  [70] = 19750,
+  [262] = 8004,
+  [263] = 8004,
+  [264] = 8004,
+  [268] = 116670,
+  [269] = 116670,
+  [270] = 116670,
+  [1467] = 355913,
+  [1468] = 355913,
+  [1473] = 355913,
+  [62] = 1459,
+  [63] = 1459,
+  [64] = 1459,
+  [265] = 20707,
+  [266] = 20707,
+  [267] = 20707,
+}
+
+local RANGE_FRIENDLY_CLASS = {
+  DRUID = 8936,
+  PRIEST = 17,
+  PALADIN = 19750,
+  SHAMAN = 8004,
+  MONK = 116670,
+  EVOKER = 355913,
+  MAGE = 1459,
+  WARLOCK = 20707,
+}
+
+local RANGE_HOSTILE_CLASS = {
+  DEATHKNIGHT = 47541,
+  DEMONHUNTER = 185123,
+  WARRIOR = 355,
+}
+
+local RANGE_REZ_CLASS = {
+  DRUID = 20484,
+  PRIEST = 2006,
+  PALADIN = 7328,
+  SHAMAN = 2008,
+  MONK = 115178,
+  DEATHKNIGHT = 61999,
+  WARLOCK = 20707,
+  EVOKER = 361227,
+}
+
+local function PlayerSpecId()
+  local index
+  if C_SpecializationInfo and C_SpecializationInfo.GetSpecialization then
+    index = Public(C_SpecializationInfo.GetSpecialization())
+  elseif GetSpecialization then
+    index = Public(GetSpecialization())
   end
-  if not Accessible(result) then
+  if type(index) ~= "number" then
     return nil
   end
-  if result == false or result == 0 then
-    return false
+  local specId
+  if GetSpecializationInfo then
+    specId = Public(GetSpecializationInfo(index))
+  elseif C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo then
+    local info = C_SpecializationInfo.GetSpecializationInfo(index)
+    if type(info) == "table" then
+      specId = Public(info.id or info.specID)
+    else
+      specId = Public(info)
+    end
+  end
+  if type(specId) == "number" then
+    return specId
+  end
+  return nil
+end
+
+local function KnownProbe(spellId)
+  if type(spellId) ~= "number" or spellId <= 0 then
+    return nil
+  end
+  if SpellInBook(spellId, true) then
+    return spellId
+  end
+  return nil
+end
+
+local function SpellRangeResult(spellId, unit)
+  if type(spellId) ~= "number" or not C_Spell or not C_Spell.IsSpellInRange then
+    return nil
+  end
+  local result = C_Spell.IsSpellInRange(spellId, unit)
+  if not Accessible(result) then
+    return nil
   end
   if result == true or result == 1 then
     return true
   end
+  if result == false or result == 0 then
+    return false
+  end
   return nil
+end
+
+local function InteractDistance(unit)
+  if not CheckInteractDistance then
+    return nil
+  end
+  local d = CheckInteractDistance(unit, 4)
+  if not Accessible(d) then
+    return nil
+  end
+  if d == true or d == 1 then
+    return true
+  end
+  if d == false or d == 0 then
+    return false
+  end
+  return d and true or false
+end
+
+local function FriendlyProbeId(spellId)
+  local id = KnownProbe(RANGE_FRIENDLY_SPEC[PlayerSpecId()])
+  if id then
+    return id
+  end
+  id = KnownProbe(RANGE_FRIENDLY_CLASS[PlayerClassFile()])
+  if id then
+    return id
+  end
+  return KnownProbe(spellId)
+end
+
+local function HostileProbeId()
+  return KnownProbe(RANGE_HOSTILE_CLASS[PlayerClassFile()])
+end
+
+local function RezProbeId()
+  return KnownProbe(RANGE_REZ_CLASS[PlayerClassFile()])
 end
 
 function ns.SpellRangeState(unit, spell, spellId)
@@ -906,14 +1026,15 @@ function ns.SpellRangeState(unit, spell, spellId)
   if unit == "player" or ns.IsPlayerUnit(unit) then
     return true
   end
-  if UnitExists then
-    local exists = UnitExists(unit)
-    if not Accessible(exists) then
-      return false
-    end
-    if exists ~= true then
-      return false
-    end
+  if not UnitExists then
+    return false
+  end
+  local exists = UnitExists(unit)
+  if not Accessible(exists) then
+    return false
+  end
+  if exists ~= true then
+    return false
   end
   if UnitPhaseReason then
     local phase = UnitPhaseReason(unit)
@@ -921,39 +1042,85 @@ function ns.SpellRangeState(unit, spell, spellId)
       return false
     end
   end
+
   local inCombat = InCombatLockdown and InCombatLockdown()
-  local friendly = ProbeSpellRange(spell, spellId, unit)
-  if friendly == true then
-    return true
-  end
-  if friendly == false then
-    if not inCombat and CheckInteractDistance then
-      local follow = CheckInteractDistance(unit, 4)
-      if Accessible(follow) and follow then
+  local friendlyId = FriendlyProbeId(spellId)
+  local hostileId = HostileProbeId()
+  local rezId = RezProbeId()
+
+  if UnitCanAttack then
+    local attack = UnitCanAttack("player", unit)
+    if Accessible(attack) and attack then
+      if not hostileId then
         return true
       end
-    end
-    return false
-  end
-  if ns.IsUnitDeadPublic(unit) then
-    return false
-  end
-  if not inCombat and CheckInteractDistance then
-    local follow = CheckInteractDistance(unit, 4)
-    if Accessible(follow) then
-      return follow and true or false
-    end
-  end
-  if inCombat and UnitInRange then
-    local inRange, checked = UnitInRange(unit)
-    if not (type(issecretvalue) == "function" and issecretvalue(inRange)) then
-      if Accessible(checked) and checked == true and Accessible(inRange) then
-        return inRange == true
+      local hostile = SpellRangeResult(hostileId, unit)
+      if hostile == true then
+        return true
+      end
+      if hostile == false then
+        return false
       end
     end
   end
-  local hadProbe = type(spellId) == "number" or (type(spell) == "string" and spell ~= "")
-  if inCombat and not hadProbe then
+
+  local friendly
+  if friendlyId then
+    friendly = SpellRangeResult(friendlyId, unit)
+    if friendly == true then
+      return true
+    end
+    if friendly == false then
+      if not inCombat then
+        local d = InteractDistance(unit)
+        if d == true then
+          return true
+        end
+      end
+      return false
+    end
+  end
+
+  if ns.IsUnitDeadPublic(unit) and rezId then
+    local rez = SpellRangeResult(rezId, unit)
+    if rez == true then
+      return true
+    end
+    if rez == false then
+      return false
+    end
+  end
+
+  if not inCombat then
+    local d = InteractDistance(unit)
+    if d == true then
+      return true
+    end
+    return false
+  end
+
+  if UnitInRange then
+    local inRange, checked = UnitInRange(unit)
+    if type(issecretvalue) == "function" and issecretvalue(inRange) then
+      return false
+    end
+    if Accessible(checked) and checked == true and Accessible(inRange) then
+      return inRange == true
+    end
+    local connected = true
+    if UnitIsConnected then
+      local c = UnitIsConnected(unit)
+      if Accessible(c) then
+        connected = c == true
+      end
+    end
+    if not friendlyId and connected and not ns.IsUnitDeadPublic(unit) then
+      return false
+    end
+    return false
+  end
+
+  if not friendlyId then
     return true
   end
   return false
@@ -996,38 +1163,36 @@ function ns.GetPublicInstanceType()
   return nil
 end
 
-local lastArenaHint = false
+local lastArenaHint
 
 function ns.IsArenaInstance()
   if IsInInstance then
     local inInstance, instanceType = IsInInstance()
     instanceType = Public(instanceType)
     if instanceType == "arena" then
-      lastArenaHint = true
+      lastArenaHint = "arena"
       return true
     end
-    if type(instanceType) == "string" and instanceType ~= "" and instanceType ~= "arena" then
-      lastArenaHint = false
-    elseif lastArenaHint then
+    if lastArenaHint == "arena" and (instanceType == nil or instanceType == "" or instanceType == "none") then
       return true
     end
   end
   if IsActiveBattlefieldArena then
     local inArena = IsActiveBattlefieldArena()
     if IsTrue(inArena) then
-      lastArenaHint = true
+      lastArenaHint = "arena"
       return true
     end
   end
   if C_PvP and C_PvP.IsArena and IsTrue(C_PvP.IsArena()) then
-    lastArenaHint = true
+    lastArenaHint = "arena"
     return true
   end
   if ns.GetPublicInstanceType() == "arena" then
-    lastArenaHint = true
+    lastArenaHint = "arena"
     return true
   end
-  return lastArenaHint
+  return lastArenaHint == "arena"
 end
 
 local function UnitPresent(unit)
@@ -1192,18 +1357,25 @@ local function AppendPet(units, seen, owner, pack)
   if pack.cure and pack.cure.curePets == false then
     return
   end
+  local pet
   if owner == "player" then
     AppendUnit(units, seen, "pet", pack)
-    return
+    pet = "playerpet"
+  elseif owner:find("^party%d+$") then
+    pet = owner .. "pet"
+    local index = owner:match("^party(%d+)$")
+    if index then
+      AppendUnit(units, seen, "partypet" .. index, pack)
+    end
+  elseif owner:find("^raid%d+$") then
+    pet = owner .. "pet"
+    local index = owner:match("^raid(%d+)$")
+    if index then
+      AppendUnit(units, seen, "raidpet" .. index, pack)
+    end
   end
-  local partyIndex = owner:match("^party(%d+)$")
-  if partyIndex then
-    AppendUnit(units, seen, "partypet" .. partyIndex, pack)
-    return
-  end
-  local raidIndex = owner:match("^raid(%d+)$")
-  if raidIndex then
-    AppendUnit(units, seen, "raidpet" .. raidIndex, pack)
+  if pet then
+    AppendUnit(units, seen, pet, pack)
   end
 end
 
@@ -1311,15 +1483,19 @@ function ns.DetectionSummary(pack)
 end
 
 function ns.ApplyDetectionSlots(container, pack, initFn, unit)
-  if not container or not container.AddAuraSlot then
+  if not container then
     return false
   end
   local slots = ns.GetDetectionSlots(pack, unit)
   if type(container._dcrSlotKeys) ~= "table" then
     container._dcrSlotKeys = {}
   end
+  local inCombat = InCombatLockdown and InCombatLockdown()
   for i = 1, #slots do
     local slot = slots[i]
+    if type(slot.filter) ~= "string" or slot.filter == "" or slot.filter == "HARMFUL" then
+      slot.filter = LiveNativeFilter()
+    end
     local info = {
       initializeFrame = initFn,
       candidateFilters = slot.candidateFilters,
@@ -1331,13 +1507,13 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
       if container.SetAuraSlotCandidateFilters then
         container:SetAuraSlotCandidateFilters(slot.key, slot.candidateFilters)
       end
+    elseif inCombat then
+      pendingCombatSlots = true
+    elseif container.AddAuraSlot then
+      container:AddAuraSlot(slot.key, slot.filter, info)
+      container._dcrSlotKeys[slot.key] = true
     else
-      if InCombatLockdown and InCombatLockdown() then
-        pendingCombatSlots = true
-      else
-        container:AddAuraSlot(slot.key, slot.filter, info)
-        container._dcrSlotKeys[slot.key] = true
-      end
+      return false
     end
   end
   local wanted = {}
@@ -1361,11 +1537,58 @@ function ns.AttachDetectionContainer(container, unit, pack, initFn)
   if container.SetUnit then
     container:SetUnit(unit)
   end
-  ns.ApplyDetectionSlots(container, pack, initFn, unit)
+  if not ns.ApplyDetectionSlots(container, pack, initFn, unit) then
+    if container.SetEnabled then
+      container:SetEnabled(false)
+    end
+    return false
+  end
   if container.SetEnabled then
     container:SetEnabled(true)
   end
   return true
+end
+
+function ns.AttachDetector(parent, unit, pack, initFn)
+  if type(unit) ~= "string" or unit == "" then
+    return nil
+  end
+  if InCombatLockdown and InCombatLockdown() then
+    return nil
+  end
+  if not parent then
+    return nil
+  end
+  local ok, container = pcall(CreateFrame, "AuraContainer", nil, parent, "CustomAuraContainerTemplate")
+  if not ok or not container then
+    return nil
+  end
+  if container.SetAllPoints then
+    container:SetAllPoints(parent)
+  end
+  if container.EnableMouse then
+    container:EnableMouse(false)
+  end
+  if not container.SetUnit then
+    if container.SetEnabled then
+      container:SetEnabled(false)
+    end
+    return nil
+  end
+  container:SetUnit(unit)
+  if not ns.ApplyDetectionSlots(container, pack, initFn, unit) then
+    if container.SetEnabled then
+      container:SetEnabled(false)
+    end
+    return nil
+  end
+  if container.SetEnabled then
+    container:SetEnabled(true)
+  end
+  if container.Show then
+    container:Show()
+  end
+  return container
 end
 
 function ns.GetDispelColorMap(pack)
@@ -1569,6 +1792,19 @@ function ns.EnableDetection()
       return
     end
     if event == "UNIT_IN_RANGE_UPDATE" then
+      local pet
+      if unit == "player" then
+        pet = "pet"
+      elseif type(unit) == "string" then
+        local party = unit:match("^party(%d+)$")
+        if party then
+          pet = "partypet" .. party
+        end
+        local raid = unit:match("^raid(%d+)$")
+        if raid then
+          pet = "raidpet" .. raid
+        end
+      end
       if ns.RefreshLiveList then
         ns.RefreshLiveList()
       end
@@ -1632,7 +1868,7 @@ ns.Detection = {
   FilterRange = ns.FilterRosterRange,
   InRange = ns.UnitInRangeKeep,
   ApplySlots = ns.ApplyDetectionSlots,
-  Attach = ns.AttachDetectionContainer,
+  Attach = ns.AttachDetector,
   SoulLink = ns.GetSoulLinkState,
   InArena = ns.IsArenaInstance,
   EngineGaps = ns.GetEngineDispelGaps,
