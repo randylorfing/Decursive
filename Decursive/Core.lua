@@ -2,8 +2,6 @@ local ADDON_NAME, ns = ...
 
 local AceAddon = LibStub("AceAddon-3.0")
 local AceDB = LibStub("AceDB-3.0")
-local AceConfigDialog = LibStub("AceConfigDialog-3.0")
-local AceConfigRegistry = LibStub("AceConfigRegistry-3.0")
 
 local Decursive = AceAddon:NewAddon("Decursive", "AceConsole-3.0", "AceEvent-3.0")
 ns.addon = Decursive
@@ -11,7 +9,9 @@ ns.addon = Decursive
 Decursive.APP_NAME = "Decursive"
 
 local function Notify()
-  AceConfigRegistry:NotifyChange(Decursive.APP_NAME)
+  if ns.RefreshOptions then
+    ns.RefreshOptions()
+  end
 end
 
 ns.Notify = Notify
@@ -35,15 +35,14 @@ function Decursive:OnEnteringWorld()
 end
 
 function Decursive:OnSpecChanged()
-  if AceConfigDialog.OpenFrames and AceConfigDialog.OpenFrames[self.APP_NAME] then
+  if ns.IsOptionsShown and ns.IsOptionsShown() then
     return
   end
   self:ApplyResolvedProfile("spec")
 end
 
 function Decursive:OpenOptions()
-  AceConfigDialog:SetDefaultSize(self.APP_NAME, 720, 580)
-  AceConfigDialog:Open(self.APP_NAME)
+  ns.ShowOptions()
 end
 
 function Decursive:GetCharacterKey()
