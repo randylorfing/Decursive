@@ -134,7 +134,7 @@ function Decursive:EnsureEnvironments()
   end
   for _, row in ipairs(ns.ENVIRONMENTS) do
     if type(environments[row.key]) ~= "table" then
-      environments[row.key] = ns.DeepCopy(ns.PACK)
+      environments[row.key] = ns.MakePack(row.key)
     else
       self:FillMissing(environments[row.key], ns.PACK)
     end
@@ -178,6 +178,19 @@ function Decursive:SetEditingEnvironment(env)
   end
 end
 
+function Decursive:ResetEditingPack()
+  local env = self:GetEditingEnvironment()
+  self.db.profile.environments[env] = ns.MakePack(env)
+  Notify()
+  return true
+end
+
+function Decursive:ResetCurrentProfile()
+  self.db.profile.environments = ns.MakeEnvironments()
+  Notify()
+  return true
+end
+
 function Decursive:CreateProfile(name)
   name = strtrim(name or "")
   if name == "" then
@@ -187,6 +200,22 @@ function Decursive:CreateProfile(name)
     return false, "exists"
   end
   self.db:SetProfile(name)
+  self:EnsureEnvironments()
+  Notify()
+  return true
+end
+
+function Decursive:CopyProfile(name)
+  name = strtrim(name or "")
+  local oldName = self.db:GetCurrentProfile()
+  if name == "" or name == oldName then
+    return false, "empty"
+  end
+  if self:ProfileExists(name) then
+    return false, "exists"
+  end
+  self.db:SetProfile(name)
+  self.db:CopyProfile(oldName, true)
   self:EnsureEnvironments()
   Notify()
   return true
