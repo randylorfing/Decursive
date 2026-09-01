@@ -178,9 +178,15 @@ fi
 #    With package-as: Decursive the packager stages the entire checkout under
 #    the package folder, so anything left at the repository root lands inside
 #    the addon unless .pkgmeta ignores it. v12.1.2 shipped README.md and
-#    RELEASE_PROCESS.md this way. v12.1.4-alpha.4 then shipped CHANGELOG.md,
-#    OldChangeLog.md, WhatsNew.md, and RELEASE_NOTES_v12.1.4-alpha.4.md
-#    because the leak-list denylist only named older RELEASE_NOTES files.
+#    RELEASE_PROCESS.md this way. v12.1.4-alpha.4 then shipped the source
+#    CHANGELOG.md, OldChangeLog.md, WhatsNew.md, and
+#    RELEASE_NOTES_v12.1.4-alpha.4.md because the leak-list denylist only
+#    named older RELEASE_NOTES files.
+#
+#    Do not treat every CHANGELOG.md as a leak. After ignore rules run, the
+#    packager writes its own commit-based CHANGELOG.md into the package for
+#    CurseForge/GitHub metadata. Fail only when the source maintainer file
+#    (header "# Zhaohu-Decursive Changelog") shipped.
 # ---------------------------------------------------------------------------
 leaked=0
 while IFS= read -r pattern; do
@@ -197,7 +203,6 @@ RELEASE_PROCESS.md
 RELEASE_NOTES_v11*.md
 RELEASE_NOTES_v12.0*.md
 RELEASE_NOTES*.md
-CHANGELOG.md
 OldChangeLog.md
 WhatsNew.md
 Todo.txt
@@ -212,6 +217,13 @@ V11_*.md
 .pkgmeta
 LICENSE
 PATTERNS
+while IFS= read -r changelog; do
+    [ -n "$changelog" ] || continue
+    if grep -q '^# Zhaohu-Decursive Changelog' "$changelog"; then
+        fail "source maintainer CHANGELOG.md shipped in the package: ${changelog#"$releasedir/"}"
+        leaked=$((leaked + 1))
+    fi
+done < <(find "$releasedir" -type f -iname 'CHANGELOG.md' 2>/dev/null || true)
 [ "$leaked" -eq 0 ] && note "no source-only files leaked into the package"
 
 # The repository's own development docs directory must never be packaged.

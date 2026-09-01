@@ -71,9 +71,12 @@ ignore:
     # specific lines; they already match and existing validators
     # require Decursive/RELEASE_NOTES_v12.0*.md.
     - Decursive/RELEASE_NOTES*.md
-    # Maintainer changelog/notes. Confirmed present in the published
-    # v12.1.4-alpha.4 zip. Player-facing Decursive/README.md and
-    # third-party lib READMEs still ship.
+    # Source maintainer changelog/notes. Confirmed present in the
+    # published v12.1.4-alpha.4 zip. Ignoring the source CHANGELOG.md
+    # is required even though the packager later writes its own
+    # commit-based CHANGELOG.md: with package-as + move-folders the
+    # copied source file overwrites that generated file. Player-facing
+    # Decursive/README.md and third-party lib READMEs still ship.
     - Decursive/CHANGELOG.md
     - Decursive/OldChangeLog.md
     - Decursive/WhatsNew.md
