@@ -14,6 +14,10 @@ as proof that the live combat path works.
 - Every TOC file reference exists with exact casing.
 - XML parses successfully.
 - Packaged ZIP contains sibling `Decursive` and `Decursive_Options` folders.
+- Packaged ZIP must not contain maintainer changelog markdown:
+  CHANGELOG.md, OldChangeLog.md, WhatsNew.md. These three were confirmed
+  present in the published v12.1.4-alpha.4 zip (~same class as the
+  v12.1.2 .md leak). A validator pass is not proof they are absent.
 - Packaged TOCs contain the intended version and Interface value.
 - No raw packager tokens remain in the ZIP.
 - Every runtime Lua file parses, not only the v13 directory.
@@ -193,6 +197,42 @@ type and confirm a non-dispelling specialization fails closed.
 - If the options companion has not loaded yet, opening settings in combat gives
   a clear retry-after-combat message and performs no LoadOnDemand mutation.
 
+## Combat /reload MUF macrotext (H2/H3)
+
+Clicks work only on already-installed secure macrotext. Lit AuraContainer
+fill is not a click pass. `/zdmuf` `initialized=yes` is not proof Configure
+ran (`DcrFullyInitialized` is set even when Configure deferred). Record
+`/zdmuf`, `/zdsound`, and `/dcrstatus` after the stimulus and again after
+regen. `/zdmuf` `combat=` is InCombatLockdown(); `/dcrstatus`
+`Combat lockdown:` is D.Status.Combat — record both.
+
+- Out of combat, a lit grouped MUF click MUST cleanse (control).
+- In combat, before any reload, a currently lit square MUST still click
+  (already-installed macrotext).
+- `/reload` while still in combat (ordinary combat lockdown is enough;
+  record if an M+ restriction is also on). Do not leave combat. Click a
+  lit square, or any grouped square if none is lit: MUST be dead until
+  regen. Squares themselves MAY be absent if Create/Show deferred. No
+  ADDON_ACTION_BLOCKED or ADDON_ACTION_FORBIDDEN.
+- Stay in combat at least 5 seconds and click again: still dead.
+- Leave combat, wait 1–2 seconds, dump the three commands, click again:
+  MUST work; `/zdmuf` existing matches roster.
+- First `/dcr` this session in combat with Decursive_Options not yet
+  loaded: chat must be exactly `Settings cannot be loaded for the first
+  time during combat. Try again after combat ends.`; existing MUF clicks
+  MUST still work; no LoadOnDemand mutation.
+- `/dcrsoullink` in combat: enabled/disabled chat prints immediately;
+  installed macrotext and overlay ownership MUST NOT change until regen.
+  No blocked/forbidden. If combat `/reload` happened before any OOC
+  GetSmartRezActions build, overlay stays black (no-smart-rez-actions).
+- `/reload` while InChatMessagingLockdown() is already true: `/zdsound`
+  stays deferred; exact-ID live audio may be unavailable; no
+  blocked/forbidden. After combat and chat-messaging lockdown both clear,
+  deferred line is gone and exact coverage equals desired.
+
+Do not collapse first `/dcr` with first Configure. Do not treat
+cold-login `/zdmuf` as a substitute for combat `/reload`.
+
 ## Release gate
 
 1. In-game tester explicitly confirms the candidate, including both cold-client
@@ -203,6 +243,7 @@ type and confirm a non-dispelling specialization fails closed.
    `master`; ordinary branch pushes cannot publish.
 5. The release workflow's credential-free package build and archive validation
    pass before the publish job begins.
-6. The actual published ZIP is downloaded and inspected.
+6. The actual published ZIP is downloaded and inspected. The listing must
+   show CHANGELOG.md, OldChangeLog.md, and WhatsNew.md absent.
 7. GitHub and CurseForge artifacts are confirmed to contain the same intended
    build.
