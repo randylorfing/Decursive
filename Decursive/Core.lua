@@ -53,6 +53,16 @@ function Decursive:OnInitialize()
       ns.PrintAuraSoundDiagnostics(tonumber(spellText), unitToken)
     end
   end)
+  self:RegisterChatCommand("dcrstatus", function()
+    if ns.PrintAddonStatus then
+      ns.PrintAddonStatus()
+    end
+  end)
+  self:RegisterChatCommand("dcrhelp", function()
+    if ns.PrintSlashHelp then
+      ns.PrintSlashHelp()
+    end
+  end)
 end
 
 function Decursive:OnEnable()
