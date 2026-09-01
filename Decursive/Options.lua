@@ -293,6 +293,41 @@ local function AfterPackChange()
   end
 end
 
+local MACRO_BYTE_LIMIT = 255
+
+local function MacroPreview(text)
+  if type(text) ~= "string" or text == "" then
+    return "empty"
+  end
+  if #text > 40 then
+    return string.sub(text, 1, 40) .. "..."
+  end
+  return text
+end
+
+local function SetCustomMacro(value)
+  if type(value) ~= "string" then
+    value = ""
+  end
+  local pack = Pack()
+  if type(pack.advanced) ~= "table" then
+    pack.advanced = {}
+  end
+  if #value > MACRO_BYTE_LIMIT then
+    pack.advanced.customMacro = ""
+    local addon = Addon()
+    if addon and addon.Print then
+      addon:Print("custom macro dropped (over 255 bytes)")
+    end
+  else
+    pack.advanced.customMacro = value
+  end
+  if ns.DropOversizedMacros then
+    ns.DropOversizedMacros(pack)
+  end
+  AfterPackChange()
+end
+
 local function SyncSpacingWidgets()
   local linked = Pack().mufs.linkSpacing
   for _, bind in ipairs(ui.binds or {}) do
@@ -476,6 +511,7 @@ local CATALOG = {
   {page = "advanced", label = "MUF refresh rate", kind = "slider", min = 0.02, max = 0.5, step = 0.01, get = PathGet("advanced", "refreshRate"), set = PathSet("advanced", "refreshRate")},
   {page = "advanced", label = "Disable macro creation", kind = "toggle", get = PathGet("advanced", "disableMacroCreation"), set = PathSet("advanced", "disableMacroCreation")},
   {page = "advanced", label = "Allow macro editing", kind = "toggle", get = PathGet("advanced", "allowMacroEdit"), set = PathSet("advanced", "allowMacroEdit")},
+  {page = "advanced", label = "Custom macro", kind = "text", get = PathGet("advanced", "customMacro"), set = SetCustomMacro},
 }
 
 
@@ -582,6 +618,7 @@ local ROW_META = {
   ["advanced|MUF refresh rate"] = {group = "Engine"},
   ["advanced|Disable macro creation"] = {group = "Engine"},
   ["advanced|Allow macro editing"] = {group = "Engine"},
+  ["advanced|Custom macro"] = {group = "Engine"},
 }
 
 local GROUP_ORDER = {
@@ -1087,6 +1124,8 @@ local function Refresh()
       bind.widget:SetText(bind.values[v] or tostring(v))
     elseif bind.kind == "color" then
       bind.widget:SetColor(bind.get())
+    elseif bind.kind == "text" then
+      bind.widget:SetText(MacroPreview(bind.get()))
     end
   end
 
@@ -1115,11 +1154,33 @@ local function Refresh()
   ui.assign.account:SetText(addon.db.global.accountProfile or "Default")
   local charProfile = key and addon.db.global.characters[key]
   ui.assign.character:SetText(charProfile or "Use account / Default")
-  local specName = addon:GetSpecName() or "Current spec"
-  ui.assign.specLabel:SetText("This spec (" .. specName .. ")")
-  local row = addon:GetSpecAssignment()
-  ui.assign.specEnabled:SetOn(row and row.enabled)
-  ui.assign.specProfile:SetText((row and row.profile) or "Default")
+  if addon.EnsureSpecAssignments then
+    addon:EnsureSpecAssignments()
+  end
+  local currentSpec = addon.GetSpecIndex and addon:GetSpecIndex()
+  local specCount = 4
+  if addon.SpecSlotCount then
+    specCount = addon:SpecSlotCount()
+  end
+  for spec = 1, 4 do
+    local slot = ui.assign.specs and ui.assign.specs[spec]
+    if slot then
+      if spec <= specCount then
+        slot.row:Show()
+        local specName = addon:GetSpecName(spec) or ("Spec " .. spec)
+        local tag = "Dormant spec"
+        if spec == currentSpec then
+          tag = "This spec"
+        end
+        slot.label:SetText(tag .. " (" .. specName .. ")")
+        local specRow = addon:GetSpecAssignment(spec)
+        slot.enabled:SetOn(specRow and specRow.enabled)
+        slot.profile:SetText((specRow and specRow.profile) or "Default")
+      else
+        slot.row:Hide()
+      end
+    end
+  end
   LayoutCatalog()
   RefreshPreview()
   RefreshListPanel()
@@ -1158,6 +1219,12 @@ local function BindRow(parent, y, spec)
     widget.OnValueChanged = function(_, c)
       spec.set(c)
     end
+  elseif spec.kind == "text" then
+    widget = MakeButton(row, "empty", 220)
+    widget:SetPoint("RIGHT", -12, 0)
+    widget:SetScript("OnClick", function()
+      ShowModal(spec.label, spec.get() or "", spec.set)
+    end)
   end
   ui.binds[#ui.binds + 1] = {kind = spec.kind, widget = widget, get = spec.get, set = spec.set, values = spec.values, label = spec.label}
   return row
@@ -1339,29 +1406,38 @@ local function BuildPages(content)
       Refresh()
     end, true)
   end)
-  local rowSpecEnable = MakeRow(asCard, -168, "Assign this spec")
-  ui.assign.specLabel = rowSpecEnable.label
-  ui.assign.specEnabled = MakeToggle(rowSpecEnable)
-  ui.assign.specEnabled:SetPoint("RIGHT", -12, 0)
-  ui.assign.specEnabled.OnValueChanged = function(_, on)
-    local row = Addon():GetSpecAssignment()
-    if row then
-      row.enabled = on
-      Refresh()
-    end
-  end
-  local rowSpec = MakeRow(asCard, -208, "Spec profile")
-  ui.assign.specProfile = MakeButton(rowSpec, "Default", 220)
-  ui.assign.specProfile:SetPoint("RIGHT", -12, 0)
-  ui.assign.specProfile:SetScript("OnClick", function(self)
-    OpenProfileMenu(self, function(name)
-      local row = Addon():GetSpecAssignment()
-      if row and name then
-        row.profile = name
+  ui.assign.specs = {}
+  for spec = 1, 4 do
+    local y = -168 - (spec - 1) * 40
+    local row = MakeRow(asCard, y, "Spec " .. spec)
+    local enabled = MakeToggle(row)
+    enabled:SetPoint("RIGHT", -12, 0)
+    local profile = MakeButton(row, "Default", 180)
+    profile:SetPoint("RIGHT", enabled, "LEFT", -8, 0)
+    local captured = spec
+    enabled.OnValueChanged = function(_, on)
+      local specRow = Addon():GetSpecAssignment(captured)
+      if specRow then
+        specRow.enabled = on
         Refresh()
       end
+    end
+    profile:SetScript("OnClick", function(self)
+      OpenProfileMenu(self, function(name)
+        local specRow = Addon():GetSpecAssignment(captured)
+        if specRow and name then
+          specRow.profile = name
+          Refresh()
+        end
+      end)
     end)
-  end)
+    ui.assign.specs[spec] = {
+      row = row,
+      label = row.label,
+      enabled = enabled,
+      profile = profile,
+    }
+  end
 
   local searchWrap = CreateFrame("Frame", nil, content)
   searchWrap:SetAllPoints()

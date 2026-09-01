@@ -156,6 +156,7 @@ ns.PACK = {
     periodicRescan = false,
     disableMacroCreation = false,
     allowMacroEdit = false,
+    customMacro = "",
     noKeyWarn = false,
   },
 }
