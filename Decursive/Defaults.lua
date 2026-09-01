@@ -210,7 +210,7 @@ end
 
 ns.defaults = {
   global = {
-    schema = 2,
+    schema = 3,
     accountProfile = "Default",
     characters = {},
     specs = {},
@@ -225,5 +225,9 @@ ns.defaults = {
   },
   profile = {
     environments = ns.MakeEnvironments(),
+    lists = {
+      priority = {},
+      skip = {},
+    },
   },
 }

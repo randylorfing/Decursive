@@ -2,7 +2,7 @@
 ## Title: Zhaohu's Decursive
 ## Notes: Detect Dispel Protect
 ## Author: Zhaohu
-## Version: 13.0.0-livelist.1
+## Version: 13.0.0-lists.1
 ## SavedVariables: DecursiveRebuildDB
 ## DefaultState: enabled
 ## X-License: GPLv3
@@ -11,6 +11,7 @@
 embeds.xml
 Defaults.lua
 Core.lua
+Lists.lua
 MUFs.lua
 LiveList.lua
 Alerts.lua

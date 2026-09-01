@@ -870,6 +870,72 @@ local function BuildMufPreview(parent)
   ui.previewHandle = handle
 end
 
+
+local function RefreshListPanel()
+  if ui.prioText and ns.ListSummary then
+    ui.prioText:SetText(ns.ListSummary("priority"))
+  end
+  if ui.skipText and ns.ListSummary then
+    ui.skipText:SetText(ns.ListSummary("skip"))
+  end
+end
+
+ns.RefreshListPanel = RefreshListPanel
+
+local function MakeListColumn(parent, which, title)
+  local col = CreateFrame("Frame", nil, parent)
+  local head = Font(col, "GameFontNormal", title)
+  head:SetPoint("TOPLEFT", 8, -4)
+  head:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+  local function Slash(cmd)
+    return function()
+      if ns.HandleListSlash then
+        ns.HandleListSlash(which, cmd)
+      end
+      RefreshListPanel()
+    end
+  end
+  local addBtn = MakeButton(col, "Add target", 92, "gold")
+  addBtn:SetPoint("TOPLEFT", 8, -28)
+  addBtn:SetScript("OnClick", Slash("add"))
+  local remBtn = MakeButton(col, "Remove target", 110)
+  remBtn:SetPoint("LEFT", addBtn, "RIGHT", 6, 0)
+  remBtn:SetScript("OnClick", Slash("remove"))
+  local clearBtn = MakeButton(col, "Clear", 64, "danger")
+  clearBtn:SetPoint("LEFT", remBtn, "RIGHT", 6, 0)
+  clearBtn:SetScript("OnClick", Slash("clear"))
+  local body = Font(col, "GameFontHighlight", "(empty)")
+  body:SetPoint("TOPLEFT", 8, -64)
+  body:SetPoint("TOPRIGHT", -8, -64)
+  body:SetJustifyH("LEFT")
+  body:SetJustifyV("TOP")
+  body:SetHeight(88)
+  body:SetWordWrap(true)
+  body:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
+  return col, body
+end
+
+local function BuildListsPanel(parent)
+  local host = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+  Paint(host, {0.05, 0.09, 0.12, 1}, BORDER)
+  host:SetHeight(220)
+  local caption = Font(host, "GameFontDisable", "Skip list units are never shown. Priority order applies when MUF order is Decursive priority. Lists are per profile, not per environment.")
+  caption:SetPoint("TOPLEFT", 14, -8)
+  caption:SetPoint("TOPRIGHT", -14, -8)
+  caption:SetJustifyH("LEFT")
+  caption:SetHeight(28)
+  caption:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  local left, prioText = MakeListColumn(host, "priority", "Priority list")
+  left:SetPoint("TOPLEFT", 8, -40)
+  left:SetPoint("BOTTOMRIGHT", host, "BOTTOM", -4, 8)
+  local right, skipText = MakeListColumn(host, "skip", "Skip list")
+  right:SetPoint("TOPLEFT", host, "TOP", 4, -40)
+  right:SetPoint("BOTTOMRIGHT", -8, 8)
+  ui.listsHost = host
+  ui.prioText = prioText
+  ui.skipText = skipText
+end
+
 local function LayoutCatalog()
   if not ui.sections then
     return
@@ -920,6 +986,15 @@ local function LayoutCatalog()
           end
         end
       end
+    end
+    if page == "sorting" and ui.listsHost then
+      ui.listsHost:ClearAllPoints()
+      ui.listsHost:SetPoint("TOPLEFT", 0, y - 8)
+      ui.listsHost:SetPoint("TOPRIGHT", 0, y - 8)
+      ui.listsHost:SetHeight(220)
+      ui.listsHost:Show()
+      y = y - 236
+      RefreshListPanel()
     end
     local hint = ui.pageHints and ui.pageHints[page]
     if hint then
@@ -1042,6 +1117,7 @@ local function Refresh()
   ui.assign.specProfile:SetText((row and row.profile) or "Default")
   LayoutCatalog()
   RefreshPreview()
+  RefreshListPanel()
 end
 
 ns.RefreshOptions = Refresh
@@ -1211,6 +1287,9 @@ local function BuildPages(content)
       ui.sections[pageKey] = sections
       if pageKey == "mufs" then
         BuildMufPreview(child)
+      end
+      if pageKey == "sorting" then
+        BuildListsPanel(child)
       end
       local hint = Font(child, "GameFontHighlight", "Click Simple (top right) to show all options for this environment.")
       hint:SetJustifyH("LEFT")

@@ -390,6 +390,9 @@ local function BuildRoster(pack)
         AppendUnit(units, seen, danders[i], pack)
         AppendPet(units, seen, danders[i], pack)
       end
+      if ns.ApplyUnitLists then
+        return ns.ApplyUnitLists(units, pack)
+      end
       return units
     end
   end
@@ -398,6 +401,9 @@ local function BuildRoster(pack)
       local unit = "raid" .. i
       AppendUnit(units, seen, unit, pack)
       AppendPet(units, seen, unit, pack)
+    end
+    if ns.ApplyUnitLists then
+      return ns.ApplyUnitLists(units, pack)
     end
     return units
   end
@@ -411,6 +417,9 @@ local function BuildRoster(pack)
       AppendUnit(units, seen, unit, pack)
       AppendPet(units, seen, unit, pack)
     end
+  end
+  if ns.ApplyUnitLists then
+    return ns.ApplyUnitLists(units, pack)
   end
   return units
 end

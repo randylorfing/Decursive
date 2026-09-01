@@ -166,6 +166,9 @@ local function RosterUnits(pack)
       units[#units + 1] = "pet"
     end
   end
+  if ns.ApplyUnitLists then
+    return ns.ApplyUnitLists(units, pack)
+  end
   return units
 end
 

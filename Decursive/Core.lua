@@ -29,6 +29,9 @@ function Decursive:OnInitialize()
   self.db = AceDB:New("DecursiveRebuildDB", ns.defaults, true)
   self:EnsureEnvironments()
   ns.RegisterOptions(self)
+  if ns.RegisterLists then
+    ns.RegisterLists(self)
+  end
   self:RegisterChatCommand("dcr", "OpenOptions")
   self:RegisterChatCommand("decursive", "OpenOptions")
 end
@@ -170,7 +173,25 @@ function Decursive:ApplyResolvedProfile(_reason)
   Notify()
 end
 
+function Decursive:EnsureLists()
+  local lists = self.db.profile.lists
+  if type(lists) ~= "table" then
+    self.db.profile.lists = {
+      priority = {},
+      skip = {},
+    }
+    return
+  end
+  if type(lists.priority) ~= "table" then
+    lists.priority = {}
+  end
+  if type(lists.skip) ~= "table" then
+    lists.skip = {}
+  end
+end
+
 function Decursive:EnsureEnvironments()
+  self:EnsureLists()
   local environments = self.db.profile.environments
   if type(environments) ~= "table" then
     self.db.profile.environments = ns.MakeEnvironments()
@@ -245,6 +266,10 @@ end
 
 function Decursive:ResetCurrentProfile()
   self.db.profile.environments = ns.MakeEnvironments()
+  self.db.profile.lists = {
+    priority = {},
+    skip = {},
+  }
   Notify()
   return true
 end
