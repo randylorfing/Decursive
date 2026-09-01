@@ -1844,9 +1844,14 @@ function ns.PrintAddonStatus(pack)
     mode = "MANUAL"
   end
   local poolMax = 80
-  if type(mufs) == "table" and type(mufs.maxUnits) == "number" then
-    poolMax = mufs.maxUnits
+  local mufShow = true
+  if type(mufs) == "table" then
+    if type(mufs.maxUnits) == "number" then
+      poolMax = mufs.maxUnits
+    end
+    mufShow = mufs.show ~= false
   end
+  lines[#lines + 1] = "MUF show: " .. (mufShow and "on" or "off")
   lines[#lines + 1] = "MUF pool max: " .. tostring(poolMax)
   lines[#lines + 1] = "click mode: " .. mode
   local combat = InCombatLockdown and InCombatLockdown()
@@ -1986,10 +1991,7 @@ function ns.PrintIdentity(msg)
     else
       SoulLinkChat("Native tooltip will show dispellable debuffs only.")
     end
-    SoulLinkChat("/reload if the identity carrier was already created.")
-    if ns.RefreshMUFs then
-      ns.RefreshMUFs()
-    end
+    SoulLinkChat("Identity alldebuffs applies on /reload.")
     return
   end
   local addon = Addon()
