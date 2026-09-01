@@ -573,7 +573,7 @@ local CATALOG = {
   {page = "alerts", label = "Cure-failure sound", kind = "toggle", get = PathGet("alerts", "errorSound"), set = PathSet("alerts", "errorSound")},
   {page = "alerts", label = "Test Sound", kind = "button", run = function()
     if ns.PlayTestSound then
-      ns.PlayTestSound("failure")
+      ns.PlayTestSound()
     end
   end},
   {page = "alerts", label = "Cooldown overlay", kind = "toggle", get = PathGet("alerts", "cooldown"), set = PathSet("alerts", "cooldown")},
