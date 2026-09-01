@@ -1,14 +1,14 @@
 # vim:syntax=YAML:expandtab
-# Rebuild is a single addon folder (Decursive/). package-as stages the
+# Rebuild is a single addon folder (ZDecursive/). package-as stages the
 # checkout one level under that name, so the self-referencing move-folders
-# entry is required or Decursive.toc lands at
-# Decursive/Decursive/Decursive.toc and WoW will not load it.
-package-as: Decursive
+# entry is required or ZDecursive.toc lands at
+# ZDecursive/ZDecursive/ZDecursive.toc and WoW will not load it.
+package-as: ZDecursive
 
 move-folders:
-    Decursive/Decursive: Decursive
+    ZDecursive/ZDecursive: ZDecursive
 
-# Ignore paths are relative to the REPO ROOT. With package-as: Decursive,
+# Ignore paths are relative to the REPO ROOT. With package-as: ZDecursive,
 # anything left at the root ships inside the addon unless listed here.
 ignore:
     # Durable: any root markdown would ship inside the addon. README.md
@@ -20,16 +20,16 @@ ignore:
     - .editorconfig
     - .cursor
     - docs
-    # Still ignore these under Decursive/; root *.md does not match nested paths.
+    # Still ignore these under ZDecursive/; root *.md does not match nested paths.
     - CHANGELOG.md
     - OldChangeLog.md
     - WhatsNew.md
     - RELEASE_NOTES*.md
-    - Decursive/CHANGELOG.md
-    - Decursive/OldChangeLog.md
-    - Decursive/WhatsNew.md
-    - Decursive/RELEASE_NOTES*.md
-    - Decursive/docs
+    - ZDecursive/CHANGELOG.md
+    - ZDecursive/OldChangeLog.md
+    - ZDecursive/WhatsNew.md
+    - ZDecursive/RELEASE_NOTES*.md
+    - ZDecursive/docs
 
 # Libs are committed. Do not add externals; that collides with move-folders.
 license-output: LICENSE.txt
