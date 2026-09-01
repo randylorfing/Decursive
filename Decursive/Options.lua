@@ -1048,7 +1048,7 @@ local function BuildFrame()
   end)
 
   local searchBox = CreateFrame("EditBox", nil, header, "BackdropTemplate")
-  searchBox:SetSize(220, 28)
+  searchBox:SetSize(188, 28)
   searchBox:SetPoint("RIGHT", close, "LEFT", -12, 0)
   searchBox:SetAutoFocus(false)
   searchBox:SetFontObject(GameFontHighlight)
@@ -1160,12 +1160,8 @@ local function BuildFrame()
     chipX = chipX + 126
   end
 
-  local tabBar = CreateFrame("Frame", nil, f)
-  tabBar:SetPoint("TOPLEFT", 20, -186)
-  tabBar:SetPoint("TOPRIGHT", -20, -186)
-  tabBar:SetHeight(34)
-  ui.simpleBtn = MakeButton(tabBar, "Simple", 80, "gold")
-  ui.simpleBtn:SetPoint("RIGHT", 0, 0)
+  ui.simpleBtn = MakeButton(header, "Simple", 72, "gold")
+  ui.simpleBtn:SetPoint("RIGHT", searchBox, "LEFT", -8, 0)
   ui.simpleBtn:SetScript("OnClick", function()
     ui.simple = not ui.simple
     local addon = Addon()
@@ -1176,16 +1172,20 @@ local function BuildFrame()
     Refresh()
   end)
 
+  local tabBar = CreateFrame("Frame", nil, f)
+  tabBar:SetPoint("TOPLEFT", 20, -186)
+  tabBar:SetPoint("TOPRIGHT", -20, -186)
+  tabBar:SetHeight(34)
   ui.tabs = {}
   local tabX = 0
   for _, key in ipairs(PAGES) do
-    local tab = MakeButton(tabBar, PAGE_LABELS[key], 108)
+    local tab = MakeButton(tabBar, PAGE_LABELS[key], 100)
     tab:SetPoint("LEFT", tabX, 0)
     tab:SetScript("OnClick", function()
       SetTab(key)
     end)
     ui.tabs[key] = tab
-    tabX = tabX + 116
+    tabX = tabX + 108
   end
 
   local body = CreateFrame("Frame", nil, f)
