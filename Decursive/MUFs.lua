@@ -107,6 +107,18 @@ local function ApplyColor(tex, c, a)
   tex:SetColorTexture(r, g, b, a or alpha)
 end
 
+local function ClassBorderColor(unit, fallback)
+  if UnitClass then
+    local _name, classFile = UnitClass(unit)
+    classFile = Public(classFile)
+    if type(classFile) == "string" and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile] then
+      local c = RAID_CLASS_COLORS[classFile]
+      return c.r or 1, c.g or 1, c.b or 1, 1
+    end
+  end
+  return ColorOf(fallback)
+end
+
 local function UnitPresent(unit)
   if not unit or not UnitExists then
     return unit ~= nil
@@ -239,8 +251,8 @@ end
 
 local function PixelSize(pack, env)
   local mufs = pack.mufs
-  local partySize = mufs.partySize or 30
-  local raidSize = mufs.raidSize or 30
+  local partySize = mufs.partySize or 20
+  local raidSize = mufs.raidSize or 20
   if env == "RAID" then
     return raidSize
   end
@@ -615,25 +627,29 @@ local function PaintSquare(btn, pack, unit)
   if dead then
     fill = colors.dead or fill
   end
-  ApplyColor(btn.borderTex, colors.border)
-  if btn.borderTex then
-    if borderOn then
-      btn.borderTex:Show()
-    else
-      btn.borderTex:Hide()
-    end
+  local w = btn:GetWidth() or 20
+  local petminus = 0
+  if type(unit) == "string" and unit:find("pet") then
+    petminus = 4
   end
   local inset = borderOn and BORDER_PX or 0
+  local inner = math.max(4, w - inset * 2)
   btn.fillTex:ClearAllPoints()
+  btn.fillTex:SetPoint("CENTER")
+  btn.fillTex:SetSize(inner, inner)
   btn.inner:ClearAllPoints()
-  if inset > 0 then
-    btn.fillTex:SetPoint("TOPLEFT", inset, -inset)
-    btn.fillTex:SetPoint("BOTTOMRIGHT", -inset, inset)
-    btn.inner:SetPoint("TOPLEFT", inset, -inset)
-    btn.inner:SetPoint("BOTTOMRIGHT", -inset, inset)
-  else
-    btn.fillTex:SetAllPoints()
-    btn.inner:SetAllPoints()
+  btn.inner:SetPoint("CENTER")
+  btn.inner:SetSize(inner, inner)
+  local r, g, b, a = ClassBorderColor(unit, colors.border)
+  for _, edge in ipairs({btn.outer1, btn.outer2, btn.outer3, btn.outer4}) do
+    if edge then
+      if borderOn then
+        edge:SetColorTexture(r, g, b, a)
+        edge:Show()
+      else
+        edge:Hide()
+      end
+    end
   end
   local alpha = 1
   if dead then
@@ -645,8 +661,14 @@ local function PaintSquare(btn, pack, unit)
     end
   end
   ApplyColor(btn.fillTex, fill, alpha)
+  if btn.charmTex then
+    btn.charmTex:Hide()
+  end
   if btn.playerMark then
-    if IsPlayerToken(unit) then
+    if pack.mufs.centerText and IsPlayerToken(unit) then
+      btn.playerMark:SetText("P")
+      btn.playerMark:Show()
+    elseif IsPlayerToken(unit) then
       btn.playerMark:SetText("P")
       btn.playerMark:Show()
     else
@@ -828,21 +850,40 @@ local function CreateMUF(parent)
   local btn = CreateFrame("Button", nil, parent, "SecureUnitButtonTemplate")
   btn:RegisterForClicks("AnyUp")
   btn:SetClampedToScreen(true)
+  btn:SetFrameStrata("MEDIUM")
+  btn:SetSize(20, 20)
 
-  btn.borderTex = btn:CreateTexture(nil, "BACKGROUND")
-  btn.borderTex:SetAllPoints()
+  -- Alpha.4 four-side 2px class border + centered fill.
+  btn.outer1 = btn:CreateTexture(nil, "BORDER", nil, 1)
+  btn.outer1:SetPoint("BOTTOMLEFT")
+  btn.outer1:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, 2)
+  btn.outer2 = btn:CreateTexture(nil, "BORDER", nil, 1)
+  btn.outer2:SetPoint("TOPLEFT", 0, -2)
+  btn.outer2:SetPoint("BOTTOMRIGHT", btn, "BOTTOMLEFT", 2, 2)
+  btn.outer3 = btn:CreateTexture(nil, "BORDER", nil, 1)
+  btn.outer3:SetPoint("TOPLEFT")
+  btn.outer3:SetPoint("BOTTOMRIGHT", btn, "TOPRIGHT", 0, -2)
+  btn.outer4 = btn:CreateTexture(nil, "BORDER", nil, 1)
+  btn.outer4:SetPoint("TOPRIGHT", 0, -2)
+  btn.outer4:SetPoint("BOTTOMLEFT", btn, "BOTTOMRIGHT", -2, 2)
 
-  btn.fillTex = btn:CreateTexture(nil, "BACKGROUND")
-  btn.fillTex:SetPoint("TOPLEFT", BORDER_PX, -BORDER_PX)
-  btn.fillTex:SetPoint("BOTTOMRIGHT", -BORDER_PX, BORDER_PX)
+  btn.fillTex = btn:CreateTexture(nil, "BACKGROUND", nil, 2)
+  btn.fillTex:SetPoint("CENTER")
+  btn.fillTex:SetSize(16, 16)
 
   btn.inner = CreateFrame("Frame", nil, btn)
-  btn.inner:SetPoint("TOPLEFT", BORDER_PX, -BORDER_PX)
-  btn.inner:SetPoint("BOTTOMRIGHT", -BORDER_PX, BORDER_PX)
+  btn.inner:SetPoint("CENTER")
+  btn.inner:SetSize(16, 16)
 
-  btn.playerMark = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  btn.playerMark:SetPoint("CENTER")
-  btn.playerMark:SetText("P")
+  btn.charmTex = btn:CreateTexture(nil, "OVERLAY", nil, 6)
+  btn.charmTex:SetPoint("TOPRIGHT")
+  btn.charmTex:SetSize(7, 7)
+  btn.charmTex:Hide()
+
+  btn.playerMark = btn:CreateFontString(nil, "ARTWORK", "NumberFontNormalSmall")
+  btn.playerMark:SetPoint("CENTER", 1.6, 0)
+  btn.playerMark:SetPoint("BOTTOM", 0, 1)
+  btn.playerMark:SetText("")
   btn.playerMark:Hide()
 
   btn.cdTex = btn:CreateTexture(nil, "OVERLAY")
@@ -850,7 +891,7 @@ local function CreateMUF(parent)
   btn.cdTex:SetColorTexture(0, 0, 0, 0.62)
   btn.cdTex:Hide()
 
-  btn.cdText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  btn.cdText = btn:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
   btn.cdText:SetPoint("CENTER")
   btn.cdText:SetTextColor(1, 1, 1, 1)
   btn.cdText:Hide()
@@ -1117,7 +1158,11 @@ function ns.LayoutMUFs()
         btn:ClearAllPoints()
         btn:SetPoint(anchor, header, anchor, slot * (size + hSpace) * xDir, line * (size + vSpace) * yDir)
       end
-      btn:SetSize(size, size)
+      local mufSize = size
+      if type(unit) == "string" and unit:find("pet") then
+        mufSize = math.max(8, size - 4)
+      end
+      btn:SetSize(mufSize, mufSize)
       btn.unit = unit
       btn.assigned = true
       ApplyClickAttributes(btn, pack, unit)
