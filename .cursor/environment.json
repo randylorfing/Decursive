@@ -1,0 +1,5 @@
+{
+    "name": "Decursive (WoW addon)",
+    "user": "ubuntu",
+    "install": "bash .cursor/install.sh"
+}
