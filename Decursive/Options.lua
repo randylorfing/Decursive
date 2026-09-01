@@ -580,7 +580,7 @@ local function BuildPages(content)
         Refresh()
       end
     end)
-  end
+  end)
 end
 
 local function BuildFrame()
@@ -615,7 +615,7 @@ local function BuildFrame()
     f:StopMovingOrSizing()
   end)
 
-  local title = Font(header, "GameFontNormalHuge", "Zhaohu's Decursive")
+  local title = Font(header, "GameFontHighlightLarge", "Zhaohu's Decursive")
   title:SetPoint("LEFT", 22, 8)
   title:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
   local subtitle = Font(header, "GameFontDisable", "Profile first. Options live inside the profile you are editing.")
@@ -776,7 +776,6 @@ local function BuildFrame()
 end
 
 function ns.RegisterOptions(addon)
-  BuildFrame()
 end
 
 function ns.ShowOptions()
