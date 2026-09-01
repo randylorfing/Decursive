@@ -75,6 +75,10 @@ local function Public(value)
   return value
 end
 
+local function LockedDown()
+  return InCombatLockdown and InCombatLockdown()
+end
+
 local function IsTrue(value)
   if not Accessible(value) then
     return false
@@ -825,19 +829,24 @@ local function EnsureHeader()
 end
 
 function ns.LayoutLiveList()
+  local pack = GetPack()
+  if not pack.alerts or not pack.alerts.liveList then
+    if header then
+      HideAll()
+    end
+    pending = false
+    return
+  end
+  if LockedDown() then
+    pending = true
+    return
+  end
   if not EnsureHeader() then
     pending = true
     return
   end
   if not EnsurePool() then
     pending = true
-    return
-  end
-
-  local pack = GetPack()
-  if not pack.alerts or not pack.alerts.liveList then
-    HideAll()
-    pending = false
     return
   end
 
