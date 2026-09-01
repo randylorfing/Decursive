@@ -1836,6 +1836,31 @@ function ns.PrintAddonStatus(pack)
       end
     end
   end
+  local mufs = type(pack) == "table" and pack.mufs or nil
+  local cure = type(pack) == "table" and pack.cure or nil
+  local advanced = type(pack) == "table" and pack.advanced or nil
+  local mode = "AUTO"
+  if type(cure) == "table" and cure.mode == "MANUAL" then
+    mode = "MANUAL"
+  end
+  local poolMax = 80
+  if type(mufs) == "table" and type(mufs.maxUnits) == "number" then
+    poolMax = mufs.maxUnits
+  end
+  lines[#lines + 1] = "MUF pool max: " .. tostring(poolMax)
+  lines[#lines + 1] = "click mode: " .. mode
+  local combat = InCombatLockdown and InCombatLockdown()
+  if combat then
+    lines[#lines + 1] = "combat: in combat"
+  else
+    lines[#lines + 1] = "combat: out of combat"
+  end
+  local macro = type(advanced) == "table" and advanced.customMacro or nil
+  if type(macro) == "string" and macro ~= "" then
+    lines[#lines + 1] = "customMacro: " .. tostring(#macro) .. " bytes"
+  else
+    lines[#lines + 1] = "customMacro: empty"
+  end
   for i = 1, #lines do
     SoulLinkChat(lines[i])
   end
@@ -1844,7 +1869,7 @@ end
 function ns.PrintSlashHelp()
   SoulLinkChat("/zdecursive /zd /dcr  options")
   SoulLinkChat("/dcrhelp  this list")
-  SoulLinkChat("/dcrstatus  profile, environment, spec, detection dump")
+  SoulLinkChat("/dcrstatus  profile, environment, spec, MUF dump")
   SoulLinkChat("/dcrdiag  12.1 API, combat, packs, macro drop")
   SoulLinkChat("/dcrreport  identity plus diagnostics")
   SoulLinkChat("/dcridentity  character, current spec, dormant spec rows")

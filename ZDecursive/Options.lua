@@ -348,6 +348,68 @@ end
 
 local MACRO_BYTE_LIMIT = 255
 
+local function CustomSpellSummary()
+  local pack = Pack()
+  if not ns.EnsureCustomSpells then
+    return "none"
+  end
+  local list = ns.EnsureCustomSpells(pack)
+  if type(list) ~= "table" or #list == 0 then
+    return "none"
+  end
+  local parts = {}
+  for i = 1, #list do
+    local row = list[i]
+    if type(row) == "table" and row.spellId then
+      parts[#parts + 1] = tostring(row.spellId)
+    end
+  end
+  if #parts == 0 then
+    return "none"
+  end
+  return table.concat(parts, ", ")
+end
+
+local function AddCustomSpellFromUI(value)
+  local pack = Pack()
+  if not ns.AddCustomSpell then
+    return
+  end
+  local ok, err = ns.AddCustomSpell(pack, value)
+  local addon = Addon()
+  if ok then
+    if addon and addon.Print then
+      addon:Print("custom spell added")
+    end
+  elseif addon and addon.Print then
+    addon:Print("custom spell not added (" .. tostring(err or "id") .. ")")
+  end
+  NotifyPack()
+  if ns.RefreshOptions then
+    ns.RefreshOptions()
+  end
+end
+
+local function RemoveCustomSpellFromUI(value)
+  local pack = Pack()
+  if not ns.RemoveCustomSpell then
+    return
+  end
+  local removed = ns.RemoveCustomSpell(pack, value)
+  local addon = Addon()
+  if addon and addon.Print then
+    if removed then
+      addon:Print("custom spell removed")
+    else
+      addon:Print("custom spell not found")
+    end
+  end
+  NotifyPack()
+  if ns.RefreshOptions then
+    ns.RefreshOptions()
+  end
+end
+
 local function MacroPreview(text)
   if type(text) ~= "string" or text == "" then
     return "empty"
@@ -509,6 +571,11 @@ local CATALOG = {
   {page = "alerts", label = "Sound channel", kind = "choice", values = {Master = "Master", SFX = "SFX", Music = "Music", Ambience = "Ambience", Dialog = "Dialog"}, get = PathGet("alerts", "soundChannel"), set = PathSet("alerts", "soundChannel")},
   {page = "alerts", label = "Group debounce", kind = "slider", min = 0, max = 5, step = 0.25, get = PathGet("alerts", "soundDebounce"), set = PathSet("alerts", "soundDebounce")},
   {page = "alerts", label = "Cure-failure sound", kind = "toggle", get = PathGet("alerts", "errorSound"), set = PathSet("alerts", "errorSound")},
+  {page = "alerts", label = "Test Sound", kind = "button", run = function()
+    if ns.PlayTestSound then
+      ns.PlayTestSound("failure")
+    end
+  end},
   {page = "alerts", label = "Cooldown overlay", kind = "toggle", get = PathGet("alerts", "cooldown"), set = PathSet("alerts", "cooldown")},
   {page = "alerts", label = "Countdown numbers", kind = "toggle", get = PathGet("alerts", "cooldownNumbers"), set = PathSet("alerts", "cooldownNumbers")},
   {page = "alerts", label = "Overlay darkness", kind = "slider", min = 0, max = 1, step = 0.05, get = PathGet("alerts", "cooldownOpacity"), set = PathSet("alerts", "cooldownOpacity")},
@@ -537,6 +604,8 @@ local CATALOG = {
   {page = "cure", label = "Do not skip priority-list units", kind = "toggle", get = PathGet("cure", "doNotBlacklistPrio"), set = PathSet("cure", "doNotBlacklistPrio")},
   {page = "cure", label = "Cure pets", kind = "toggle", get = PathGet("cure", "curePets"), set = PathSet("cure", "curePets")},
   {page = "cure", label = "Skip stealthed", kind = "toggle", get = PathGet("cure", "skipStealthed"), set = PathSet("cure", "skipStealthed")},
+  {page = "cure", label = "Add custom dispel spell", kind = "text", get = function() return "" end, set = AddCustomSpellFromUI},
+  {page = "cure", label = "Remove custom dispel spell", kind = "text", get = CustomSpellSummary, set = RemoveCustomSpellFromUI},
   {page = "cure", label = "Left click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "left"), set = SetMouseAction("left")},
   {page = "cure", label = "Right click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "right"), set = SetMouseAction("right")},
   {page = "cure", label = "Middle click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "middle"), set = SetMouseAction("middle")},
@@ -631,6 +700,8 @@ local ROW_META = {
   ["cure|Do not skip priority-list units"] = {group = "Rules"},
   ["cure|Cure pets"] = {group = "Rules"},
   ["cure|Skip stealthed"] = {group = "Rules"},
+  ["cure|Add custom dispel spell"] = {group = "Custom", simple = true},
+  ["cure|Remove custom dispel spell"] = {group = "Custom", simple = true},
   ["color|Magic"] = {group = "Afflictions", simple = true},
   ["color|Curse"] = {group = "Afflictions", simple = true},
   ["color|Poison"] = {group = "Afflictions", simple = true},
@@ -655,6 +726,7 @@ local ROW_META = {
   ["alerts|Sound channel"] = {group = "Sound"},
   ["alerts|Group debounce"] = {group = "Sound"},
   ["alerts|Cure-failure sound"] = {group = "Sound"},
+  ["alerts|Test Sound"] = {group = "Sound", simple = true},
   ["alerts|Native 12.1 aura sounds"] = {group = "Sound"},
   ["alerts|Learn spell IDs from successful dispels"] = {group = "Sound"},
   ["alerts|Cooldown overlay"] = {group = "Cooldown", simple = true},
@@ -686,7 +758,7 @@ local ROW_META = {
 local GROUP_ORDER = {
   mufs = {"Display", "Size", "Spacing", "Layout", "Look", "Status"},
   sorting = {"Roster"},
-  cure = {"Types", "Clicks", "Rules"},
+  cure = {"Types", "Clicks", "Rules", "Custom"},
   color = {"Afflictions", "Squares"},
   alerts = {"Dispel text", "Sound", "Cooldown", "Chat", "Live list"},
   advanced = {"Engine"},
@@ -1187,11 +1259,15 @@ local function Refresh()
     elseif bind.kind == "color" then
       bind.widget:SetColor(bind.get())
     elseif bind.kind == "text" then
-      local advanced = Pack().advanced
-      if type(advanced) ~= "table" or advanced.allowMacroEdit ~= true then
-        bind.widget:SetText("locked")
-      else
-        bind.widget:SetText(MacroPreview(bind.get()))
+      if bind.label == "Custom macro" then
+        local advanced = Pack().advanced
+        if type(advanced) ~= "table" or advanced.allowMacroEdit ~= true then
+          bind.widget:SetText("locked")
+        else
+          bind.widget:SetText(MacroPreview(bind.get()))
+        end
+      elseif bind.get then
+        bind.widget:SetText(MacroPreview(bind.get() or ""))
       end
     end
   end
@@ -1290,11 +1366,21 @@ local function BindRow(parent, y, spec)
     widget = MakeButton(row, "empty", 220)
     widget:SetPoint("RIGHT", -12, 0)
     widget:SetScript("OnClick", function()
-      local advanced = Pack().advanced
-      if type(advanced) ~= "table" or advanced.allowMacroEdit ~= true then
-        return
+      if spec.label == "Custom macro" then
+        local advanced = Pack().advanced
+        if type(advanced) ~= "table" or advanced.allowMacroEdit ~= true then
+          return
+        end
       end
       ShowModal(spec.label, spec.get() or "", spec.set)
+    end)
+  elseif spec.kind == "button" then
+    widget = MakeButton(row, spec.buttonLabel or "Test", 88, "gold")
+    widget:SetPoint("RIGHT", -12, 0)
+    widget:SetScript("OnClick", function()
+      if spec.run then
+        spec.run()
+      end
     end)
   end
   ui.binds[#ui.binds + 1] = {kind = spec.kind, widget = widget, get = spec.get, set = spec.set, values = spec.values, label = spec.label}
