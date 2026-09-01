@@ -35,9 +35,13 @@ function Decursive:OnInitialize()
   if ns.RegisterLists then
     ns.RegisterLists(self)
   end
-  self:RegisterChatCommand("dcr", "OpenOptions")
   self:RegisterChatCommand("zd", "OpenOptions")
   self:RegisterChatCommand("zdecursive", "OpenOptions")
+  self:RegisterChatCommand("dcr", function()
+    if ns.PrintSlashHelp then
+      ns.PrintSlashHelp()
+    end
+  end)
   if self.UnregisterChatCommand then
     self:UnregisterChatCommand("decursive")
   end
@@ -110,6 +114,9 @@ function Decursive:OnInitialize()
 end
 
 function Decursive:OnEnable()
+  if self.UnregisterChatCommand then
+    self:UnregisterChatCommand("decursive")
+  end
   self:EnsureSpecAssignments()
   self:ApplyResolvedProfile("login")
   self:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED", "OnSpecChanged")
