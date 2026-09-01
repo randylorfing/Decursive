@@ -439,8 +439,15 @@ local function DistinctFriendlyCures(pack)
   for i = 1, #actions do
     local action = actions[i]
     local spellId = action and action.spellId
+    local itemId = action and action.itemId
     local name = action and action.name
-    if type(spellId) == "number" and not seen[spellId] and type(name) == "string" and name ~= "" then
+    local seenKey
+    if type(spellId) == "number" and spellId > 0 then
+      seenKey = "spell:" .. tostring(spellId)
+    elseif type(itemId) == "number" and itemId > 0 then
+      seenKey = "item:" .. tostring(itemId)
+    end
+    if seenKey and not seen[seenKey] and type(name) == "string" and name ~= "" then
       local types = action.types
       local friendly = false
       if type(types) == "table" then
@@ -452,7 +459,7 @@ local function DistinctFriendlyCures(pack)
         end
       end
       if friendly then
-        seen[spellId] = true
+        seen[seenKey] = true
         out[#out + 1] = action
       end
     end
@@ -542,9 +549,13 @@ local function MakeCureRow(action, binding)
   if type(cureOnly) ~= "string" or #cureOnly > MACRO_BYTE_LIMIT then
     return nil
   end
+  local actionKey = "spell:" .. tostring(spellId)
+  if (type(spellId) ~= "number" or spellId <= 0) and type(action.itemId) == "number" and action.itemId > 0 then
+    actionKey = "item:" .. tostring(action.itemId)
+  end
   local row = {
     binding = binding,
-    actionKey = "spell:" .. tostring(spellId),
+    actionKey = actionKey,
     spellName = action.name,
     spellId = spellId,
     cureOnlyMacroText = cureOnly,
@@ -650,9 +661,23 @@ local function ClickSignature(pack)
   bits[#bits + 1] = tostring(mouse.middle)
   bits[#bits + 1] = tostring(mouse.button4)
   bits[#bits + 1] = tostring(mouse.button5)
+  local manual = pack.cure and pack.cure.manual
+  if type(manual) == "table" then
+    local keys = {}
+    for k, v in pairs(manual) do
+      keys[#keys + 1] = tostring(k) .. "=" .. tostring(v)
+    end
+    table.sort(keys)
+    bits[#bits + 1] = table.concat(keys, ",")
+  end
   local cures = DistinctFriendlyCures(pack)
   for i = 1, #cures do
-    bits[#bits + 1] = tostring(cures[i].spellId)
+    local action = cures[i]
+    local bit = "spell:" .. tostring(action.spellId)
+    if type(action.itemId) == "number" and action.itemId > 0 then
+      bit = bit .. "/item:" .. tostring(action.itemId)
+    end
+    bits[#bits + 1] = bit
   end
   local advanced = pack.advanced
   if type(advanced) == "table" then
@@ -1693,6 +1718,9 @@ function ns.LayoutMUFs()
       PaintSquare(btn, pack, unit)
       PlaceStatusLight(btn, size, pack.mufs.statusLight)
       AttachPaint(btn, pack, unit)
+      if btn.auraContainer and btn.auraContainer.SetUnit and not DisplayMutationBlocked() then
+        btn.auraContainer:SetUnit(unit)
+      end
       btn:Show()
     else
       btn.assigned = false
