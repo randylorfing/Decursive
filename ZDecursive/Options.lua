@@ -348,6 +348,29 @@ end
 
 local MACRO_BYTE_LIMIT = 255
 
+local CUSTOM_TYPE_LABELS = {
+  magic = "Magic",
+  curse = "Curse",
+  poison = "Poison",
+  disease = "Disease",
+  enrage = "Enrage",
+  charm = "Charm",
+  bleed = "Bleed",
+}
+
+local pendingCustomType = "magic"
+
+local function KnownCustomType(key)
+  if type(key) ~= "string" then
+    return nil
+  end
+  key = string.lower(key)
+  if CUSTOM_TYPE_LABELS[key] then
+    return key
+  end
+  return nil
+end
+
 local function CustomSpellSummary()
   local pack = Pack()
   if not ns.EnsureCustomSpells then
@@ -361,7 +384,11 @@ local function CustomSpellSummary()
   for i = 1, #list do
     local row = list[i]
     if type(row) == "table" and row.spellId then
-      parts[#parts + 1] = tostring(row.spellId)
+      local label = tostring(row.spellId)
+      if type(row.types) == "table" and #row.types > 0 then
+        label = label .. " (" .. table.concat(row.types, "/") .. ")"
+      end
+      parts[#parts + 1] = label
     end
   end
   if #parts == 0 then
@@ -370,12 +397,35 @@ local function CustomSpellSummary()
   return table.concat(parts, ", ")
 end
 
+local function ParseCustomSpellInput(value)
+  local spellId
+  local types = {}
+  if type(value) == "number" then
+    spellId = value
+  elseif type(value) == "string" then
+    for token in string.gmatch(value, "%S+") do
+      local id = tonumber(token)
+      local key = KnownCustomType(token)
+      if not spellId and id then
+        spellId = id
+      elseif key then
+        types[#types + 1] = key
+      end
+    end
+  end
+  if #types == 0 then
+    types[1] = KnownCustomType(pendingCustomType) or "magic"
+  end
+  return spellId, types
+end
+
 local function AddCustomSpellFromUI(value)
   local pack = Pack()
   if not ns.AddCustomSpell then
     return
   end
-  local ok, err = ns.AddCustomSpell(pack, value)
+  local spellId, types = ParseCustomSpellInput(value)
+  local ok, err = ns.AddCustomSpell(pack, spellId, types)
   local addon = Addon()
   if ok then
     if addon and addon.Print then
@@ -431,7 +481,18 @@ local function SetCustomMacro(value)
   if pack.advanced.allowMacroEdit ~= true then
     return
   end
-  if #value > MACRO_BYTE_LIMIT then
+  if value ~= "" and not string.find(value, "UNITID", 1, true) then
+    local addon = Addon()
+    if addon and addon.Print then
+      addon:Print("custom macro needs UNITID")
+    end
+    return
+  end
+  local measured = value
+  if value ~= "" then
+    measured = string.gsub(value, "UNITID", "PARTYPET5")
+  end
+  if #measured > MACRO_BYTE_LIMIT then
     pack.advanced.customMacro = nil
     local addon = Addon()
     if addon and addon.Print then
@@ -604,6 +665,9 @@ local CATALOG = {
   {page = "cure", label = "Do not skip priority-list units", kind = "toggle", get = PathGet("cure", "doNotBlacklistPrio"), set = PathSet("cure", "doNotBlacklistPrio")},
   {page = "cure", label = "Cure pets", kind = "toggle", get = PathGet("cure", "curePets"), set = PathSet("cure", "curePets")},
   {page = "cure", label = "Skip stealthed", kind = "toggle", get = PathGet("cure", "skipStealthed"), set = PathSet("cure", "skipStealthed")},
+  {page = "cure", label = "Custom spell type", kind = "choice", values = CUSTOM_TYPE_LABELS, get = function() return pendingCustomType end, set = function(value)
+    pendingCustomType = KnownCustomType(value) or "magic"
+  end},
   {page = "cure", label = "Add custom dispel spell", kind = "text", get = function() return "" end, set = AddCustomSpellFromUI},
   {page = "cure", label = "Remove custom dispel spell", kind = "text", get = CustomSpellSummary, set = RemoveCustomSpellFromUI},
   {page = "cure", label = "Left click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "left"), set = SetMouseAction("left")},
