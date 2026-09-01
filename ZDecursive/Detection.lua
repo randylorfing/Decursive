@@ -1411,7 +1411,28 @@ local function CaptureFollowerSnapshot(units)
   follower.units = copy
 end
 
+local function GroupSize()
+  local n
+  if GetNumGroupMembers then
+    n = Public(GetNumGroupMembers())
+  end
+  if type(n) == "number" and n > 0 then
+    return n
+  end
+  return 0
+end
+
+local function ClearFollowerSnapshot()
+  follower.units = nil
+  follower.coreCount = 0
+  follower.untilTime = 0
+end
+
 local function RestoreFollowerUnits(units, seen)
+  if GroupSize() < 2 then
+    ClearFollowerSnapshot()
+    return units
+  end
   if not FollowerGuardActive() or not follower.units then
     return units
   end
@@ -1579,17 +1600,6 @@ local function AppendPet(units, seen, owner, pack)
   if raidIndex then
     AppendUnit(units, seen, "raidpet" .. raidIndex, pack)
   end
-end
-
-local function GroupSize()
-  local n
-  if GetNumGroupMembers then
-    n = Public(GetNumGroupMembers())
-  end
-  if type(n) == "number" and n > 0 then
-    return n
-  end
-  return 0
 end
 
 function ns.BuildRoster(pack)
@@ -2298,11 +2308,17 @@ function ns.EnableDetection()
         ns.RefreshCureEnginePanel()
       end
     elseif event == "GROUP_ROSTER_UPDATE" or event == "UNIT_PET" or event == "PLAYER_ENTERING_WORLD" then
+      if GroupSize() < 2 then
+        ClearFollowerSnapshot()
+      end
       if ns.RefreshLiveList then
         ns.RefreshLiveList()
       end
       if ns.RefreshAlerts then
         ns.RefreshAlerts()
+      end
+      if ns.RefreshMUFs then
+        ns.RefreshMUFs()
       end
     end
   end)
