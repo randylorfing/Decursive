@@ -178,20 +178,39 @@ local function AttachAuraContainer(row)
   if row.auraSkipped then
     return
   end
-  local unit = row.unit or "player"
+  local unit = row.unit
+  if type(unit) ~= "string" or unit == "" then
+    return
+  end
   local function initSlot(frame)
     BindLiveSlot(frame)
   end
   if row.auraContainer then
-    if not LockedDown() and ns.AttachDetectionContainer then
-      ns.AttachDetectionContainer(row.auraContainer, unit, GetPack(), initSlot)
-    elseif row.auraContainer.SetUnit then
-      row.auraContainer:SetUnit(unit)
+    local container = row.auraContainer
+    if container.SetUnit and row._dcrDetectUnit ~= unit then
+      container:SetUnit(unit)
+      row._dcrDetectUnit = unit
+    end
+    if ns.ApplyDetectionSlots then
+      ns.ApplyDetectionSlots(container, GetPack(), initSlot, unit)
+    end
+    if container.SetEnabled then
+      container:SetEnabled(true)
     end
     return
   end
   if LockedDown() then
     pending = true
+    return
+  end
+  if ns.AttachDetector then
+    local container = ns.AttachDetector(row, unit, GetPack(), initSlot)
+    if container then
+      row.auraContainer = container
+      row._dcrDetectUnit = unit
+    else
+      row.auraSkipped = true
+    end
     return
   end
   local container = MakeAuraContainer(row)
@@ -203,22 +222,21 @@ local function AttachAuraContainer(row)
   if container.EnableMouse then
     container:EnableMouse(false)
   end
-  row.auraContainer = container
-  if ns.AttachDetectionContainer then
-    ns.AttachDetectionContainer(container, unit, GetPack(), initSlot)
-  else
-    if container.SetUnit then
-      container:SetUnit(unit)
-    end
-    if container.AddAuraSlot then
-      container:AddAuraSlot("dispel", ns.BY_ME_DISPEL_FILTER or ns.NATIVE_DISPEL_FILTER or "HARMFUL|RAID", {
-        initializeFrame = initSlot,
-      })
-    end
-    if container.SetEnabled then
-      container:SetEnabled(true)
-    end
+  if container.SetUnit then
+    container:SetUnit(unit)
   end
+  if ns.ApplyDetectionSlots then
+    ns.ApplyDetectionSlots(container, GetPack(), initSlot, unit)
+  elseif container.AddAuraSlot then
+    container:AddAuraSlot("dispel", ns.NATIVE_DISPEL_FILTER or "HARMFUL|RAID_PLAYER_DISPELLABLE", {
+      initializeFrame = initSlot,
+    })
+  end
+  if container.SetEnabled then
+    container:SetEnabled(true)
+  end
+  row.auraContainer = container
+  row._dcrDetectUnit = unit
 end
 
 local function ClassColor(unit)
