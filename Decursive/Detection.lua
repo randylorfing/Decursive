@@ -703,18 +703,21 @@ local function AuraToken(key, fallback)
   if type(token) == "string" and token ~= "" then
     return token
   end
-  return fallback
+  if type(fallback) == "string" and fallback ~= "" then
+    return fallback
+  end
+  return nil
 end
 
 local function LiveMainFilter(allMode)
   if allMode then
-    local token = AuraToken("Dispellable", "DISPELLABLE")
+    local token = AuraToken("Dispellable")
     if token then
       return "HARMFUL|" .. token
     end
-    return "HARMFUL|" .. AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
   end
-  return "HARMFUL|" .. AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
+  local rpd = AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
+  return "HARMFUL|" .. rpd
 end
 
 local function LiveGapFilter()
@@ -821,7 +824,7 @@ function ns.GetDetectionModel(pack)
   for i = 1, #customActions do
     actions[#actions + 1] = customActions[i]
   end
-  local slots = BuildSlots(enabled, pack, true)
+  local slots = BuildSlots(enabled, pack, false)
   local primary = actions[1]
   local model = {
     enabledTypes = enabled,
@@ -834,7 +837,7 @@ function ns.GetDetectionModel(pack)
     primaryName = primary and primary.name or nil,
     primaryId = primary and primary.spellId or nil,
     soulLink = SoulLinkState(pack),
-    engineGaps = ns.GetEngineDispelGaps(true),
+    engineGaps = ns.GetEngineDispelGaps(false),
   }
   cache.signature = sig
   cache.model = model
@@ -844,7 +847,10 @@ end
 function ns.GetDetectionSlots(pack, unit)
   pack = pack or GetPack()
   local model = ns.GetDetectionModel(pack)
-  local selfOnly = ns.IsPlayerUnit(unit) == true
+  local selfOnly = false
+  if type(unit) == "string" and unit ~= "" then
+    selfOnly = ns.IsPlayerUnit(unit) == true
+  end
   return BuildSlots(model.enabledTypes, pack, selfOnly)
 end
 
@@ -1357,25 +1363,18 @@ local function AppendPet(units, seen, owner, pack)
   if pack.cure and pack.cure.curePets == false then
     return
   end
-  local pet
   if owner == "player" then
     AppendUnit(units, seen, "pet", pack)
-    pet = "playerpet"
-  elseif owner:find("^party%d+$") then
-    pet = owner .. "pet"
-    local index = owner:match("^party(%d+)$")
-    if index then
-      AppendUnit(units, seen, "partypet" .. index, pack)
-    end
-  elseif owner:find("^raid%d+$") then
-    pet = owner .. "pet"
-    local index = owner:match("^raid(%d+)$")
-    if index then
-      AppendUnit(units, seen, "raidpet" .. index, pack)
-    end
+    return
   end
-  if pet then
-    AppendUnit(units, seen, pet, pack)
+  local partyIndex = type(owner) == "string" and owner:match("^party(%d+)$")
+  if partyIndex then
+    AppendUnit(units, seen, "partypet" .. partyIndex, pack)
+    return
+  end
+  local raidIndex = type(owner) == "string" and owner:match("^raid(%d+)$")
+  if raidIndex then
+    AppendUnit(units, seen, "raidpet" .. raidIndex, pack)
   end
 end
 
@@ -1494,7 +1493,7 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
   for i = 1, #slots do
     local slot = slots[i]
     if type(slot.filter) ~= "string" or slot.filter == "" or slot.filter == "HARMFUL" then
-      slot.filter = LiveNativeFilter()
+      slot.filter = LiveMainFilter(false)
     end
     local info = {
       initializeFrame = initFn,
