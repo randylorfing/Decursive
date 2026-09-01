@@ -1100,12 +1100,6 @@ function ns.LayoutMUFs()
   else
     handle:Show()
     handle:EnableMouse(true)
-    handle:ClearAllPoints()
-    if pack.mufs.growUp then
-      handle:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
-    else
-      handle:SetPoint("BOTTOMLEFT", header, "TOPLEFT", 0, 0)
-    end
   end
 
   local anchor
@@ -1160,6 +1154,26 @@ function ns.LayoutMUFs()
       btn:SetAttribute("unit", nil)
       ClearClickAttributes(btn)
       btn:Hide()
+    end
+  end
+
+  if handle and not pack.mufs.hideHandle then
+    local first
+    for i = 1, POOL_SIZE do
+      if pool[i] and pool[i].assigned then
+        first = pool[i]
+        break
+      end
+    end
+    if first then
+      local w = first:GetWidth() or size
+      handle:SetSize(w, w)
+      handle:ClearAllPoints()
+      if pack.mufs.growUp then
+        handle:SetPoint("TOP", first, "BOTTOM", 0, 0)
+      else
+        handle:SetPoint("BOTTOM", first, "TOP", 0, 0)
+      end
     end
   end
 

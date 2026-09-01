@@ -745,15 +745,17 @@ local function RefreshPreview()
     else
       x = startX + (i - 1) * (draw + gap)
     end
-    sq:SetPoint("BOTTOMLEFT", ui.previewHost, "BOTTOMLEFT", x, 10)
+    sq:SetPoint("BOTTOMLEFT", ui.previewHost, "BOTTOMLEFT", x, 12)
   end
   if ui.previewHandle then
-    ui.previewHandle:SetSize(math.min(20, draw), math.min(20, draw))
+    local hw = math.max(8, draw)
+    ui.previewHandle:SetSize(hw, hw)
+    ui.previewHandle.fill:SetSize(math.max(4, hw - 4), math.max(4, hw - 4))
     ui.previewHandle:ClearAllPoints()
     if pack.mufs.growUp then
-      ui.previewHandle:SetPoint("TOPLEFT", ui.previewSquares[1], "BOTTOMLEFT", 0, 0)
+      ui.previewHandle:SetPoint("TOP", ui.previewSquares[1], "BOTTOM", 0, 0)
     else
-      ui.previewHandle:SetPoint("BOTTOMLEFT", ui.previewSquares[1], "TOPLEFT", 0, 0)
+      ui.previewHandle:SetPoint("BOTTOM", ui.previewSquares[1], "TOP", 0, 0)
     end
     ui.previewHandle:SetShown(pack.mufs.hideHandle ~= true)
   end
@@ -764,7 +766,7 @@ ui.RefreshPreview = RefreshPreview
 local function BuildMufPreview(parent)
   local host = CreateFrame("Frame", nil, parent, "BackdropTemplate")
   Paint(host, {0.05, 0.09, 0.12, 1}, BORDER)
-  host:SetHeight(88)
+  host:SetHeight(132)
   local caption = Font(host, "GameFontDisable", "Size preview")
   caption:SetPoint("TOPLEFT", 14, -8)
   caption:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
@@ -801,9 +803,9 @@ local function LayoutCatalog()
       ui.previewHost:ClearAllPoints()
       ui.previewHost:SetPoint("TOPLEFT", 0, 0)
       ui.previewHost:SetPoint("TOPRIGHT", 0, 0)
-      ui.previewHost:SetHeight(88)
+      ui.previewHost:SetHeight(132)
       ui.previewHost:Show()
-      y = -96
+      y = -140
       RefreshPreview()
     end
     for _, section in ipairs(sections) do
