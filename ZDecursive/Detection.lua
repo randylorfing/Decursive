@@ -80,6 +80,8 @@ local follower = {
 local eventsOn = false
 local eventFrame
 local pendingCombatSlots = false
+local pendingRestrictionSlots = false
+local restrictionState = {}
 
 local function Accessible(value)
   if value == nil then
@@ -118,6 +120,77 @@ end
 
 function ns.IsPublicTrue(value)
   return IsTrue(value)
+end
+
+local function RestrictionInactive()
+  local states = Enum and Enum.AddOnRestrictionState
+  if states and type(states.Inactive) == "number" then
+    return states.Inactive
+  end
+  return 0
+end
+
+local function RestrictionActiveToken()
+  local states = Enum and Enum.AddOnRestrictionState
+  if states and type(states.Active) == "number" then
+    return states.Active
+  end
+  return 1
+end
+
+function ns.RememberRestrictionState(restrictionType, restrictionStateValue)
+  restrictionType = Public(restrictionType)
+  restrictionStateValue = Public(restrictionStateValue)
+  if type(restrictionType) == "number" and type(restrictionStateValue) == "number" then
+    restrictionState[restrictionType] = restrictionStateValue
+  end
+end
+
+function ns.HasActiveAddonRestriction()
+  local api = C_RestrictedActions
+  local types = Enum and Enum.AddOnRestrictionType
+  local states = Enum and Enum.AddOnRestrictionState
+  local inactive = RestrictionInactive()
+  local activating = states and states.Activating
+  local active = RestrictionActiveToken()
+  if type(api) ~= "table" then
+    return false
+  end
+  if type(types) == "table" then
+    for _name, restrictionType in pairs(types) do
+      if type(restrictionType) == "number" then
+        local state = restrictionState[restrictionType]
+        if state == activating or state == active then
+          return true
+        end
+        if state == nil and api.GetAddOnRestrictionState then
+          local latest = Public(api.GetAddOnRestrictionState(restrictionType))
+          if type(latest) == "number" then
+            restrictionState[restrictionType] = latest
+            state = latest
+          else
+            restrictionState[restrictionType] = active
+            state = active
+          end
+        end
+        if type(state) == "number" and state ~= inactive then
+          return true
+        end
+      end
+    end
+    return false
+  end
+  if api.IsAddOnRestrictionActive then
+    return IsTrue(api.IsAddOnRestrictionActive())
+  end
+  return false
+end
+
+function ns.AuraDisplayMutationBlocked()
+  if InCombatLockdown and InCombatLockdown() then
+    return true
+  end
+  return ns.HasActiveAddonRestriction()
 end
 
 local function Addon()
@@ -1542,6 +1615,7 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
     container._dcrSlotKeys = {}
   end
   local inCombat = InCombatLockdown and InCombatLockdown()
+  local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
   for i = 1, #slots do
     local slot = slots[i]
     if type(slot.filter) ~= "string" or slot.filter == "" or slot.filter == "HARMFUL" then
@@ -1552,14 +1626,22 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
       candidateFilters = slot.candidateFilters,
     }
     if container._dcrSlotKeys[slot.key] then
-      if container.SetAuraSlotFilterString then
-        container:SetAuraSlotFilterString(slot.key, slot.filter)
-      end
-      if container.SetAuraSlotCandidateFilters then
-        container:SetAuraSlotCandidateFilters(slot.key, slot.candidateFilters)
+      if not inCombat and not restricted then
+        if container.SetAuraSlotFilterString then
+          container:SetAuraSlotFilterString(slot.key, slot.filter)
+        end
+        if container.SetAuraSlotCandidateFilters then
+          container:SetAuraSlotCandidateFilters(slot.key, slot.candidateFilters)
+        end
+      elseif inCombat then
+        pendingCombatSlots = true
+      else
+        pendingRestrictionSlots = true
       end
     elseif inCombat then
       pendingCombatSlots = true
+    elseif restricted then
+      pendingRestrictionSlots = true
     elseif container.AddAuraSlot then
       container:AddAuraSlot(slot.key, slot.filter, info)
       container._dcrSlotKeys[slot.key] = true
@@ -1572,7 +1654,9 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
     wanted[slots[i].key] = true
   end
   if container._dcrSlotKeys.gap and not wanted.gap and container.SetAuraSlotCandidateFilters then
-    container:SetAuraSlotCandidateFilters("gap", {includeDispelTypes = {}})
+    if not inCombat and not restricted then
+      container:SetAuraSlotCandidateFilters("gap", {includeDispelTypes = {}})
+    end
   end
   return true
 end
@@ -1585,6 +1669,10 @@ function ns.AttachDetectionContainer(container, unit, pack, initFn)
     return false
   end
   pack = pack or GetPack()
+  if ns.AuraDisplayMutationBlocked and ns.AuraDisplayMutationBlocked() then
+    pendingRestrictionSlots = true
+    return false
+  end
   if container.SetUnit then
     container:SetUnit(unit)
   end
@@ -1627,6 +1715,13 @@ function ns.AttachDetector(parent, unit, pack, initFn)
     return nil
   end
   container:SetUnit(unit)
+  if ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction() then
+    pendingRestrictionSlots = true
+    if container.SetEnabled then
+      container:SetEnabled(false)
+    end
+    return container
+  end
   if not ns.ApplyDetectionSlots(container, pack, initFn, unit) then
     if container.SetEnabled then
       container:SetEnabled(false)
@@ -1994,15 +2089,34 @@ function ns.EnableDetection()
   end
   eventsOn = true
   eventFrame = CreateFrame("Frame")
-  eventFrame:SetScript("OnEvent", function(_, event, unit)
+  eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2)
+    local unit = arg1
     ns.InvalidateDetection()
+    if event == "ADDON_RESTRICTION_STATE_CHANGED" then
+      ns.RememberRestrictionState(arg1, arg2)
+      if ns.HasActiveAddonRestriction() then
+        pendingRestrictionSlots = true
+        return
+      end
+      pendingRestrictionSlots = false
+      if ns.RefreshMUFs then
+        ns.RefreshMUFs()
+      end
+      return
+    end
     if event == "PLAYER_REGEN_ENABLED" then
       pendingCombatSlots = false
+      if not ns.HasActiveAddonRestriction() then
+        pendingRestrictionSlots = false
+      end
       if ns.RefreshLiveList then
         ns.RefreshLiveList()
       end
       if ns.RefreshAlerts then
         ns.RefreshAlerts()
+      end
+      if ns.RefreshMUFs then
+        ns.RefreshMUFs()
       end
       return
     end
@@ -2063,6 +2177,7 @@ function ns.EnableDetection()
     "TRAIT_CONFIG_UPDATED",
     "PLAYER_ROLES_ASSIGNED",
     "PLAYER_TALENT_UPDATE",
+    "ADDON_RESTRICTION_STATE_CHANGED",
   }
   for i = 1, #extra do
     local name = extra[i]
@@ -2084,6 +2199,7 @@ ns.Detection = {
   InRange = ns.UnitInRangeKeep,
   ApplySlots = ns.ApplyDetectionSlots,
   Attach = ns.AttachDetector,
+  Restriction = ns.HasActiveAddonRestriction,
   SoulLink = ns.GetSoulLinkState,
   InArena = ns.IsArenaInstance,
   EngineGaps = ns.GetEngineDispelGaps,

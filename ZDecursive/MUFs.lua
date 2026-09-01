@@ -7,6 +7,17 @@ local WHITE = "Interface\\Buttons\\WHITE8x8"
 local MACRO_BYTE_LIMIT = 255
 local PVP_BANDAGE_SPELL = 212640
 local SOUL_LINK_ITEM_ID = 269586
+local SOUL_LINK_RANGE_SPELL = 1259646
+local SKULL_TEXTURE = 137008
+local COLOR_DEAD = {0, 0, 0, 1}
+local COLOR_DEAD_CLEAR = {0, 0, 0, 0}
+local COLOR_SKULL = {1, 1, 1, 1}
+local COLOR_SKULL_CLEAR = {1, 1, 1, 0}
+local COLOR_SL_IN = {0, 0.82, 0.18, 1}
+local COLOR_SL_OUT = {1, 0.82, 0, 1}
+local COLOR_FAIL = {1, 0.08, 0.08, 1}
+local COLOR_READY = {0.10, 1.00, 0.24, 1}
+local COLOR_CLEAR = {1, 1, 1, 0}
 
 local FRIENDLY_TYPES = {
   magic = true,
@@ -47,6 +58,8 @@ local eventFrame
 local cooldownUntil = 0
 local cooldownSkipGUID
 local rangeElapsed = 0
+local paintElapsed = 0
+local colorObjects = {}
 local mufsConfigured = false
 local clickModel
 local clickModelSig
@@ -110,6 +123,116 @@ local function ColorOf(c, fallback)
     return fallback[1], fallback[2], fallback[3], fallback[4] or 1
   end
   return 0.12, 0.16, 0.18, 1
+end
+
+local function ColorObject(c)
+  if type(c) ~= "table" or not CreateColor then
+    return nil
+  end
+  local key = tostring(c[1] or 0) .. "," .. tostring(c[2] or 0) .. "," .. tostring(c[3] or 0) .. "," .. tostring(c[4] or 1)
+  local obj = colorObjects[key]
+  if not obj then
+    obj = CreateColor(c[1] or 0, c[2] or 0, c[3] or 0, c[4] or 1)
+    colorObjects[key] = obj
+  end
+  return obj
+end
+
+local function ApplyBooleanVertex(tex, value, onColor, offColor)
+  if not tex then
+    return false
+  end
+  local onObj = ColorObject(onColor)
+  local offObj = ColorObject(offColor)
+  if tex.SetVertexColorFromBoolean and onObj and offObj then
+    tex:SetVertexColorFromBoolean(value, onObj, offObj)
+    return true
+  end
+  if Accessible(value) then
+    local c = (value == true or value == 1) and onColor or offColor
+    local r, g, b, a = ColorOf(c)
+    if tex.SetVertexColor then
+      tex:SetVertexColor(r, g, b, a)
+    end
+    return true
+  end
+  return false
+end
+
+local function DeadValue(unit)
+  if not UnitIsDeadOrGhost then
+    return false
+  end
+  return UnitIsDeadOrGhost(unit)
+end
+
+local function StealthedValue(unit)
+  if not UnitIsStealthed then
+    return false
+  end
+  return UnitIsStealthed(unit)
+end
+
+local function SoulLinkRangeValue(unit)
+  if type(unit) ~= "string" or unit == "" then
+    return false
+  end
+  if C_Spell and C_Spell.IsSpellInRange then
+    local result = C_Spell.IsSpellInRange(SOUL_LINK_RANGE_SPELL, unit)
+    if result ~= nil then
+      return result
+    end
+  end
+  if ns.SpellRangeState then
+    return ns.SpellRangeState(unit, nil, SOUL_LINK_RANGE_SPELL)
+  end
+  return false
+end
+
+local function SoulLinkFallbackApplies(unit)
+  if type(unit) ~= "string" then
+    return false
+  end
+  if ns.IsMUFRezEligibleUnitToken then
+    if ns.IsMUFRezEligibleUnitToken(unit) ~= true then
+      return false
+    end
+  elseif unit:lower():find("pet", 1, true) then
+    return false
+  end
+  if not ns.GetSmartRezActions then
+    return false
+  end
+  local _battle, _ooc, combatSoulLink, outOfCombatSoulLink = ns.GetSmartRezActions(GetPack())
+  return combatSoulLink == true or outOfCombatSoulLink == true
+end
+
+local function IdentityTooltipAllowed(pack)
+  if not pack or not pack.mufs or pack.mufs.tooltip == false then
+    return false
+  end
+  if not IsInInstance then
+    return false
+  end
+  local inInstance, instanceType = IsInInstance()
+  instanceType = Public(instanceType)
+  if inInstance ~= true then
+    return false
+  end
+  return instanceType == "party" or instanceType == "raid"
+end
+
+local function DisplayMutationBlocked()
+  if ns.AuraDisplayMutationBlocked then
+    return ns.AuraDisplayMutationBlocked()
+  end
+  if LockedDown() then
+    return true
+  end
+  if ns.HasActiveAddonRestriction then
+    return ns.HasActiveAddonRestriction()
+  end
+  return false
 end
 
 local function ApplyColor(tex, c, a)
@@ -814,6 +937,84 @@ local function ApplyClickAttributes(btn, pack, unit)
   return true
 end
 
+local function AttachIdentityTooltip(btn, pack, unit)
+  if type(unit) ~= "string" or unit == "" then
+    return
+  end
+  if not IdentityTooltipAllowed(pack) then
+    if btn.identityContainer and btn.identityContainer.SetEnabled and not DisplayMutationBlocked() then
+      btn.identityContainer:SetEnabled(false)
+    end
+    return
+  end
+  if DisplayMutationBlocked() then
+    pending = true
+    return
+  end
+  if btn.identityContainer then
+    if btn.identityContainer.SetUnit then
+      btn.identityContainer:SetUnit(unit)
+    end
+    if btn.identityContainer.SetEnabled then
+      btn.identityContainer:SetEnabled(true)
+    end
+    return
+  end
+  local ok, container = pcall(CreateFrame, "AuraContainer", nil, btn, "CustomAuraContainerTemplate")
+  if not ok or not container then
+    return
+  end
+  if container.SetAllPoints then
+    container:SetAllPoints(btn)
+  end
+  if container.EnableMouse then
+    container:EnableMouse(false)
+  end
+  if not container.SetUnit or not container.AddAuraSlot then
+    return
+  end
+  container:SetUnit(unit)
+  local options = {
+    initializeFrame = function(slot)
+      if slot.ClearAllPoints then
+        slot:ClearAllPoints()
+      end
+      if slot.SetAllPoints then
+        slot:SetAllPoints(btn)
+      end
+      if slot.EnableMouse then
+        slot:EnableMouse(true)
+      end
+      if slot.SetMouseClickEnabled then
+        slot:SetMouseClickEnabled(false)
+      end
+      if slot.SetPropagateMouseClicks then
+        slot:SetPropagateMouseClicks(true)
+      end
+      if slot.SetPassThroughButtons then
+        slot:SetPassThroughButtons("LeftButton", "RightButton", "MiddleButton", "Button4", "Button5")
+      end
+      if slot.SetMouseMotionEnabled then
+        slot:SetMouseMotionEnabled(true)
+      end
+      if slot.SetTooltipAnchorPoint then
+        slot:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)
+      end
+      if slot.SetHideTooltipInCombat then
+        slot:SetHideTooltipInCombat(false)
+      end
+    end,
+  }
+  container:AddAuraSlot("identity", "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+  if container.SetEnabled then
+    container:SetEnabled(true)
+  end
+  if container.Show then
+    container:Show()
+  end
+  btn.identityContainer = container
+end
+
 local function AttachPaint(btn, pack, unit)
   if type(unit) ~= "string" or unit == "" then
     return
@@ -829,21 +1030,107 @@ local function AttachPaint(btn, pack, unit)
     if ns.AttachDetectionContainer then
       ns.AttachDetectionContainer(btn.auraContainer, unit, pack, initFn)
     end
-    return
-  end
-  if ns.AttachDetector then
+  elseif ns.AttachDetector then
     btn.auraContainer = ns.AttachDetector(btn.inner, unit, pack, initFn)
   end
+  AttachIdentityTooltip(btn, pack, unit)
+end
+
+local function PaintRaidIcon(btn, unit)
+  local icon = btn.raidIcon
+  if not icon then
+    return
+  end
+  local index
+  if GetRaidTargetIndex then
+    index = Public(GetRaidTargetIndex(unit))
+  end
+  if type(index) == "number" and index >= 1 and index <= 8 then
+    icon:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcon_" .. tostring(index))
+    icon:Show()
+  else
+    icon:SetTexture(nil)
+    icon:Hide()
+  end
+end
+
+local function PaintManagedOverlays(btn, pack, unit)
+  if not btn or not btn.assigned or type(unit) ~= "string" then
+    if btn then
+      if btn.deadFill then
+        ApplyBooleanVertex(btn.deadFill, false, COLOR_DEAD, COLOR_DEAD_CLEAR)
+      end
+      if btn.skullTex then
+        ApplyBooleanVertex(btn.skullTex, false, COLOR_SKULL, COLOR_SKULL_CLEAR)
+      end
+      if btn.soulLinkFill then
+        ApplyBooleanVertex(btn.soulLinkFill, false, COLOR_SL_IN, COLOR_DEAD_CLEAR)
+      end
+      if btn.stealthTex then
+        ApplyBooleanVertex(btn.stealthTex, false, pack and pack.colors and pack.colors.stealth or COLOR_CLEAR, COLOR_DEAD_CLEAR)
+      end
+      if btn.failTex then
+        btn.failTex:Hide()
+      end
+      if btn.raidIcon then
+        btn.raidIcon:Hide()
+      end
+    end
+    return
+  end
+  local colors = pack and pack.colors or {}
+  local deadValue = DeadValue(unit)
+  if btn.deadFill then
+    ApplyBooleanVertex(btn.deadFill, deadValue, COLOR_DEAD, COLOR_DEAD_CLEAR)
+  end
+  if btn.skullTex then
+    ApplyBooleanVertex(btn.skullTex, deadValue, COLOR_SKULL, COLOR_SKULL_CLEAR)
+  end
+  if btn.soulLinkFill then
+    if SoulLinkFallbackApplies(unit) then
+      ApplyBooleanVertex(btn.soulLinkFill, SoulLinkRangeValue(unit), COLOR_SL_IN, COLOR_SL_OUT)
+      if btn.soulLinkFill.SetAlphaFromBoolean then
+        btn.soulLinkFill:SetAlphaFromBoolean(deadValue, 1, 0)
+      elseif Accessible(deadValue) then
+        btn.soulLinkFill:SetAlpha((deadValue == true or deadValue == 1) and 1 or 0)
+      end
+    else
+      ApplyBooleanVertex(btn.soulLinkFill, false, COLOR_SL_IN, COLOR_DEAD_CLEAR)
+      btn.soulLinkFill:SetAlpha(0)
+    end
+  end
+  if btn.stealthTex then
+    if pack.mufs.stealthStatus then
+      local stealthColor = colors.stealth or {0.4, 0.6, 0.4, 1}
+      ApplyBooleanVertex(btn.stealthTex, StealthedValue(unit), stealthColor, COLOR_DEAD_CLEAR)
+    else
+      ApplyBooleanVertex(btn.stealthTex, false, colors.stealth or COLOR_CLEAR, COLOR_DEAD_CLEAR)
+    end
+  end
+  local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
+  local rangeFail = false
+  if pack.mufs.dimOutOfRange and ns.SpellRangeState then
+    local spell, spellId
+    if ns.GetPrimaryCure then
+      spell, spellId = ns.GetPrimaryCure(pack)
+    end
+    rangeFail = ns.SpellRangeState(unit, spell, spellId) ~= true
+  end
+  if btn.failTex then
+    if restricted or rangeFail then
+      btn.failTex:SetColorTexture(COLOR_FAIL[1], COLOR_FAIL[2], COLOR_FAIL[3], 0.28)
+      btn.failTex:Show()
+    else
+      btn.failTex:Hide()
+    end
+  end
+  PaintRaidIcon(btn, unit)
 end
 
 local function PaintSquare(btn, pack, unit)
   local colors = pack.colors or {}
   local borderOn = pack.mufs.border ~= false
-  local dead = IsPubliclyDead(unit)
   local fill = colors.healthy
-  if dead then
-    fill = colors.dead or fill
-  end
   local w = btn:GetWidth() or 20
   local petminus = 0
   if type(unit) == "string" and unit:find("pet") then
@@ -857,6 +1144,14 @@ local function PaintSquare(btn, pack, unit)
   btn.inner:ClearAllPoints()
   btn.inner:SetPoint("CENTER")
   btn.inner:SetSize(inner, inner)
+  if btn.skullTex then
+    local skull = math.max(6, math.floor(inner * 0.50 + 0.5))
+    btn.skullTex:SetSize(skull, skull)
+  end
+  if btn.raidIcon then
+    local mark = math.max(6, math.floor(inner * 0.40 + 0.5))
+    btn.raidIcon:SetSize(mark, mark)
+  end
   local r, g, b, a = ClassBorderColor(unit, colors.border)
   for _, edge in ipairs({btn.outer1, btn.outer2, btn.outer3, btn.outer4}) do
     if edge then
@@ -873,9 +1168,7 @@ local function PaintSquare(btn, pack, unit)
     idle = 0.35
   end
   local alpha = (fill[4] or 1) * idle
-  if dead then
-    alpha = pack.mufs.inactiveOpacity or 0.65
-  elseif UnitIsConnected then
+  if UnitIsConnected then
     local connected = UnitIsConnected(unit)
     if Accessible(connected) and connected == false then
       alpha = pack.mufs.inactiveOpacity or 0.65
@@ -907,6 +1200,7 @@ local function PaintSquare(btn, pack, unit)
       btn.playerMark:Hide()
     end
   end
+  PaintManagedOverlays(btn, pack, unit)
 end
 local function PlaceStatusLight(btn, size, enabled)
   local light = btn.statusLight
@@ -942,10 +1236,11 @@ local function UpdateStatusLights()
       if ns.SpellRangeState then
         inRange = ns.SpellRangeState(btn.unit, spell, spellId) == true
       end
-      if inRange ~= true then
-        btn.statusLight:SetColorTexture(1, 0.92, 0.2, 1)
+      local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
+      if restricted or inRange ~= true then
+        btn.statusLight:SetColorTexture(COLOR_FAIL[1], COLOR_FAIL[2], COLOR_FAIL[3], 1)
       else
-        btn.statusLight:SetColorTexture(0.25, 0.85, 0.4, 1)
+        btn.statusLight:SetColorTexture(COLOR_READY[1], COLOR_READY[2], COLOR_READY[3], 1)
       end
     elseif btn.statusLight then
       btn.statusLight:Hide()
@@ -1044,6 +1339,9 @@ local function WireTooltip(btn)
     if not pack.mufs.tooltip then
       return
     end
+    if IdentityTooltipAllowed(pack) and self.identityContainer then
+      return
+    end
     local unit = self.unit
     if not unit or not GameTooltip then
       return
@@ -1109,9 +1407,41 @@ local function CreateMUF(parent)
   btn.cdText:Hide()
 
   btn.statusLight = btn:CreateTexture(nil, "OVERLAY")
-  btn.statusLight:SetColorTexture(0.25, 0.85, 0.4, 1)
+  btn.statusLight:SetColorTexture(COLOR_READY[1], COLOR_READY[2], COLOR_READY[3], 1)
   btn.statusLight:Hide()
   btn.statusLight:SetSize(6, 6)
+
+  btn.stealthTex = btn:CreateTexture(nil, "ARTWORK", nil, 3)
+  btn.stealthTex:SetAllPoints(btn.fillTex)
+  btn.stealthTex:SetColorTexture(1, 1, 1, 1)
+  btn.stealthTex:SetVertexColor(0, 0, 0, 0)
+
+  btn.failTex = btn:CreateTexture(nil, "ARTWORK", nil, 5)
+  btn.failTex:SetAllPoints(btn.fillTex)
+  btn.failTex:SetColorTexture(COLOR_FAIL[1], COLOR_FAIL[2], COLOR_FAIL[3], 0.28)
+  btn.failTex:Hide()
+
+  btn.deadFill = btn:CreateTexture(nil, "ARTWORK", nil, 6)
+  btn.deadFill:SetAllPoints(btn.fillTex)
+  btn.deadFill:SetColorTexture(1, 1, 1, 1)
+  btn.deadFill:SetVertexColor(0, 0, 0, 0)
+
+  btn.soulLinkFill = btn:CreateTexture(nil, "ARTWORK", nil, 7)
+  btn.soulLinkFill:SetAllPoints(btn.fillTex)
+  btn.soulLinkFill:SetColorTexture(1, 1, 1, 1)
+  btn.soulLinkFill:SetVertexColor(0, 0, 0, 0)
+  btn.soulLinkFill:SetAlpha(0)
+
+  btn.skullTex = btn:CreateTexture(nil, "OVERLAY", nil, 7)
+  btn.skullTex:SetPoint("CENTER", btn.fillTex, "CENTER")
+  btn.skullTex:SetSize(8, 8)
+  btn.skullTex:SetTexture(SKULL_TEXTURE)
+  btn.skullTex:SetVertexColor(1, 1, 1, 0)
+
+  btn.raidIcon = btn:CreateTexture(nil, "OVERLAY", nil, 8)
+  btn.raidIcon:SetPoint("TOPLEFT", btn.fillTex, "TOPLEFT", -1, 1)
+  btn.raidIcon:SetSize(8, 8)
+  btn.raidIcon:Hide()
 
   WireTooltip(btn)
   btn:Hide()
@@ -1140,11 +1470,21 @@ local function OnHeaderUpdate(_self, elapsed)
     UpdateCooldowns()
   end
   local pack = GetPack()
-  if pack.mufs.statusLight then
-    rangeElapsed = rangeElapsed + (elapsed or 0)
-    if rangeElapsed >= 0.15 then
-      rangeElapsed = 0
-      UpdateStatusLights()
+  rangeElapsed = rangeElapsed + (elapsed or 0)
+  paintElapsed = paintElapsed + (elapsed or 0)
+  if pack.mufs.statusLight and rangeElapsed >= 0.15 then
+    rangeElapsed = 0
+    UpdateStatusLights()
+  end
+  if paintElapsed >= 0.20 then
+    paintElapsed = 0
+    if poolReady then
+      for i = 1, #pool do
+        local btn = pool[i]
+        if btn.assigned then
+          PaintManagedOverlays(btn, pack, btn.unit)
+        end
+      end
     end
   end
 end
@@ -1366,7 +1706,7 @@ function ns.LayoutMUFs()
       PaintSquare(btn, pack, unit)
       PlaceStatusLight(btn, size, pack.mufs.statusLight)
       AttachPaint(btn, pack, unit)
-      if btn.auraContainer and btn.auraContainer.SetUnit then
+      if btn.auraContainer and btn.auraContainer.SetUnit and not DisplayMutationBlocked() then
         btn.auraContainer:SetUnit(unit)
       end
       btn:Show()
@@ -1445,7 +1785,7 @@ local function RegisterExtraEvents()
   end
   eventsOn = true
   eventFrame = CreateFrame("Frame")
-  eventFrame:SetScript("OnEvent", function(_, event)
+  eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2)
     if event == "SPELLS_CHANGED" then
       if ns.InvalidateDetection then
         ns.InvalidateDetection()
@@ -1465,16 +1805,44 @@ local function RegisterExtraEvents()
         return
       end
       ns.RefreshMUFs()
+    elseif event == "RAID_TARGET_UPDATE" then
+      if poolReady then
+        for i = 1, #pool do
+          local btn = pool[i]
+          if btn.assigned then
+            PaintRaidIcon(btn, btn.unit)
+          end
+        end
+      end
+    elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
+      if arg1 ~= nil then
+        if ns.RememberRestrictionState then
+          ns.RememberRestrictionState(arg1, arg2)
+        end
+      end
+      if LockedDown() then
+        pending = true
+        return
+      end
+      ns.RefreshMUFs()
     end
   end)
   eventFrame:RegisterEvent("SPELLS_CHANGED")
   eventFrame:RegisterEvent("UNIT_PET")
+  eventFrame:RegisterEvent("RAID_TARGET_UPDATE")
   local valid = true
   if C_EventUtils and C_EventUtils.IsEventValid then
     valid = C_EventUtils.IsEventValid("COMBAT_LOG_EVENT_UNFILTERED")
   end
   if valid then
     eventFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+  end
+  local restrictionOk = true
+  if C_EventUtils and C_EventUtils.IsEventValid then
+    restrictionOk = C_EventUtils.IsEventValid("ADDON_RESTRICTION_STATE_CHANGED")
+  end
+  if restrictionOk then
+    eventFrame:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
   end
 end
 
