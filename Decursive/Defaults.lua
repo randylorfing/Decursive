@@ -78,6 +78,7 @@ ns.PACK = {
   },
   cure = {
     mode = "AUTO",
+    manual = {},
     magic = true,
     curse = true,
     poison = true,

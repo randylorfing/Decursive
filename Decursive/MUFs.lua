@@ -3,27 +3,39 @@ local ADDON_NAME, ns = ...
 local POOL_SIZE = 80
 local BORDER_PX = 2
 local GCD = 1.5
-local DISPEL_FILTER = "HARMFUL|RAID_PLAYER_DISPELLABLE"
 local WHITE = "Interface\\Buttons\\WHITE8x8"
+local MACRO_BYTE_LIMIT = 255
+local PVP_BANDAGE_SPELL = 212640
+local SOUL_LINK_ITEM_ID = 269586
 
-local CLASS_DISPEL = {
-  PALADIN = {4987, 213644},
-  PRIEST = {527, 213634},
-  DRUID = {88423, 2782},
-  SHAMAN = {77130, 51886},
-  MONK = {115450, 218164},
-  EVOKER = {360823, 365585, 374251},
-  MAGE = {475},
-  WARLOCK = {89808},
+local FRIENDLY_TYPES = {
+  magic = true,
+  curse = true,
+  poison = true,
+  disease = true,
+  bleed = true,
 }
 
 local MOUSE_BUTTONS = {
-  {key = "left", index = 1},
-  {key = "right", index = 2},
-  {key = "middle", index = 3},
-  {key = "button4", index = 4},
-  {key = "button5", index = 5},
+  {key = "left", index = 1, binding = "*%s1"},
+  {key = "right", index = 2, binding = "*%s2"},
+  {key = "middle", index = 3, binding = "*%s3"},
+  {key = "button4", index = 4, binding = "*%s4"},
+  {key = "button5", index = 5, binding = "*%s5"},
 }
+
+local AUTO_CURE_GESTURES = {
+  "*%s1",
+  "*%s2",
+  "ctrl-%s1",
+}
+
+local TARGET_GESTURE = "*%s3"
+local FOCUS_GESTURE = "ctrl-%s3"
+local PVP_BANDAGE_GESTURE = "*%s5"
+local PHYSICAL_LEFT = "*%s1"
+
+local GESTURE_PREFIXES = {"", "*", "ctrl-", "shift-", "alt-"}
 
 local header
 local handle
@@ -32,11 +44,12 @@ local poolReady = false
 local pending = false
 local eventsOn = false
 local eventFrame
-local cureName
-local cureId
 local cooldownUntil = 0
 local cooldownSkipGUID
 local rangeElapsed = 0
+local mufsConfigured = false
+local clickModel
+local clickModelSig
 
 local function Addon()
   return ns.addon
@@ -154,101 +167,6 @@ local function IsPubliclyDead(unit)
   return dead == true
 end
 
-local function PlayerClassFile()
-  local classFile
-  if UnitClass then
-    local _name, file = UnitClass("player")
-    classFile = Public(file)
-  end
-  return classFile
-end
-
-local function SpellKnown(spellId)
-  if C_SpellBook then
-    if C_SpellBook.IsSpellKnown and IsTrue(C_SpellBook.IsSpellKnown(spellId)) then
-      return true
-    end
-    local banks = Enum and Enum.SpellBookSpellBank
-    if banks then
-      if C_SpellBook.IsSpellKnown and IsTrue(C_SpellBook.IsSpellKnown(spellId, banks.Player)) then
-        return true
-      end
-      if C_SpellBook.IsSpellKnown and IsTrue(C_SpellBook.IsSpellKnown(spellId, banks.Pet)) then
-        return true
-      end
-    end
-    if C_SpellBook.IsSpellInSpellBook and IsTrue(C_SpellBook.IsSpellInSpellBook(spellId)) then
-      return true
-    end
-    if C_SpellBook.IsSpellKnownOrInSpellBook and IsTrue(C_SpellBook.IsSpellKnownOrInSpellBook(spellId)) then
-      return true
-    end
-  end
-  if IsPlayerSpell and IsTrue(IsPlayerSpell(spellId)) then
-    return true
-  end
-  if IsSpellKnown and IsTrue(IsSpellKnown(spellId)) then
-    return true
-  end
-  if IsSpellKnown and IsTrue(IsSpellKnown(spellId, true)) then
-    return true
-  end
-  return false
-end
-
-local function SpellName(spellId)
-  local name
-  if C_Spell and C_Spell.GetSpellName then
-    name = C_Spell.GetSpellName(spellId)
-  elseif C_Spell and C_Spell.GetSpellInfo then
-    local info = C_Spell.GetSpellInfo(spellId)
-    if type(info) == "table" then
-      name = info.name
-    end
-  end
-  if type(name) == "string" and Accessible(name) and name ~= "" then
-    return name
-  end
-  return nil
-end
-
-local function FirstKnown(ids)
-  if type(ids) ~= "table" then
-    return nil, nil
-  end
-  for i = 1, #ids do
-    local id = ids[i]
-    if SpellKnown(id) then
-      local name = SpellName(id)
-      if name then
-        return name, id
-      end
-    end
-  end
-  return nil, nil
-end
-
-local function ResolveCureSpell()
-  if cureName then
-    return cureName, cureId
-  end
-  local classFile = PlayerClassFile()
-  if type(classFile) == "string" and CLASS_DISPEL[classFile] then
-    cureName, cureId = FirstKnown(CLASS_DISPEL[classFile])
-    if cureName then
-      return cureName, cureId
-    end
-  end
-  for _, ids in pairs(CLASS_DISPEL) do
-    local name, id = FirstKnown(ids)
-    if name then
-      cureName, cureId = name, id
-      return cureName, cureId
-    end
-  end
-  return nil, nil
-end
-
 local function PixelSize(pack, env)
   local mufs = pack.mufs
   local partySize = mufs.partySize or 20
@@ -290,138 +208,6 @@ local function ShouldShowHeader(pack)
     end
   end
   return true
-end
-
-local function TryDandersUnits()
-  local df = _G.DandersFrames
-  if type(df) ~= "table" then
-    return nil
-  end
-  local names = {"GetOrderedUnits", "GetUnitOrder", "GetRoster", "GetRosterUnits", "GetUnitList"}
-  local fn
-  for i = 1, #names do
-    local candidate = df[names[i]]
-    if type(candidate) == "function" then
-      fn = candidate
-      break
-    end
-  end
-  if not fn and type(df.API) == "table" then
-    for i = 1, #names do
-      local candidate = df.API[names[i]]
-      if type(candidate) == "function" then
-        fn = candidate
-        df = df.API
-        break
-      end
-    end
-  end
-  if not fn then
-    return nil
-  end
-  local ok, result = pcall(fn, df)
-  if not ok or type(result) ~= "table" then
-    return nil
-  end
-  local units = {}
-  for i = 1, #result do
-    local row = result[i]
-    local unit
-    if type(row) == "string" then
-      unit = row
-    elseif type(row) == "table" then
-      unit = row.unit or row.unitToken or row.token
-      if not unit and row.GetAttribute then
-        unit = row:GetAttribute("unit")
-      end
-    end
-    if type(unit) == "string" and Accessible(unit) then
-      units[#units + 1] = unit
-    end
-  end
-  if #units == 0 then
-    return nil
-  end
-  return units
-end
-
-local function AppendUnit(units, seen, unit, pack)
-  if type(unit) ~= "string" or seen[unit] then
-    return
-  end
-  if not UnitPresent(unit) then
-    return
-  end
-  if pack.sorting.includePlayer == false and IsPlayerToken(unit) then
-    return
-  end
-  if pack.sorting.skipDead and IsPubliclyDead(unit) then
-    return
-  end
-  seen[unit] = true
-  units[#units + 1] = unit
-end
-
-local function AppendPet(units, seen, owner, pack)
-  if not pack.sorting.includePets then
-    return
-  end
-  local pet
-  if owner == "player" then
-    pet = "playerpet"
-  elseif owner:find("^party%d+$") then
-    pet = owner .. "pet"
-  elseif owner:find("^raid%d+$") then
-    pet = owner .. "pet"
-  end
-  if pet then
-    AppendUnit(units, seen, pet, pack)
-  end
-end
-
-local function BuildRoster(pack)
-  local units = {}
-  local seen = {}
-  local order = pack.mufs.order or "GROUP"
-  if order == "DANDERSFRAMES" then
-    local danders = TryDandersUnits()
-    if danders then
-      for i = 1, #danders do
-        AppendUnit(units, seen, danders[i], pack)
-        AppendPet(units, seen, danders[i], pack)
-      end
-      if ns.ApplyUnitLists then
-        return ns.ApplyUnitLists(units, pack)
-      end
-      return units
-    end
-  end
-  if IsInRaid and IsInRaid() then
-    for i = 1, 40 do
-      local unit = "raid" .. i
-      AppendUnit(units, seen, unit, pack)
-      AppendPet(units, seen, unit, pack)
-    end
-    if ns.ApplyUnitLists then
-      return ns.ApplyUnitLists(units, pack)
-    end
-    return units
-  end
-  if pack.sorting.includePlayer ~= false then
-    AppendUnit(units, seen, "player", pack)
-    AppendPet(units, seen, "player", pack)
-  end
-  if IsInGroup and IsInGroup() then
-    for i = 1, 4 do
-      local unit = "party" .. i
-      AppendUnit(units, seen, unit, pack)
-      AppendPet(units, seen, unit, pack)
-    end
-  end
-  if ns.ApplyUnitLists then
-    return ns.ApplyUnitLists(units, pack)
-  end
-  return units
 end
 
 local function GetSavedPoint()
@@ -505,7 +291,7 @@ local function BindAuraSlot(slot, pack)
     showWhenHarmful = true,
     showWhenHelpful = false,
     showWithoutDispelType = false,
-    customDispelColorMap = DispelColorMap(pack),
+    customDispelColorMap = (ns.GetDispelColorMap and ns.GetDispelColorMap(pack)) or DispelColorMap(pack),
   }
   local styles = Enum and Enum.CustomAuraButtonDispelTypeTextureStyle
   if styles and styles.PreserveAsset then
@@ -523,108 +309,530 @@ local function BindAuraSlot(slot, pack)
   end
 end
 
-local function MakeAuraContainer(parent)
-  local ok, container = pcall(CreateFrame, "AuraContainer", nil, parent, "CustomAuraContainerTemplate")
-  if ok and container then
-    return container
+local function DistinctFriendlyCures(pack)
+  local actions = ns.GetKnownCures and ns.GetKnownCures(pack) or {}
+  local out = {}
+  local seen = {}
+  for i = 1, #actions do
+    local action = actions[i]
+    local spellId = action and action.spellId
+    local name = action and action.name
+    if type(spellId) == "number" and not seen[spellId] and type(name) == "string" and name ~= "" then
+      local types = action.types
+      local friendly = false
+      if type(types) == "table" then
+        for t = 1, #types do
+          if FRIENDLY_TYPES[types[t]] then
+            friendly = true
+            break
+          end
+        end
+      end
+      if friendly then
+        seen[spellId] = true
+        out[#out + 1] = action
+      end
+    end
   end
-  ok, container = pcall(CreateFrame, "AuraContainer", nil, parent)
-  if ok and container then
-    return container
-  end
-  return nil
+  return out
 end
 
-local function AttachAuraContainer(btn, pack)
-  if btn.auraContainer then
-    if btn.auraContainer.SetEnabled then
-      btn.auraContainer:SetEnabled(true)
+local function BuildSmartRezMacroText(cureCommand, cureName, cureUsesPet)
+  local battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink
+  if ns.GetSmartRezActions then
+    battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink = ns.GetSmartRezActions(GetPack())
+  end
+  local hasRezAction = battleRezName ~= nil or outOfCombatRezName ~= nil or combatSoulLink or outOfCombatSoulLink
+  local combatClause = "[@mouseover,help,exists,dead,combat]"
+  local outOfCombatClause = "[@mouseover,help,exists,dead,nocombat]"
+  local friendlyCureClause = "[@mouseover,help,exists,nodead]"
+  local hostileCureClause = "[@mouseover,harm,exists,nodead]"
+
+  local function build(includeRez, includeCure)
+    local lines = {}
+    local castActions = {}
+    local useActions = {}
+    if includeRez then
+      if battleRezName and outOfCombatRezName == battleRezName then
+        castActions[#castActions + 1] = combatClause .. outOfCombatClause .. " " .. battleRezName
+      else
+        if battleRezName then
+          castActions[#castActions + 1] = combatClause .. " " .. battleRezName
+        end
+        if outOfCombatRezName then
+          castActions[#castActions + 1] = outOfCombatClause .. " " .. outOfCombatRezName
+        end
+      end
+      if combatSoulLink and outOfCombatSoulLink then
+        useActions[#useActions + 1] = combatClause .. outOfCombatClause .. " item:269586"
+      else
+        if combatSoulLink then
+          useActions[#useActions + 1] = combatClause .. " item:269586"
+        end
+        if outOfCombatSoulLink then
+          useActions[#useActions + 1] = outOfCombatClause .. " item:269586"
+        end
+      end
     end
-    return
+    if includeCure and type(cureName) == "string" and cureName ~= "" then
+      local cureAction = friendlyCureClause .. hostileCureClause .. " " .. cureName
+      if cureCommand == "use" then
+        useActions[#useActions + 1] = cureAction
+      else
+        castActions[#castActions + 1] = cureAction
+      end
+    end
+    if includeRez and hasRezAction then
+      if includeCure and cureUsesPet then
+        lines[#lines + 1] = "/stopcasting [@mouseover,help,exists,dead]"
+      else
+        lines[#lines + 1] = "/stopcasting"
+      end
+    elseif includeCure and not cureUsesPet then
+      lines[#lines + 1] = "/stopcasting"
+    end
+    if #castActions > 0 then
+      lines[#lines + 1] = "/cast " .. table.concat(castActions, ";")
+    end
+    if #useActions > 0 then
+      lines[#lines + 1] = "/use " .. table.concat(useActions, ";")
+    end
+    return table.concat(lines, "\n")
   end
-  if btn.auraSkipped then
-    return
+
+  local combined = build(true, cureName ~= nil)
+  local cureOnly = build(false, cureName ~= nil)
+  local rezOnly = build(true, false)
+  return combined, cureOnly, rezOnly, hasRezAction
+end
+
+local function MakeCureRow(action, binding)
+  if type(action) ~= "table" or type(action.name) ~= "string" or action.name == "" then
+    return nil
   end
-  local container = MakeAuraContainer(btn.inner)
-  if not container then
-    btn.auraSkipped = true
-    return
+  local spellId = action.spellId or 0
+  local command = "use"
+  if type(spellId) == "number" and spellId > 0 then
+    command = "cast"
   end
-  container:SetAllPoints(btn.inner)
-  if container.EnableMouse then
-    container:EnableMouse(false)
+  local combined, cureOnly, rezOnly, hasRez = BuildSmartRezMacroText(command, action.name, action.pet == true)
+  if type(cureOnly) ~= "string" or #cureOnly > MACRO_BYTE_LIMIT then
+    return nil
   end
-  if container.SetEnabled then
-    container:SetEnabled(true)
+  local row = {
+    binding = binding,
+    actionKey = "spell:" .. tostring(spellId),
+    spellName = action.name,
+    spellId = spellId,
+    cureOnlyMacroText = cureOnly,
+    rezOnlyMacroText = "",
+    smartRezAvailable = false,
+    customMacro = false,
+  }
+  if type(combined) == "string" and #combined <= MACRO_BYTE_LIMIT then
+    row.macroText = combined
+    row.smartRezAvailable = hasRez == true
+  else
+    row.macroText = cureOnly
+    row.smartRezAvailable = false
   end
-  btn.auraContainer = container
-  local unit = btn.unit or "player"
-  if container.SetUnit then
-    container:SetUnit(unit)
+  if type(rezOnly) == "string" and #rezOnly <= MACRO_BYTE_LIMIT then
+    row.rezOnlyMacroText = rezOnly
+  else
+    row.rezOnlyMacroText = ""
   end
-  -- AuraButton config only in initializeFrame. Do not touch the slot after AddAuraSlot.
-  if container.AddAuraSlot then
-    container:AddAuraSlot("dispel", DISPEL_FILTER, {
-      initializeFrame = function(frame)
-        BindAuraSlot(frame, pack)
-      end,
-    })
+  return row
+end
+
+local function ScanPvPBandage()
+  if LockedDown() then
+    return clickModel and clickModel.bandage or nil
   end
+  local itemAPI = C_Item
+  local containerAPI = C_Container
+  if type(itemAPI) ~= "table" or type(containerAPI) ~= "table" then
+    return nil
+  end
+  if type(itemAPI.GetItemSpell) ~= "function" or type(containerAPI.GetContainerNumSlots) ~= "function" then
+    return nil
+  end
+  local first = 0
+  local last = NUM_BAG_SLOTS or 4
+  local bagEnum = Enum and Enum.BagIndex
+  if bagEnum and type(bagEnum.Backpack) == "number" then
+    first = bagEnum.Backpack
+  end
+  local best
+  for bag = first, last do
+    local okSlots, nSlots = pcall(containerAPI.GetContainerNumSlots, bag)
+    if okSlots and type(nSlots) == "number" and nSlots > 0 then
+      for slot = 1, nSlots do
+        local okInfo, info = pcall(containerAPI.GetContainerItemInfo, bag, slot)
+        if okInfo and type(info) == "table" then
+          local itemID = info.itemID
+          if type(itemID) == "number" and Accessible(itemID) and itemID > 0 then
+            local okSpell, _name, useSpellID = pcall(itemAPI.GetItemSpell, itemID)
+            if okSpell and Accessible(useSpellID) and useSpellID == PVP_BANDAGE_SPELL then
+              local count = 0
+              if itemAPI.GetItemCount then
+                local okCount, c = pcall(itemAPI.GetItemCount, itemID, false, false, false, false)
+                if okCount and Accessible(c) and type(c) == "number" then
+                  count = c
+                end
+              end
+              if count > 0 then
+                local usable = true
+                if itemAPI.IsUsableItem then
+                  local okUse, u = pcall(itemAPI.IsUsableItem, itemID)
+                  if okUse and Accessible(u) then
+                    usable = u == true
+                  end
+                end
+                if usable then
+                  best = {itemID = itemID, actionKey = "pvp-bandage:item:" .. tostring(itemID)}
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return best
+end
+
+local function CustomMacroText()
+  local pack = GetPack()
+  local advanced = pack.advanced
+  if type(advanced) ~= "table" or advanced.allowMacroEdit ~= true then
+    return nil
+  end
+  local text = advanced.customMacro
+  if type(text) ~= "string" or text == "" then
+    return nil
+  end
+  text = text:gsub("UNITID", "mouseover")
+  if #text > MACRO_BYTE_LIMIT then
+    return nil
+  end
+  return text
+end
+
+local function ClickSignature(pack)
+  local bits = {}
+  bits[#bits + 1] = pack.cure and pack.cure.mode or "AUTO"
+  local mouse = pack.mouse or {}
+  bits[#bits + 1] = tostring(mouse.left)
+  bits[#bits + 1] = tostring(mouse.right)
+  bits[#bits + 1] = tostring(mouse.middle)
+  bits[#bits + 1] = tostring(mouse.button4)
+  bits[#bits + 1] = tostring(mouse.button5)
+  local cures = DistinctFriendlyCures(pack)
+  for i = 1, #cures do
+    bits[#bits + 1] = tostring(cures[i].spellId)
+  end
+  local advanced = pack.advanced
+  if type(advanced) == "table" then
+    bits[#bits + 1] = tostring(advanced.allowMacroEdit)
+    bits[#bits + 1] = tostring(advanced.customMacro)
+  end
+  return table.concat(bits, "|")
+end
+
+local function ReservedGesture(binding)
+  return binding == TARGET_GESTURE or binding == FOCUS_GESTURE
+end
+
+local function BandageRow(bandage)
+  if not bandage or type(bandage.itemID) ~= "number" then
+    return nil
+  end
+  local macro = ("/use [@mouseover,help,exists,nodead] item:%d"):format(bandage.itemID)
+  if #macro > MACRO_BYTE_LIMIT then
+    return nil
+  end
+  return {
+    binding = PVP_BANDAGE_GESTURE,
+    macroText = macro,
+    cureOnlyMacroText = macro,
+    rezOnlyMacroText = "",
+    smartRezAvailable = false,
+    pvpBandage = true,
+    actionKey = bandage.actionKey,
+  }
+end
+
+function ns.RebuildClickModel(pack)
+  if LockedDown() then
+    pending = true
+    return clickModel
+  end
+  pack = pack or GetPack()
+  local sig = ClickSignature(pack)
+  if clickModel and clickModelSig == sig then
+    return clickModel
+  end
+  local mode = pack.cure and pack.cure.mode
+  if mode ~= "MANUAL" then
+    mode = "AUTO"
+  end
+  local cures = DistinctFriendlyCures(pack)
+  local bandage = ScanPvPBandage()
+  local rows = {}
+  local used = {
+    [TARGET_GESTURE] = true,
+    [FOCUS_GESTURE] = true,
+  }
+  if bandage then
+    used[PVP_BANDAGE_GESTURE] = true
+  end
+
+  if mode == "AUTO" then
+    for i = 1, #AUTO_CURE_GESTURES do
+      local action = cures[i]
+      if action then
+        local row = MakeCureRow(action, AUTO_CURE_GESTURES[i])
+        if row then
+          rows[#rows + 1] = row
+          used[row.binding] = true
+        end
+      end
+    end
+  else
+    local mouse = pack.mouse or {}
+    local manual = pack.cure and pack.cure.manual
+    local assigned = {}
+    if type(manual) == "table" then
+      local keyToBinding = {
+        left = "*%s1",
+        right = "*%s2",
+        button4 = "*%s4",
+        button5 = "*%s5",
+      }
+      for i = 1, #cures do
+        local action = cures[i]
+        local actionKey = "spell:" .. tostring(action.spellId)
+        local binding = keyToBinding[manual[actionKey]]
+        if binding and not ReservedGesture(binding) and not used[binding] then
+          if not (bandage and binding == PVP_BANDAGE_GESTURE) then
+            local row = MakeCureRow(action, binding)
+            if row then
+              rows[#rows + 1] = row
+              used[binding] = true
+              assigned[action.spellId] = true
+            end
+          end
+        end
+      end
+    end
+    local cureIndex = 1
+    for i = 1, #MOUSE_BUTTONS do
+      local spec = MOUSE_BUTTONS[i]
+      local binding = spec.binding
+      if not ReservedGesture(binding) and not used[binding] and mouse[spec.key] == "CURE" then
+        if not (bandage and binding == PVP_BANDAGE_GESTURE) then
+          while cureIndex <= #cures and assigned[cures[cureIndex].spellId] do
+            cureIndex = cureIndex + 1
+          end
+          local action = cures[cureIndex]
+          if action then
+            local row = MakeCureRow(action, binding)
+            if row then
+              rows[#rows + 1] = row
+              used[binding] = true
+              assigned[action.spellId] = true
+              cureIndex = cureIndex + 1
+            end
+          end
+        end
+      end
+    end
+  end
+
+  local bandageRow = BandageRow(bandage)
+  if bandageRow then
+    rows[#rows + 1] = bandageRow
+  end
+
+  local custom = CustomMacroText()
+  if custom then
+    local replaced = false
+    for i = 1, #rows do
+      if rows[i].binding == PHYSICAL_LEFT then
+        rows[i].macroText = custom
+        rows[i].cureOnlyMacroText = custom
+        rows[i].customMacro = true
+        rows[i].smartRezAvailable = false
+        replaced = true
+        break
+      end
+    end
+    if not replaced then
+      rows[#rows + 1] = {
+        binding = PHYSICAL_LEFT,
+        macroText = custom,
+        cureOnlyMacroText = custom,
+        rezOnlyMacroText = "",
+        customMacro = true,
+        smartRezAvailable = false,
+      }
+    end
+  end
+
+  clickModel = {
+    mode = mode,
+    rows = rows,
+    bandage = bandage,
+  }
+  clickModelSig = sig
+  return clickModel
+end
+
+local function SetSecure(btn, attr, value)
+  if LockedDown() then
+    return false
+  end
+  btn:SetAttribute(attr, value)
+  return true
 end
 
 local function ClearClickAttributes(btn)
+  if LockedDown() then
+    return
+  end
   for i = 1, 5 do
-    btn:SetAttribute("type" .. i, nil)
-    btn:SetAttribute("spell" .. i, nil)
-    btn:SetAttribute("macro" .. i, nil)
-    btn:SetAttribute("macrotext" .. i, nil)
+    for p = 1, #GESTURE_PREFIXES do
+      local prefix = GESTURE_PREFIXES[p]
+      btn:SetAttribute(prefix .. "type" .. i, nil)
+      btn:SetAttribute(prefix .. "spell" .. i, nil)
+      btn:SetAttribute(prefix .. "macro" .. i, nil)
+      btn:SetAttribute(prefix .. "macrotext" .. i, nil)
+      btn:SetAttribute(prefix .. "unit" .. i, nil)
+    end
   end
 end
 
-local function ApplyAction(btn, index, action, spell)
-  if action == "CURE" then
-    if spell then
-      btn:SetAttribute("type" .. index, "spell")
-      btn:SetAttribute("spell" .. index, spell)
-    end
-    return
+local function RezEligible(unit)
+  if ns.IsMUFRezEligibleUnitToken then
+    return ns.IsMUFRezEligibleUnitToken(unit) == true
   end
-  if action == "TARGET" then
-    btn:SetAttribute("type" .. index, "target")
-    return
+  if type(unit) ~= "string" then
+    return false
   end
-  if action == "FOCUS" then
-    btn:SetAttribute("type" .. index, "focus")
-    return
-  end
-  if action == "ASSIST" then
-    btn:SetAttribute("type" .. index, "assist")
-    return
-  end
+  return not unit:lower():find("pet", 1, true)
 end
 
 local function ApplyClickAttributes(btn, pack, unit)
+  if LockedDown() then
+    pending = true
+    return false
+  end
   ClearClickAttributes(btn)
-  btn:SetAttribute("unit", unit)
-  local spell = ResolveCureSpell()
-  local mouse = pack.mouse or {}
-  local mode = pack.cure and pack.cure.mode
-  if mode == "AUTO" then
-    if spell then
-      ApplyAction(btn, 1, "CURE", spell)
-      ApplyAction(btn, 2, "CURE", spell)
-    else
-      ApplyAction(btn, 1, mouse.left or "TARGET", spell)
-      ApplyAction(btn, 2, mouse.right or "TARGET", spell)
+  SetSecure(btn, "unit", unit)
+  local model = ns.RebuildClickModel(pack)
+  if not model then
+    return false
+  end
+
+  SetSecure(btn, TARGET_GESTURE:format("type"), "target")
+  SetSecure(btn, TARGET_GESTURE:format("unit"), unit)
+  SetSecure(btn, FOCUS_GESTURE:format("type"), "focus")
+  SetSecure(btn, FOCUS_GESTURE:format("unit"), unit)
+
+  local installed = {
+    [TARGET_GESTURE] = true,
+    [FOCUS_GESTURE] = true,
+  }
+  local rezOk = RezEligible(unit)
+  local leftAssigned = false
+  local leftReserved = false
+
+  for i = 1, #model.rows do
+    local row = model.rows[i]
+    local binding = row.binding
+    if binding then
+      if binding == PHYSICAL_LEFT and row.customMacro then
+        leftReserved = true
+      end
+      local macroText
+      if binding == PHYSICAL_LEFT and rezOk and row.smartRezAvailable then
+        macroText = row.macroText
+      else
+        macroText = row.cureOnlyMacroText or row.macroText
+      end
+      if type(macroText) == "string" and macroText ~= "" and #macroText <= MACRO_BYTE_LIMIT then
+        SetSecure(btn, binding:format("type"), "macro")
+        SetSecure(btn, binding:format("macrotext"), macroText)
+        installed[binding] = true
+        if binding == PHYSICAL_LEFT then
+          leftAssigned = true
+        end
+      end
     end
-    ApplyAction(btn, 3, mouse.middle, spell)
-    ApplyAction(btn, 4, mouse.button4, spell)
-    ApplyAction(btn, 5, mouse.button5, spell)
+  end
+
+  if rezOk and not leftReserved and not leftAssigned then
+    local leftover
+    for i = 1, #model.rows do
+      if type(model.rows[i].rezOnlyMacroText) == "string" then
+        leftover = model.rows[i].rezOnlyMacroText
+        break
+      end
+    end
+    if leftover == nil then
+      local _combined, _cure, rezOnly = BuildSmartRezMacroText("cast", nil, false)
+      leftover = rezOnly
+    end
+    if leftover ~= "" and type(leftover) == "string" and #leftover <= MACRO_BYTE_LIMIT then
+      SetSecure(btn, PHYSICAL_LEFT:format("type"), "macro")
+      SetSecure(btn, PHYSICAL_LEFT:format("macrotext"), leftover)
+      leftAssigned = true
+      installed[PHYSICAL_LEFT] = true
+    end
+  end
+
+  if model.mode == "MANUAL" then
+    local mouse = pack.mouse or {}
+    for i = 1, #MOUSE_BUTTONS do
+      local spec = MOUSE_BUTTONS[i]
+      local binding = spec.binding
+      if not installed[binding] and not ReservedGesture(binding) then
+        local action = mouse[spec.key]
+        if action == "TARGET" then
+          SetSecure(btn, binding:format("type"), "target")
+          SetSecure(btn, binding:format("unit"), unit)
+        elseif action == "FOCUS" then
+          SetSecure(btn, binding:format("type"), "focus")
+          SetSecure(btn, binding:format("unit"), unit)
+        elseif action == "ASSIST" then
+          SetSecure(btn, binding:format("type"), "assist")
+          SetSecure(btn, binding:format("unit"), unit)
+        end
+      end
+    end
+  end
+  return true
+end
+
+local function AttachPaint(btn, pack, unit)
+  if type(unit) ~= "string" or unit == "" then
     return
   end
-  for i = 1, #MOUSE_BUTTONS do
-    local row = MOUSE_BUTTONS[i]
-    ApplyAction(btn, row.index, mouse[row.key], spell)
+  if LockedDown() then
+    pending = true
+    return
+  end
+  local function initFn(frame)
+    BindAuraSlot(frame, pack)
+  end
+  if btn.auraContainer then
+    if ns.AttachDetectionContainer then
+      ns.AttachDetectionContainer(btn.auraContainer, unit, pack, initFn)
+    end
+    return
+  end
+  if ns.AttachDetector then
+    btn.auraContainer = ns.AttachDetector(btn.inner, unit, pack, initFn)
   end
 end
 
@@ -673,6 +881,19 @@ local function PaintSquare(btn, pack, unit)
       alpha = pack.mufs.inactiveOpacity or 0.65
     end
   end
+  if pack.mufs.dimOutOfRange and ns.SpellRangeState then
+    local spell, spellId
+    if ns.GetPrimaryCure then
+      spell, spellId = ns.GetPrimaryCure(pack)
+    end
+    if ns.SpellRangeState(unit, spell, spellId) ~= true then
+      local dim = pack.mufs.dimAmount
+      if type(dim) ~= "number" then
+        dim = 0.45
+      end
+      alpha = alpha * dim
+    end
+  end
   ApplyColor(btn.fillTex, fill, alpha)
   if btn.charmTex then
     btn.charmTex:Hide()
@@ -687,7 +908,6 @@ local function PaintSquare(btn, pack, unit)
     end
   end
 end
-
 local function PlaceStatusLight(btn, size, enabled)
   local light = btn.statusLight
   if not light then
@@ -704,42 +924,25 @@ local function PlaceStatusLight(btn, size, enabled)
   end
 end
 
-local function SpellInRange(unit, spell, spellId)
-  local result
-  if C_Spell and C_Spell.IsSpellInRange then
-    if spellId then
-      result = C_Spell.IsSpellInRange(spellId, unit)
-    elseif spell then
-      result = C_Spell.IsSpellInRange(spell, unit)
-    end
-  elseif IsSpellInRange and spell then
-    result = IsSpellInRange(spell, unit)
-  end
-  if not Accessible(result) then
-    return nil
-  end
-  if result == false or result == 0 then
-    return false
-  end
-  if result == true or result == 1 then
-    return true
-  end
-  return nil
-end
-
 local function UpdateStatusLights()
   if not poolReady then
     return
   end
   local pack = GetPack()
   local enabled = pack.mufs.statusLight
-  local spell, spellId = ResolveCureSpell()
+  local spell, spellId
+  if ns.GetPrimaryCure then
+    spell, spellId = ns.GetPrimaryCure(pack)
+  end
   for i = 1, #pool do
     local btn = pool[i]
     if btn.assigned and enabled then
       btn.statusLight:Show()
-      local inRange = SpellInRange(btn.unit, spell, spellId)
-      if inRange == false then
+      local inRange = true
+      if ns.SpellRangeState then
+        inRange = ns.SpellRangeState(btn.unit, spell, spellId) == true
+      end
+      if inRange ~= true then
         btn.statusLight:SetColorTexture(1, 0.92, 0.2, 1)
       else
         btn.statusLight:SetColorTexture(0.25, 0.85, 0.4, 1)
@@ -855,7 +1058,6 @@ local function WireTooltip(btn)
     end
   end)
 end
-
 local function CreateMUF(parent)
   local btn = CreateFrame("Button", nil, parent, "SecureUnitButtonTemplate")
   btn:RegisterForClicks("AnyUp")
@@ -917,8 +1119,11 @@ local function CreateMUF(parent)
 end
 
 local function EnsurePool()
-  if poolReady or LockedDown() then
-    return poolReady
+  if poolReady then
+    return true
+  end
+  if LockedDown() then
+    return false
   end
   if not header then
     return false
@@ -1021,8 +1226,12 @@ local function EnsureHeader()
   header:SetScript("OnUpdate", OnHeaderUpdate)
   return true
 end
-
 local function HideAll()
+  if LockedDown() then
+    pending = true
+    mufsConfigured = false
+    return
+  end
   if header then
     header:Hide()
   end
@@ -1042,25 +1251,29 @@ end
 function ns.LayoutMUFs()
   if LockedDown() then
     pending = true
+    mufsConfigured = false
     return
   end
   if not EnsureHeader() then
     pending = true
+    mufsConfigured = false
     return
   end
   if not EnsurePool() then
     pending = true
+    mufsConfigured = false
     return
   end
 
   local pack = GetPack()
+  ns.RebuildClickModel(pack)
   local env = GetEnv()
   if not ShouldShowHeader(pack) then
     HideAll()
     return
   end
 
-  local units = BuildRoster(pack)
+  local units = ns.BuildRoster and ns.BuildRoster(pack) or {}
   local maxUnits = pack.mufs.maxUnits or POOL_SIZE
   if maxUnits > POOL_SIZE then
     maxUnits = POOL_SIZE
@@ -1152,7 +1365,7 @@ function ns.LayoutMUFs()
       ApplyClickAttributes(btn, pack, unit)
       PaintSquare(btn, pack, unit)
       PlaceStatusLight(btn, size, pack.mufs.statusLight)
-      AttachAuraContainer(btn, pack)
+      AttachPaint(btn, pack, unit)
       if btn.auraContainer and btn.auraContainer.SetUnit then
         btn.auraContainer:SetUnit(unit)
       end
@@ -1188,15 +1401,42 @@ function ns.LayoutMUFs()
 
   UpdateStatusLights()
   UpdateCooldowns()
+  mufsConfigured = true
 end
 
 function ns.RefreshMUFs()
   if LockedDown() then
     pending = true
+    mufsConfigured = false
     return
   end
   pending = false
   ns.LayoutMUFs()
+end
+
+function ns.RecoverMUFsAfterCombat()
+  if LockedDown() then
+    pending = true
+    mufsConfigured = false
+    return false
+  end
+  if not EnsureHeader() then
+    pending = true
+    mufsConfigured = false
+    return false
+  end
+  if not EnsurePool() then
+    pending = true
+    mufsConfigured = false
+    return false
+  end
+  pending = false
+  ns.LayoutMUFs()
+  return mufsConfigured == true
+end
+
+function ns.MUFsConfigured()
+  return mufsConfigured == true
 end
 
 local function RegisterExtraEvents()
@@ -1207,12 +1447,23 @@ local function RegisterExtraEvents()
   eventFrame = CreateFrame("Frame")
   eventFrame:SetScript("OnEvent", function(_, event)
     if event == "SPELLS_CHANGED" then
-      cureName = nil
-      cureId = nil
+      if ns.InvalidateDetection then
+        ns.InvalidateDetection()
+      end
+      if LockedDown() then
+        pending = true
+        return
+      end
+      clickModel = nil
+      clickModelSig = nil
       ns.RefreshMUFs()
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
       OnCLEU()
     elseif event == "UNIT_PET" then
+      if LockedDown() then
+        pending = true
+        return
+      end
       ns.RefreshMUFs()
     end
   end)
@@ -1229,5 +1480,10 @@ end
 
 function ns.EnableMUFs(_addon)
   RegisterExtraEvents()
+  if LockedDown() then
+    pending = true
+    mufsConfigured = false
+    return
+  end
   ns.RefreshMUFs()
 end

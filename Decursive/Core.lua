@@ -133,7 +133,16 @@ function Decursive:OnGroupRosterUpdate()
 end
 
 function Decursive:OnRegenEnabled()
-  if ns.RefreshMUFs then
+  self:EnsureEnvironments()
+  if ns.InvalidateDetection then
+    ns.InvalidateDetection()
+  end
+  if ns.RebuildClickModel then
+    ns.RebuildClickModel()
+  end
+  if ns.RecoverMUFsAfterCombat then
+    ns.RecoverMUFsAfterCombat()
+  elseif ns.RefreshMUFs then
     ns.RefreshMUFs()
   end
   if ns.RefreshAlerts then

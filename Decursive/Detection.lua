@@ -52,6 +52,7 @@ local SPELL_TYPES = {
 }
 
 local BATTLE_REZ = {20484, 61999, 391054}
+local NORMAL_REZ = {50769, 7328, 2006, 2008, 115178, 361227}
 local SOUL_LINK_SPELL_ID = 1259646
 local SOUL_LINK_ITEM_ID = 269586
 local POISON_CLEANSING_TOTEM = 383013
@@ -66,6 +67,8 @@ local cache = {
   signature = nil,
   model = nil,
 }
+
+local smartRezCache
 
 local follower = {
   untilTime = 0,
@@ -806,6 +809,7 @@ end
 function ns.InvalidateDetection()
   cache.signature = nil
   cache.model = nil
+  smartRezCache = nil
 end
 
 function ns.GetDetectionModel(pack)
@@ -876,6 +880,54 @@ end
 
 function ns.GetSoulLinkState(pack)
   return ns.GetSoulLinkFallback(pack)
+end
+
+function ns.GetKnownRezSpellName(spellIDs)
+  if type(spellIDs) ~= "table" then
+    return nil
+  end
+  for i = 1, #spellIDs do
+    local id = spellIDs[i]
+    if SpellInBook(id, true) then
+      local name = SpellName(id)
+      if name then
+        return name, id
+      end
+    end
+  end
+  return nil
+end
+
+function ns.GetSmartRezActions(pack)
+  if InCombatLockdown and InCombatLockdown() then
+    if type(smartRezCache) == "table" then
+      return smartRezCache.battleRezName, smartRezCache.outOfCombatRezName, smartRezCache.combatSoulLink, smartRezCache.outOfCombatSoulLink
+    end
+    return nil, nil, false, false
+  end
+  local battleRezName = ns.GetKnownRezSpellName(BATTLE_REZ)
+  local normalRezName = ns.GetKnownRezSpellName(NORMAL_REZ)
+  local outOfCombatRezName = normalRezName or battleRezName
+  local soul = ns.GetSoulLinkFallback(pack)
+  local soulEnabled = soul and soul.enabled == true
+  local carried = soul and type(soul.count) == "number" and soul.count > 0
+  local hasCarriedSoulLink = soulEnabled and carried
+  local combatSoulLink = hasCarriedSoulLink and not battleRezName
+  local outOfCombatSoulLink = hasCarriedSoulLink and not outOfCombatRezName
+  smartRezCache = {
+    battleRezName = battleRezName,
+    outOfCombatRezName = outOfCombatRezName,
+    combatSoulLink = combatSoulLink,
+    outOfCombatSoulLink = outOfCombatSoulLink,
+  }
+  return battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink
+end
+
+function ns.IsMUFRezEligibleUnitToken(unit)
+  if type(unit) ~= "string" then
+    return false
+  end
+  return not unit:lower():find("pet", 1, true)
 end
 
 local RANGE_FRIENDLY_SPEC = {
@@ -1477,7 +1529,7 @@ function ns.DetectionSummary(pack)
       lines[#lines + 1] = "Gap: " .. tostring(slots[2].filter)
     end
   end
-  lines[#lines + 1] = "Click map parked. Detection does not install MUF attributes."
+  lines[#lines + 1] = "Clicks: MUFs.lua type=macro + [@mouseover] macrotext. Detection paints only."
   return table.concat(lines, "\n")
 end
 

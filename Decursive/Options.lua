@@ -278,6 +278,59 @@ local function PathSet(section, key)
   end
 end
 
+local MOUSE_ACTIONS = {CURE = "Cure", TARGET = "Target", FOCUS = "Focus", ASSIST = "Assist"}
+local RESERVED_MOUSE = {middle = "TARGET"}
+
+local function NotifyPack()
+  if ns.InvalidateDetection then
+    ns.InvalidateDetection()
+  end
+  if ns.RebuildClickModel then
+    ns.RebuildClickModel()
+  end
+  if ns.RefreshMUFs then
+    ns.RefreshMUFs()
+  end
+  if ns.RefreshAlerts then
+    ns.RefreshAlerts()
+  end
+  if ns.RefreshLiveList then
+    ns.RefreshLiveList()
+  end
+  if ui.RefreshPreview then
+    ui.RefreshPreview()
+  end
+end
+
+local function SetClickMode(value)
+  if value ~= "AUTO" and value ~= "MANUAL" then
+    return
+  end
+  local pack = Pack()
+  if type(pack.cure) ~= "table" then
+    pack.cure = {}
+  end
+  pack.cure.mode = value
+  NotifyPack()
+end
+
+local function SetMouseAction(key)
+  return function(value)
+    if RESERVED_MOUSE[key] then
+      value = RESERVED_MOUSE[key]
+    end
+    if value ~= "CURE" and value ~= "TARGET" and value ~= "FOCUS" and value ~= "ASSIST" then
+      return
+    end
+    local pack = Pack()
+    if type(pack.mouse) ~= "table" then
+      pack.mouse = {}
+    end
+    pack.mouse[key] = value
+    NotifyPack()
+  end
+end
+
 local function AfterPackChange()
   if ns.RefreshMUFs then
     ns.RefreshMUFs()
@@ -427,7 +480,7 @@ local CATALOG = {
   {page = "sorting", label = "Center on player", kind = "toggle", get = PathGet("sorting", "centerPlayer"), set = PathSet("sorting", "centerPlayer")},
   {page = "sorting", label = "Skip dead and offline", kind = "toggle", get = PathGet("sorting", "skipDead"), set = PathSet("sorting", "skipDead")},
 
-  {page = "cure", label = "Click mode", kind = "choice", values = {AUTO = "AUTO  ·  two-button"}, get = PathGet("cure", "mode"), set = PathSet("cure", "mode")},
+  {page = "cure", label = "Click mode", kind = "choice", values = {AUTO = "AUTO  ·  two-button", MANUAL = "MANUAL  ·  per-button"}, get = PathGet("cure", "mode"), set = SetClickMode},
   {page = "cure", label = "Detection filter", kind = "choice", values = {BY_ME = "By me (HARMFUL|RAID)", ALL = "All dispellable"}, get = PathGet("cure", "filterMode"), set = PathSet("cure", "filterMode")},
   {page = "cure", label = "Magic", kind = "toggle", get = PathGet("cure", "magic"), set = PathSet("cure", "magic")},
   {page = "cure", label = "Curse", kind = "toggle", get = PathGet("cure", "curse"), set = PathSet("cure", "curse")},
@@ -484,8 +537,11 @@ local CATALOG = {
   {page = "cure", label = "Do not skip priority-list units", kind = "toggle", get = PathGet("cure", "doNotBlacklistPrio"), set = PathSet("cure", "doNotBlacklistPrio")},
   {page = "cure", label = "Cure pets", kind = "toggle", get = PathGet("cure", "curePets"), set = PathSet("cure", "curePets")},
   {page = "cure", label = "Skip stealthed", kind = "toggle", get = PathGet("cure", "skipStealthed"), set = PathSet("cure", "skipStealthed")},
-  {page = "cure", label = "Left click", kind = "choice", values = {CURE = "Cure", TARGET = "Target", FOCUS = "Focus", ASSIST = "Assist"}, get = PathGet("mouse", "left"), set = PathSet("mouse", "left")},
-  {page = "cure", label = "Right click", kind = "choice", values = {CURE = "Cure", TARGET = "Target", FOCUS = "Focus", ASSIST = "Assist"}, get = PathGet("mouse", "right"), set = PathSet("mouse", "right")},
+  {page = "cure", label = "Left click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "left"), set = SetMouseAction("left")},
+  {page = "cure", label = "Right click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "right"), set = SetMouseAction("right")},
+  {page = "cure", label = "Middle click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "middle"), set = SetMouseAction("middle")},
+  {page = "cure", label = "Button 4", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "button4"), set = SetMouseAction("button4")},
+  {page = "cure", label = "Button 5", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "button5"), set = SetMouseAction("button5")},
 
   {page = "color", label = "Charm", kind = "color", get = PathGet("colors", "charm"), set = PathSet("colors", "charm")},
   {page = "color", label = "Bleed", kind = "color", get = PathGet("colors", "bleed"), set = PathSet("colors", "bleed")},
@@ -560,6 +616,9 @@ local ROW_META = {
   ["cure|Detection filter"] = {group = "Clicks", simple = true},
   ["cure|Left click"] = {group = "Clicks"},
   ["cure|Right click"] = {group = "Clicks"},
+  ["cure|Middle click"] = {group = "Clicks"},
+  ["cure|Button 4"] = {group = "Clicks"},
+  ["cure|Button 5"] = {group = "Clicks"},
   ["cure|Magic"] = {group = "Types", simple = true},
   ["cure|Curse"] = {group = "Types", simple = true},
   ["cure|Poison"] = {group = "Types", simple = true},
