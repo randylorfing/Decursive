@@ -7,3 +7,6 @@ changelog.txt
 # Build artifacts produced by local packaging runs
 Decursive.zip
 *.zip
+
+# BigWigs packager output directory (produced by .cursor/verify.sh)
+/.release/
