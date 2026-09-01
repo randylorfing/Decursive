@@ -1,0 +1,1342 @@
+local ADDON_NAME, ns = ...
+
+local TYPE_KEYS = {"magic", "curse", "poison", "disease", "enrage", "charm", "bleed"}
+
+local TYPE_BLIZZ = {
+  magic = "Magic",
+  curse = "Curse",
+  poison = "Poison",
+  disease = "Disease",
+  enrage = "Enrage",
+  charm = "Magic",
+  bleed = "Bleed",
+}
+
+local FRIENDLY_NATIVE = {
+  magic = true,
+  curse = true,
+  poison = true,
+  disease = true,
+}
+
+local CLASS_SPELLS = {
+  PALADIN = {4987, 213644},
+  PRIEST = {527, 213634},
+  DRUID = {88423, 2782, 2908},
+  SHAMAN = {77130, 51886},
+  MONK = {115450, 218164},
+  EVOKER = {360823, 365585, 374251},
+  MAGE = {475},
+  WARLOCK = {89808},
+  HUNTER = {19801},
+}
+
+local SPELL_TYPES = {
+  [4987] = {"magic", "poison", "disease"},
+  [213644] = {"poison", "disease"},
+  [527] = {"magic", "disease"},
+  [213634] = {"disease"},
+  [88423] = {"magic", "curse", "poison"},
+  [2782] = {"curse", "poison"},
+  [77130] = {"magic", "curse"},
+  [51886] = {"curse"},
+  [115450] = {"magic", "poison", "disease"},
+  [218164] = {"poison", "disease"},
+  [360823] = {"magic", "poison"},
+  [365585] = {"poison"},
+  [374251] = {"bleed", "poison", "curse", "disease"},
+  [475] = {"curse"},
+  [89808] = {"magic"},
+  [2908] = {"enrage"},
+  [19801] = {"enrage"},
+}
+
+local BATTLE_REZ = {20484, 61999, 391054}
+local SOUL_LINK_SPELL_ID = 1259646
+local SOUL_LINK_ITEM_ID = 269586
+local POISON_CLEANSING_TOTEM = 383013
+local NATIVE_FILTER = "HARMFUL|RAID_PLAYER_DISPELLABLE"
+local GAP_FILTER = "HARMFUL|!RAID_PLAYER_DISPELLABLE"
+local FOLLOWER_GUARD_SECONDS = 12
+local FOLLOWER_RETRY = {0.10, 0.35, 1.00, 2.00, 4.00, 7.00, 10.00}
+
+local cache = {
+  signature = nil,
+  model = nil,
+}
+
+local follower = {
+  untilTime = 0,
+  generation = 0,
+  coreCount = 0,
+  units = nil,
+}
+
+local eventsOn = false
+local eventFrame
+
+local function Accessible(value)
+  if value == nil then
+    return true
+  end
+  if type(issecretvalue) == "function" and issecretvalue(value) then
+    if type(canaccessvalue) == "function" then
+      return canaccessvalue(value) == true
+    end
+    return false
+  end
+  return true
+end
+
+local function Public(value)
+  if not Accessible(value) then
+    return nil
+  end
+  return value
+end
+
+local function IsTrue(value)
+  if not Accessible(value) then
+    return false
+  end
+  return value == true or value == 1
+end
+
+function ns.IsAccessible(value)
+  return Accessible(value)
+end
+
+function ns.PublicValue(value)
+  return Public(value)
+end
+
+function ns.IsPublicTrue(value)
+  return IsTrue(value)
+end
+
+local function Addon()
+  return ns.addon
+end
+
+local function GetPack()
+  local addon = Addon()
+  if addon and addon.GetEditingPack then
+    return addon:GetEditingPack()
+  end
+  return ns.PACK
+end
+
+local function PlayerClassFile()
+  if not UnitClass then
+    return nil
+  end
+  local _name, file = UnitClass("player")
+  return Public(file)
+end
+
+local function PlayerRaceFile()
+  if not UnitRace then
+    return nil
+  end
+  local _name, race = UnitRace("player")
+  return Public(race)
+end
+
+local function SpellName(spellId)
+  local name
+  if C_Spell and C_Spell.GetSpellName then
+    name = C_Spell.GetSpellName(spellId)
+  elseif C_Spell and C_Spell.GetSpellInfo then
+    local info = C_Spell.GetSpellInfo(spellId)
+    if type(info) == "table" then
+      name = info.name
+    end
+  end
+  if type(name) == "string" and Accessible(name) and name ~= "" then
+    return name
+  end
+  return nil
+end
+
+local function ResolveOverride(spellId)
+  if type(spellId) ~= "number" then
+    return spellId
+  end
+  if C_Spell and C_Spell.GetOverrideSpell then
+    local override = Public(C_Spell.GetOverrideSpell(spellId))
+    if type(override) == "number" and override > 0 then
+      return override
+    end
+  end
+  return spellId
+end
+
+local function SpellInBook(spellId, includeOverrides)
+  if type(spellId) ~= "number" or spellId <= 0 then
+    return false
+  end
+  if C_SpellBook then
+    local banks = Enum and Enum.SpellBookSpellBank
+    if C_SpellBook.IsSpellInSpellBook then
+      if banks then
+        if includeOverrides == false then
+          if IsTrue(C_SpellBook.IsSpellInSpellBook(spellId, banks.Player, false)) then
+            return true
+          end
+        else
+          if IsTrue(C_SpellBook.IsSpellInSpellBook(spellId, banks.Player, true)) then
+            return true
+          end
+          if IsTrue(C_SpellBook.IsSpellInSpellBook(spellId, banks.Player)) then
+            return true
+          end
+          if IsTrue(C_SpellBook.IsSpellInSpellBook(spellId)) then
+            return true
+          end
+        end
+      elseif IsTrue(C_SpellBook.IsSpellInSpellBook(spellId)) then
+        return true
+      end
+    end
+    if C_SpellBook.IsSpellKnown and IsTrue(C_SpellBook.IsSpellKnown(spellId)) then
+      return true
+    end
+    if banks and C_SpellBook.IsSpellKnown and IsTrue(C_SpellBook.IsSpellKnown(spellId, banks.Player)) then
+      return true
+    end
+    if banks and C_SpellBook.IsSpellKnown and IsTrue(C_SpellBook.IsSpellKnown(spellId, banks.Pet)) then
+      return true
+    end
+  end
+  if IsPlayerSpell and IsTrue(IsPlayerSpell(spellId)) then
+    return true
+  end
+  if IsSpellKnown and IsTrue(IsSpellKnown(spellId)) then
+    return true
+  end
+  return false
+end
+
+local function ResolveKnownSpell(baseId)
+  if type(baseId) ~= "number" or baseId <= 0 then
+    return nil, nil, nil
+  end
+  local overrideId = ResolveOverride(baseId)
+  local useId = baseId
+  if overrideId ~= baseId then
+    local baseInBook = SpellInBook(baseId, false)
+    local overrideInBook = SpellInBook(overrideId, true)
+    if not baseInBook and overrideInBook then
+      useId = overrideId
+    elseif SpellInBook(overrideId, true) then
+      useId = overrideId
+    end
+  end
+  if not SpellInBook(useId, true) and not SpellInBook(baseId, true) then
+    return nil, nil, nil
+  end
+  local name = SpellName(useId) or SpellName(baseId)
+  if not name then
+    return nil, nil, nil
+  end
+  return name, useId, baseId
+end
+
+function ns.EnsureCureOrder(pack)
+  if type(pack) ~= "table" then
+    return TYPE_KEYS
+  end
+  if type(pack.cure) ~= "table" then
+    pack.cure = {}
+  end
+  local order = pack.cure.order
+  if type(order) ~= "table" then
+    order = {}
+    pack.cure.order = order
+  end
+  local seen = {}
+  local cleaned = {}
+  for i = 1, #order do
+    local key = order[i]
+    if type(key) == "string" and not seen[key] then
+      for t = 1, #TYPE_KEYS do
+        if TYPE_KEYS[t] == key then
+          seen[key] = true
+          cleaned[#cleaned + 1] = key
+          break
+        end
+      end
+    end
+  end
+  for t = 1, #TYPE_KEYS do
+    local key = TYPE_KEYS[t]
+    if not seen[key] then
+      cleaned[#cleaned + 1] = key
+    end
+  end
+  pack.cure.order = cleaned
+  return cleaned
+end
+
+function ns.EnsureCustomSpells(pack)
+  if type(pack) ~= "table" then
+    return {}
+  end
+  if type(pack.customSpells) ~= "table" then
+    pack.customSpells = {}
+  end
+  return pack.customSpells
+end
+
+local function TypeEnabled(pack, key)
+  if type(pack) ~= "table" or type(pack.cure) ~= "table" then
+    return true
+  end
+  if key == "charm" then
+    return pack.cure.charm ~= false or pack.cure.magicCharmed ~= false
+  end
+  if pack.cure[key] == false then
+    return false
+  end
+  return true
+end
+
+function ns.GetEnabledTypes(pack)
+  pack = pack or GetPack()
+  local order = ns.EnsureCureOrder(pack)
+  local enabled = {}
+  for i = 1, #order do
+    local key = order[i]
+    if TypeEnabled(pack, key) then
+      enabled[#enabled + 1] = key
+    end
+  end
+  return enabled
+end
+
+function ns.MoveCureType(pack, key, direction)
+  pack = pack or GetPack()
+  local order = ns.EnsureCureOrder(pack)
+  local index
+  for i = 1, #order do
+    if order[i] == key then
+      index = i
+      break
+    end
+  end
+  if not index then
+    return false
+  end
+  local target = index + (direction or 0)
+  if target < 1 or target > #order then
+    return false
+  end
+  order[index], order[target] = order[target], order[index]
+  ns.InvalidateDetection()
+  return true
+end
+
+function ns.AddCustomSpell(pack, spellId, types)
+  pack = pack or GetPack()
+  local list = ns.EnsureCustomSpells(pack)
+  spellId = tonumber(spellId)
+  if type(spellId) ~= "number" or spellId <= 0 then
+    return false, "id"
+  end
+  if not Accessible(spellId) then
+    return false, "secret"
+  end
+  local typeList = {}
+  local seen = {}
+  if type(types) == "string" then
+    types = {types}
+  end
+  if type(types) == "table" then
+    for i = 1, #types do
+      local key = types[i]
+      if type(key) == "string" and not seen[key] then
+        for t = 1, #TYPE_KEYS do
+          if TYPE_KEYS[t] == key then
+            seen[key] = true
+            typeList[#typeList + 1] = key
+            break
+          end
+        end
+      end
+    end
+  end
+  if #typeList == 0 then
+    typeList[1] = "magic"
+  end
+  for i = 1, #list do
+    local row = list[i]
+    if type(row) == "table" and row.spellId == spellId then
+      row.enabled = true
+      row.types = row.types or {}
+      local have = {}
+      for t = 1, #row.types do
+        have[row.types[t]] = true
+      end
+      for t = 1, #typeList do
+        if not have[typeList[t]] then
+          row.types[#row.types + 1] = typeList[t]
+        end
+      end
+      ns.InvalidateDetection()
+      return true, "merged"
+    end
+  end
+  list[#list + 1] = {
+    spellId = spellId,
+    types = typeList,
+    enabled = true,
+    pet = false,
+  }
+  ns.InvalidateDetection()
+  return true, "added"
+end
+
+function ns.RemoveCustomSpell(pack, spellId)
+  pack = pack or GetPack()
+  local list = ns.EnsureCustomSpells(pack)
+  spellId = tonumber(spellId)
+  local kept = {}
+  local removed = false
+  for i = 1, #list do
+    local row = list[i]
+    if type(row) == "table" and row.spellId == spellId then
+      removed = true
+    else
+      kept[#kept + 1] = row
+    end
+  end
+  pack.customSpells = kept
+  if removed then
+    ns.InvalidateDetection()
+  end
+  return removed
+end
+
+local function TypeRank(enabled, key)
+  for i = 1, #enabled do
+    if enabled[i] == key then
+      return i
+    end
+  end
+  return 99
+end
+
+local function CollectClassActions(pack, enabled)
+  local actions = {}
+  local seen = {}
+  local classFile = PlayerClassFile()
+  local ids = CLASS_SPELLS[classFile]
+  if type(ids) ~= "table" then
+    ids = {}
+    for _, more in pairs(CLASS_SPELLS) do
+      for i = 1, #more do
+        ids[#ids + 1] = more[i]
+      end
+    end
+  end
+  for i = 1, #ids do
+    local baseId = ids[i]
+    local name, useId, original = ResolveKnownSpell(baseId)
+    if name and useId and not seen[useId] then
+      local covered = SPELL_TYPES[baseId] or SPELL_TYPES[useId]
+      local keep = {}
+      if type(covered) == "table" then
+        for t = 1, #covered do
+          local key = covered[t]
+          if TypeEnabled(pack, key) then
+            keep[#keep + 1] = key
+          end
+        end
+      end
+      if #keep > 0 then
+        table.sort(keep, function(a, b)
+          return TypeRank(enabled, a) < TypeRank(enabled, b)
+        end)
+        seen[useId] = true
+        actions[#actions + 1] = {
+          kind = "class",
+          spellId = useId,
+          baseId = original,
+          name = name,
+          types = keep,
+          firstType = keep[1],
+        }
+      end
+    end
+  end
+  table.sort(actions, function(a, b)
+    local ra = TypeRank(enabled, a.firstType)
+    local rb = TypeRank(enabled, b.firstType)
+    if ra ~= rb then
+      return ra < rb
+    end
+    return a.spellId < b.spellId
+  end)
+  return actions, seen
+end
+
+local function CollectCustomActions(pack, enabled, seen)
+  local actions = {}
+  local list = ns.EnsureCustomSpells(pack)
+  for i = 1, #list do
+    local row = list[i]
+    if type(row) == "table" and row.enabled ~= false then
+      local spellId = tonumber(row.spellId)
+      if type(spellId) == "number" and Accessible(spellId) then
+        local name, useId = ResolveKnownSpell(spellId)
+        if not name then
+          name = SpellName(spellId)
+          useId = spellId
+        end
+        if type(name) == "string" and useId and not seen[useId] then
+          local keep = {}
+          local types = row.types
+          if type(types) == "table" then
+            for t = 1, #types do
+              local key = types[t]
+              if TypeEnabled(pack, key) then
+                keep[#keep + 1] = key
+              end
+            end
+          end
+          if #keep > 0 then
+            table.sort(keep, function(a, b)
+              return TypeRank(enabled, a) < TypeRank(enabled, b)
+            end)
+            seen[useId] = true
+            actions[#actions + 1] = {
+              kind = "custom",
+              spellId = useId,
+              baseId = spellId,
+              name = name,
+              types = keep,
+              firstType = keep[1],
+              pet = row.pet == true,
+            }
+          end
+        end
+      end
+    end
+  end
+  table.sort(actions, function(a, b)
+    local ra = TypeRank(enabled, a.firstType)
+    local rb = TypeRank(enabled, b.firstType)
+    if ra ~= rb then
+      return ra < rb
+    end
+    return a.spellId < b.spellId
+  end)
+  return actions
+end
+
+local function PublicItemCount(itemId)
+  if type(itemId) ~= "number" then
+    return 0
+  end
+  local count
+  if C_Item and C_Item.GetItemCount then
+    count = Public(C_Item.GetItemCount(itemId, false, false, false, false))
+  elseif GetItemCount then
+    count = Public(GetItemCount(itemId, false))
+  end
+  if type(count) == "number" and count > 0 then
+    return count
+  end
+  return 0
+end
+
+function ns.HasClassBattleRez()
+  for i = 1, #BATTLE_REZ do
+    if SpellInBook(BATTLE_REZ[i], true) then
+      return true
+    end
+  end
+  return false
+end
+
+local function SoulLinkState(pack)
+  local enabled = pack and pack.mufs and pack.mufs.soulLinkFallback ~= false
+  local hasBR = ns.HasClassBattleRez()
+  local name = SpellName(SOUL_LINK_SPELL_ID)
+  local count = PublicItemCount(SOUL_LINK_ITEM_ID)
+  local knows = SpellInBook(SOUL_LINK_SPELL_ID, true)
+  local carried = count > 0 or knows
+  local available = enabled and (not hasBR) and carried
+  return {
+    enabled = enabled == true,
+    available = available == true,
+    hasClassBattleRez = hasBR,
+    knows = knows,
+    spellId = SOUL_LINK_SPELL_ID,
+    itemId = SOUL_LINK_ITEM_ID,
+    name = name,
+    count = count,
+  }
+end
+
+local function BlizzNames(keys)
+  local names = {}
+  local seen = {}
+  for i = 1, #keys do
+    local blizz = TYPE_BLIZZ[keys[i]]
+    if type(blizz) == "string" and not seen[blizz] then
+      seen[blizz] = true
+      names[#names + 1] = blizz
+    end
+  end
+  return names
+end
+
+local function KnowsPoisonCleansingTotem()
+  local sb = C_SpellBook
+  local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
+  if sb and bank and sb.IsSpellInSpellBook then
+    local known = sb.IsSpellInSpellBook(POISON_CLEANSING_TOTEM, bank, true)
+    if not Accessible(known) then
+      return nil
+    end
+    if known == true then
+      return true
+    end
+    if known == false then
+      return false
+    end
+    return nil
+  end
+  if SpellInBook(POISON_CLEANSING_TOTEM, true) then
+    return true
+  end
+  return false
+end
+
+function ns.GetEngineDispelGaps(selfOnly)
+  local classFile = PlayerClassFile()
+  local poison = false
+  if classFile == "SHAMAN" then
+    poison = KnowsPoisonCleansingTotem() == true
+  end
+  local bleed = false
+  if selfOnly then
+    local race = PlayerRaceFile()
+    bleed = race == "Dwarf"
+  end
+  if not poison and not bleed then
+    return nil
+  end
+  local names = {}
+  if poison then
+    names[#names + 1] = "Poison"
+  end
+  if bleed then
+    names[#names + 1] = "Bleed"
+  end
+  return names
+end
+
+local function BuildSlots(enabled, pack)
+  local nativeKeys = {}
+  local gapKeys = {}
+  for i = 1, #enabled do
+    local key = enabled[i]
+    if FRIENDLY_NATIVE[key] then
+      nativeKeys[#nativeKeys + 1] = key
+    else
+      gapKeys[#gapKeys + 1] = key
+    end
+  end
+  local slots = {}
+  local nativeNames = BlizzNames(nativeKeys)
+  local main = {
+    key = "dispel",
+    filter = NATIVE_FILTER,
+    candidateFilters = nil,
+  }
+  if #nativeNames > 0 and #nativeNames < 4 then
+    main.candidateFilters = {includeDispelTypes = nativeNames}
+  elseif #nativeNames == 0 then
+    main = nil
+  end
+  if main then
+    slots[#slots + 1] = main
+  end
+  local gapSeen = {}
+  local gapNames = BlizzNames(gapKeys)
+  for i = 1, #gapNames do
+    gapSeen[gapNames[i]] = true
+  end
+  local engine = ns.GetEngineDispelGaps(true)
+  if type(engine) == "table" then
+    for i = 1, #engine do
+      local name = engine[i]
+      if not gapSeen[name] then
+        gapSeen[name] = true
+        gapNames[#gapNames + 1] = name
+      end
+    end
+  end
+  if #gapNames > 0 then
+    slots[#slots + 1] = {
+      key = "dispel-extra",
+      filter = GAP_FILTER,
+      candidateFilters = {includeDispelTypes = gapNames},
+    }
+  end
+  if #slots == 0 then
+    slots[1] = {
+      key = "dispel",
+      filter = NATIVE_FILTER,
+      candidateFilters = nil,
+    }
+  end
+  return slots
+end
+
+local function Signature(pack)
+  local bits = {}
+  local enabled = ns.GetEnabledTypes(pack)
+  bits[#bits + 1] = table.concat(enabled, ",")
+  local order = ns.EnsureCureOrder(pack)
+  bits[#bits + 1] = table.concat(order, ",")
+  local list = ns.EnsureCustomSpells(pack)
+  for i = 1, #list do
+    local row = list[i]
+    if type(row) == "table" then
+      bits[#bits + 1] = tostring(row.spellId) .. ":" .. tostring(row.enabled)
+    end
+  end
+  local classFile = PlayerClassFile() or "?"
+  bits[#bits + 1] = classFile
+  local race = PlayerRaceFile() or "?"
+  bits[#bits + 1] = race
+  bits[#bits + 1] = tostring(KnowsPoisonCleansingTotem())
+  return table.concat(bits, "|")
+end
+
+function ns.InvalidateDetection()
+  cache.signature = nil
+  cache.model = nil
+end
+
+function ns.GetDetectionModel(pack)
+  pack = pack or GetPack()
+  local sig = Signature(pack)
+  if cache.model and cache.signature == sig then
+    return cache.model
+  end
+  local enabled = ns.GetEnabledTypes(pack)
+  local classActions, seen = CollectClassActions(pack, enabled)
+  local customActions = CollectCustomActions(pack, enabled, seen)
+  local actions = {}
+  for i = 1, #classActions do
+    actions[#actions + 1] = classActions[i]
+  end
+  for i = 1, #customActions do
+    actions[#actions + 1] = customActions[i]
+  end
+  local slots = BuildSlots(enabled, pack)
+  local primary = actions[1]
+  local model = {
+    enabledTypes = enabled,
+    order = ns.EnsureCureOrder(pack),
+    actions = actions,
+    classActions = classActions,
+    customActions = customActions,
+    slots = slots,
+    filter = slots[1] and slots[1].filter or NATIVE_FILTER,
+    primaryName = primary and primary.name or nil,
+    primaryId = primary and primary.spellId or nil,
+    soulLink = SoulLinkState(pack),
+    engineGaps = ns.GetEngineDispelGaps(true),
+  }
+  cache.signature = sig
+  cache.model = model
+  return model
+end
+
+function ns.GetDetectionSlots(pack)
+  local model = ns.GetDetectionModel(pack)
+  return model.slots
+end
+
+function ns.GetAuraFilter(pack)
+  local model = ns.GetDetectionModel(pack)
+  return model.filter
+end
+
+function ns.GetPrimaryCure(pack)
+  local model = ns.GetDetectionModel(pack)
+  return model.primaryName, model.primaryId
+end
+
+function ns.GetKnownCures(pack)
+  local model = ns.GetDetectionModel(pack)
+  return model.actions
+end
+
+function ns.GetSoulLinkFallback(pack)
+  local model = ns.GetDetectionModel(pack)
+  return model.soulLink
+end
+
+function ns.GetSoulLinkState(pack)
+  return ns.GetSoulLinkFallback(pack)
+end
+
+function ns.SpellRangeState(unit, spell, spellId)
+  if type(unit) ~= "string" then
+    return nil
+  end
+  if unit == "player" then
+    return true
+  end
+  local result
+  if C_Spell and C_Spell.IsSpellInRange then
+    if spellId then
+      result = C_Spell.IsSpellInRange(spellId, unit)
+    elseif spell then
+      result = C_Spell.IsSpellInRange(spell, unit)
+    end
+  elseif IsSpellInRange and spell then
+    result = IsSpellInRange(spell, unit)
+  end
+  if not Accessible(result) then
+    return nil
+  end
+  if result == false or result == 0 then
+    return false
+  end
+  if result == true or result == 1 then
+    return true
+  end
+  return nil
+end
+
+function ns.IsSpellInRangePublic(unit, spell, spellId)
+  return ns.SpellRangeState(unit, spell, spellId)
+end
+
+function ns.UnitInRangeKeep(unit, spell, spellId)
+  local state = ns.SpellRangeState(unit, spell, spellId)
+  if state == false then
+    return false
+  end
+  return true
+end
+
+function ns.FilterRosterRange(units, pack)
+  if type(units) ~= "table" then
+    return units
+  end
+  if not pack or not pack.alerts or not pack.alerts.liveListOnlyInRange then
+    return units
+  end
+  local spell, spellId = ns.GetPrimaryCure(pack)
+  local kept = {}
+  for i = 1, #units do
+    local unit = units[i]
+    if ns.UnitInRangeKeep(unit, spell, spellId) then
+      kept[#kept + 1] = unit
+    end
+  end
+  return kept
+end
+
+function ns.GetPublicInstanceType()
+  if GetInstanceInfo then
+    local _name, instanceType = GetInstanceInfo()
+    instanceType = Public(instanceType)
+    if type(instanceType) == "string" and instanceType ~= "" then
+      return instanceType
+    end
+  end
+  return nil
+end
+
+function ns.IsArenaInstance()
+  if IsActiveBattlefieldArena then
+    local inArena = IsActiveBattlefieldArena()
+    if IsTrue(inArena) then
+      return true
+    end
+  end
+  if C_PvP and C_PvP.IsArena and IsTrue(C_PvP.IsArena()) then
+    return true
+  end
+  return ns.GetPublicInstanceType() == "arena"
+end
+
+local function UnitPresent(unit)
+  if not unit or not UnitExists then
+    return unit ~= nil
+  end
+  local exists = UnitExists(unit)
+  if not Accessible(exists) then
+    return true
+  end
+  return exists == true
+end
+
+function ns.UnitExistsPublic(unit)
+  return UnitPresent(unit)
+end
+
+local function IsPlayerToken(unit)
+  if unit == "player" then
+    return true
+  end
+  if UnitIsUnit then
+    local same = UnitIsUnit(unit, "player")
+    if Accessible(same) and same then
+      return true
+    end
+  end
+  return false
+end
+
+function ns.IsPlayerUnit(unit)
+  return IsPlayerToken(unit)
+end
+
+local function IsPubliclyDead(unit)
+  if not UnitIsDeadOrGhost then
+    return false
+  end
+  local dead = UnitIsDeadOrGhost(unit)
+  if not Accessible(dead) then
+    return false
+  end
+  return dead == true
+end
+
+function ns.IsUnitDeadPublic(unit)
+  return IsPubliclyDead(unit)
+end
+
+local function Now()
+  if GetTime then
+    return GetTime()
+  end
+  return 0
+end
+
+local function FollowerGuardActive()
+  return Now() < follower.untilTime
+end
+
+local function IsCorePartyUnit(unit)
+  return unit == "player" or (type(unit) == "string" and unit:match("^party[1-4]$") ~= nil)
+end
+
+local function CountCore(units)
+  local count = 0
+  for i = 1, #units do
+    if IsCorePartyUnit(units[i]) then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+local function CaptureFollowerSnapshot(units)
+  local coreCount = CountCore(units)
+  if coreCount < 2 then
+    return
+  end
+  if FollowerGuardActive() and follower.units and coreCount < follower.coreCount then
+    return
+  end
+  local copy = {}
+  for i = 1, #units do
+    copy[i] = units[i]
+  end
+  follower.coreCount = coreCount
+  follower.units = copy
+end
+
+local function RestoreFollowerUnits(units, seen)
+  if not FollowerGuardActive() or not follower.units then
+    return units
+  end
+  if CountCore(units) >= follower.coreCount then
+    return units
+  end
+  for i = 1, #follower.units do
+    local unit = follower.units[i]
+    if type(unit) == "string" and not seen[unit] then
+      seen[unit] = true
+      units[#units + 1] = unit
+    end
+  end
+  return units
+end
+
+function ns.ScheduleFollowerRosterGuard()
+  follower.generation = follower.generation + 1
+  local generation = follower.generation
+  follower.untilTime = Now() + FOLLOWER_GUARD_SECONDS
+  local timer = C_Timer
+  if not timer or type(timer.After) ~= "function" then
+    if ns.RefreshLiveList then
+      ns.RefreshLiveList()
+    end
+    if ns.RefreshAlerts then
+      ns.RefreshAlerts()
+    end
+    return
+  end
+  for i = 1, #FOLLOWER_RETRY do
+    local delay = FOLLOWER_RETRY[i]
+    timer.After(delay, function()
+      if generation ~= follower.generation then
+        return
+      end
+      if ns.RefreshLiveList then
+        ns.RefreshLiveList()
+      end
+      if ns.RefreshAlerts then
+        ns.RefreshAlerts()
+      end
+    end)
+  end
+end
+
+local function AppendUnit(units, seen, unit, pack, allowMissing)
+  if type(unit) ~= "string" or seen[unit] then
+    return
+  end
+  if unit:find("^arena%d+$") then
+    return
+  end
+  if not allowMissing and not UnitPresent(unit) then
+    return
+  end
+  if pack.sorting and pack.sorting.includePlayer == false and IsPlayerToken(unit) then
+    return
+  end
+  if pack.sorting and pack.sorting.skipDead and IsPubliclyDead(unit) then
+    return
+  end
+  seen[unit] = true
+  units[#units + 1] = unit
+end
+
+local function AppendPet(units, seen, owner, pack)
+  if not pack.sorting or not pack.sorting.includePets then
+    return
+  end
+  if pack.cure and pack.cure.curePets == false then
+    return
+  end
+  local pet
+  if owner == "player" then
+    AppendUnit(units, seen, "pet", pack)
+    pet = "playerpet"
+  elseif owner:find("^party%d+$") then
+    pet = owner .. "pet"
+    local index = owner:match("^party(%d+)$")
+    if index then
+      AppendUnit(units, seen, "partypet" .. index, pack)
+    end
+  elseif owner:find("^raid%d+$") then
+    pet = owner .. "pet"
+    local index = owner:match("^raid(%d+)$")
+    if index then
+      AppendUnit(units, seen, "raidpet" .. index, pack)
+    end
+  end
+  if pet then
+    AppendUnit(units, seen, pet, pack)
+  end
+end
+
+local function GroupSize()
+  local n
+  if GetNumGroupMembers then
+    n = Public(GetNumGroupMembers())
+  end
+  if type(n) == "number" and n > 0 then
+    return n
+  end
+  return 0
+end
+
+function ns.BuildRoster(pack)
+  pack = pack or GetPack()
+  local units = {}
+  local seen = {}
+  local inArena = ns.IsArenaInstance()
+  local size = GroupSize()
+  if IsInRaid and IsInRaid() then
+    local maxIndex = 40
+    if inArena then
+      if size > 0 and size < maxIndex then
+        maxIndex = size
+      else
+        maxIndex = 5
+      end
+    elseif size > 0 and size < maxIndex then
+      maxIndex = size
+    end
+    for i = 1, maxIndex do
+      local unit = "raid" .. i
+      AppendUnit(units, seen, unit, pack)
+      AppendPet(units, seen, unit, pack)
+    end
+  else
+    if not pack.sorting or pack.sorting.includePlayer ~= false then
+      AppendUnit(units, seen, "player", pack)
+      AppendPet(units, seen, "player", pack)
+    end
+    local partyMax = 4
+    if inArena and size > 1 then
+      partyMax = math.min(4, size - 1)
+    end
+    if IsInGroup and IsInGroup() then
+      for i = 1, partyMax do
+        local unit = "party" .. i
+        AppendUnit(units, seen, unit, pack)
+        AppendPet(units, seen, unit, pack)
+      end
+    end
+  end
+  RestoreFollowerUnits(units, seen)
+  CaptureFollowerSnapshot(units)
+  if ns.ApplyUnitLists then
+    return ns.ApplyUnitLists(units, pack)
+  end
+  return units
+end
+
+function ns.DetectionSummary(pack)
+  local model = ns.GetDetectionModel(pack)
+  local lines = {}
+  local enabled = model.enabledTypes
+  if #enabled == 0 then
+    lines[#lines + 1] = "No affliction types enabled."
+  else
+    lines[#lines + 1] = "Order: " .. table.concat(enabled, " > ")
+  end
+  if #model.actions == 0 then
+    lines[#lines + 1] = "No known public cure spells for this spec."
+  else
+    for i = 1, #model.actions do
+      local action = model.actions[i]
+      local tag = action.kind == "custom" and "custom" or "class"
+      lines[#lines + 1] = tag .. "  " .. tostring(action.name) .. "  " .. table.concat(action.types, "/")
+    end
+  end
+  local sl = model.soulLink
+  if sl and sl.enabled then
+    if sl.hasClassBattleRez then
+      lines[#lines + 1] = "Soul Link idle: class battle-rez present"
+    elseif sl.available then
+      lines[#lines + 1] = "Soul Link fallback ready (item " .. tostring(sl.itemId) .. ")"
+    else
+      lines[#lines + 1] = "Soul Link fallback armed, item or spell not publicly counted"
+    end
+  end
+  if ns.IsArenaInstance() then
+    lines[#lines + 1] = "Arena instance: Live List and Alerts use group roster, not arenaN"
+  end
+  lines[#lines + 1] = "Click map parked. Detection does not install MUF attributes."
+  return table.concat(lines, "\n")
+end
+
+function ns.ApplyDetectionSlots(container, pack, initFn)
+  if not container or not container.AddAuraSlot then
+    return false
+  end
+  local slots = ns.GetDetectionSlots(pack)
+  if type(container._dcrSlotKeys) ~= "table" then
+    container._dcrSlotKeys = {}
+  end
+  for i = 1, #slots do
+    local slot = slots[i]
+    local info = {
+      initializeFrame = initFn,
+      candidateFilters = slot.candidateFilters,
+    }
+    if container._dcrSlotKeys[slot.key] then
+      if container.SetAuraSlotFilterString then
+        container:SetAuraSlotFilterString(slot.key, slot.filter)
+      end
+      if container.SetAuraSlotCandidateFilters then
+        container:SetAuraSlotCandidateFilters(slot.key, slot.candidateFilters)
+      end
+    else
+      container:AddAuraSlot(slot.key, slot.filter, info)
+      container._dcrSlotKeys[slot.key] = true
+    end
+  end
+  return true
+end
+
+function ns.GetDispelColorMap(pack)
+  if not CreateColor then
+    return nil
+  end
+  pack = pack or GetPack()
+  local colors = pack.colors
+  if type(colors) ~= "table" then
+    return nil
+  end
+  local function C(c)
+    if type(c) ~= "table" then
+      return nil
+    end
+    return CreateColor(c[1] or 1, c[2] or 1, c[3] or 1, c[4] or 1)
+  end
+  return {
+    Magic = C(colors.magic),
+    Curse = C(colors.curse),
+    Poison = C(colors.poison),
+    Disease = C(colors.disease),
+    Enrage = C(colors.enrage),
+    Charm = C(colors.charm),
+    Bleed = C(colors.bleed),
+    None = C(colors.afflicted),
+  }
+end
+
+ns.DETECTION_TYPES = TYPE_KEYS
+ns.NATIVE_DISPEL_FILTER = NATIVE_FILTER
+ns.GAP_DISPEL_FILTER = GAP_FILTER
+ns.SOUL_LINK_SPELL_ID = SOUL_LINK_SPELL_ID
+ns.SOUL_LINK_ITEM_ID = SOUL_LINK_ITEM_ID
+ns.POISON_CLEANSING_TOTEM = POISON_CLEANSING_TOTEM
+
+local function SoulLinkChat(msg)
+  local addon = Addon()
+  if addon and addon.Print then
+    addon:Print(msg)
+    return
+  end
+  if DEFAULT_CHAT_FRAME then
+    DEFAULT_CHAT_FRAME:AddMessage("|cff52dbd1Decursive|r " .. msg)
+  end
+end
+
+function ns.ToggleSoulLinkFallback()
+  local pack = GetPack()
+  if type(pack) ~= "table" then
+    return false
+  end
+  if type(pack.mufs) ~= "table" then
+    pack.mufs = {}
+  end
+  local currentlyEnabled = pack.mufs.soulLinkFallback ~= false
+  pack.mufs.soulLinkFallback = not currentlyEnabled
+  ns.InvalidateDetection()
+  if ns.Notify then
+    ns.Notify()
+  end
+  local state = pack.mufs.soulLinkFallback == false and "disabled" or "enabled"
+  SoulLinkChat("Emergency Soul Link fallback " .. state .. ".")
+  return pack.mufs.soulLinkFallback ~= false
+end
+
+function ns.PrintSoulLinkStatus()
+  local sl = ns.GetSoulLinkState()
+  local lines = {
+    "Emergency Soul Link status",
+    "toggle: " .. (sl.enabled and "on" or "off"),
+    "item " .. tostring(sl.itemId) .. " count: " .. tostring(sl.count),
+    "spell " .. tostring(sl.spellId) .. ": " .. (sl.knows and "known" or "not publicly known"),
+    "class battle-rez: " .. (sl.hasClassBattleRez and "yes" or "no"),
+    "available: " .. (sl.available and "yes" or "no"),
+  }
+  if sl.name then
+    lines[#lines + 1] = "name: " .. sl.name
+  end
+  SoulLinkChat(table.concat(lines, " | "))
+end
+
+function ns.HandleSoulLinkSlash(msg)
+  msg = strtrim(msg or "")
+  local cmd = string.lower(msg)
+  if cmd == "status" or cmd == "show" or cmd == "info" then
+    ns.PrintSoulLinkStatus()
+    return
+  end
+  if cmd == "on" then
+    local pack = GetPack()
+    if pack and pack.mufs then
+      pack.mufs.soulLinkFallback = true
+      ns.InvalidateDetection()
+      if ns.Notify then
+        ns.Notify()
+      end
+    end
+    SoulLinkChat("Emergency Soul Link fallback enabled.")
+    return
+  end
+  if cmd == "off" then
+    local pack = GetPack()
+    if pack and pack.mufs then
+      pack.mufs.soulLinkFallback = false
+      ns.InvalidateDetection()
+      if ns.Notify then
+        ns.Notify()
+      end
+    end
+    SoulLinkChat("Emergency Soul Link fallback disabled.")
+    return
+  end
+  ns.ToggleSoulLinkFallback()
+end
+
+function ns.EnableDetection()
+  if eventsOn then
+    return
+  end
+  eventsOn = true
+  eventFrame = CreateFrame("Frame")
+  eventFrame:SetScript("OnEvent", function(_, event)
+    ns.InvalidateDetection()
+    if event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_ROLES_ASSIGNED" or event == "TRAIT_CONFIG_UPDATED" then
+      ns.ScheduleFollowerRosterGuard()
+    end
+    if event == "SPELLS_CHANGED" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED" then
+      if ns.RefreshLiveList then
+        ns.RefreshLiveList()
+      end
+      if ns.RefreshAlerts then
+        ns.RefreshAlerts()
+      end
+      if ns.RefreshCureEnginePanel then
+        ns.RefreshCureEnginePanel()
+      end
+    elseif event == "GROUP_ROSTER_UPDATE" or event == "UNIT_PET" or event == "PLAYER_ENTERING_WORLD" then
+      if ns.RefreshLiveList then
+        ns.RefreshLiveList()
+      end
+      if ns.RefreshAlerts then
+        ns.RefreshAlerts()
+      end
+    end
+  end)
+  eventFrame:RegisterEvent("SPELLS_CHANGED")
+  eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+  eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+  eventFrame:RegisterEvent("UNIT_PET")
+  eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+  local extra = {
+    "TRAIT_CONFIG_UPDATED",
+    "PLAYER_ROLES_ASSIGNED",
+  }
+  for i = 1, #extra do
+    local name = extra[i]
+    local ok = true
+    if C_EventUtils and C_EventUtils.IsEventValid then
+      ok = C_EventUtils.IsEventValid(name) == true
+    end
+    if ok then
+      eventFrame:RegisterEvent(name)
+    end
+  end
+end

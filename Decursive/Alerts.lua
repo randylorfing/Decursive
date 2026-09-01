@@ -46,23 +46,11 @@ local function GetPack()
 end
 
 local function Accessible(value)
-  if value == nil then
-    return true
-  end
-  if type(issecretvalue) == "function" and issecretvalue(value) then
-    if type(canaccessvalue) == "function" then
-      return canaccessvalue(value) == true
-    end
-    return false
-  end
-  return true
+  return ns.IsAccessible(value)
 end
 
 local function Public(value)
-  if not Accessible(value) then
-    return nil
-  end
-  return value
+  return ns.PublicValue(value)
 end
 
 local function SoundMessagingLocked()
@@ -146,30 +134,10 @@ local function ClearRegistrations()
 end
 
 local function RosterUnits(pack)
-  local units = {"player"}
-  local includePets = pack.sorting and pack.sorting.includePets
-  if IsInRaid and IsInRaid() then
-    for i = 1, 40 do
-      units[#units + 1] = "raid" .. i
-      if includePets then
-        units[#units + 1] = "raidpet" .. i
-      end
-    end
-  else
-    for i = 1, 4 do
-      units[#units + 1] = "party" .. i
-      if includePets then
-        units[#units + 1] = "partypet" .. i
-      end
-    end
-    if includePets then
-      units[#units + 1] = "pet"
-    end
+  if ns.BuildRoster then
+    return ns.BuildRoster(pack)
   end
-  if ns.ApplyUnitLists then
-    return ns.ApplyUnitLists(units, pack)
-  end
-  return units
+  return {"player"}
 end
 
 local function SyncNativeSounds()
@@ -361,11 +329,32 @@ local function OnSuccessfulDispel(destGUID, destName, extraSpellId, extraSpellNa
   end
 end
 
+local function SoulLinkSpellId()
+  return ns.SOUL_LINK_SPELL_ID or 1259646
+end
+
+local function ShowSoulLinkWarning(destName)
+  local pack = GetPack()
+  if not pack.alerts or pack.alerts.soulLinkAlert == false then
+    return
+  end
+  local sl = ns.GetSoulLinkState and ns.GetSoulLinkState(pack)
+  if sl and sl.enabled == false then
+    return
+  end
+  local who = UnitLabel(nil, destName)
+  if who == "unit" then
+    who = "your target"
+  end
+  ShowDispelText("Battle rez: move within range of " .. who .. "!", pack)
+  PrintLine("Battle rez: move within range of " .. who, false, pack)
+end
+
 local function OnCLEU()
   if not CombatLogGetCurrentEventInfo then
     return
   end
-  local _ts, subevent, _hide, sourceGUID, _sourceName, _sf, _srf, destGUID, destName, _df, _drf, _spellId, _spellName, _school, extraSpellId, extraSpellName = CombatLogGetCurrentEventInfo()
+  local _ts, subevent, _hide, sourceGUID, _sourceName, _sf, _srf, destGUID, destName, _df, _drf, spellId, spellName, _school, extraSpellId, extraSpellName = CombatLogGetCurrentEventInfo()
   subevent = Public(subevent)
   sourceGUID = Public(sourceGUID)
   local playerGUID = UnitGUID and Public(UnitGUID("player"))
@@ -374,15 +363,30 @@ local function OnCLEU()
   end
   if subevent == "SPELL_DISPEL" or subevent == "SPELL_STOLEN" then
     OnSuccessfulDispel(destGUID, destName, extraSpellId, extraSpellName)
+    return
+  end
+  if subevent == "SPELL_CAST_FAILED" then
+    spellId = Public(spellId)
+    if type(spellId) == "number" and spellId == SoulLinkSpellId() then
+      ShowSoulLinkWarning(destName)
+    end
   end
 end
 
-local function OnCastFailed(unit)
+local function OnCastFailed(unit, _castGUID, spellId)
   unit = Public(unit)
   if unit ~= "player" then
     return
   end
   local pack = GetPack()
+  spellId = Public(spellId)
+  if type(spellId) == "number" and spellId == SoulLinkSpellId() then
+    local dest
+    if UnitName then
+      dest = Public(UnitName("target"))
+    end
+    ShowSoulLinkWarning(dest)
+  end
   if not pack.alerts or not pack.alerts.errorSound then
     return
   end
@@ -395,7 +399,7 @@ local function RegisterEvents()
   end
   eventsOn = true
   eventFrame = CreateFrame("Frame")
-  eventFrame:SetScript("OnEvent", function(_, event, arg1)
+  eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3)
     if event == "COMBAT_LOG_EVENT_UNFILTERED" then
       OnCLEU()
     elseif event == "GROUP_ROSTER_UPDATE" then
@@ -414,7 +418,7 @@ local function RegisterEvents()
       ClearRegistrations()
       pendingSync = true
     elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
-      OnCastFailed(arg1)
+      OnCastFailed(arg1, arg2, arg3)
     end
   end)
   eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -438,6 +442,50 @@ function ns.RefreshAlerts()
     return
   end
   SyncNativeSounds()
+end
+
+
+function ns.PrintAuraSoundDiagnostics(spellId, unitToken)
+  local pack = GetPack()
+  local store = EnsureLearnedStore()
+  local lines = {
+    "Decursive Aura Sound Diagnostic",
+    "native AddAuraSound: " .. ((C_UnitAuras and C_UnitAuras.AddAuraSound) and "yes" or "no"),
+    "sound enabled: " .. tostring(pack.alerts and pack.alerts.sound == true),
+    "nativeAuraSound: " .. tostring(pack.alerts and pack.alerts.nativeAuraSound == true),
+    "learned ids: " .. tostring(#store),
+    "active registrations: " .. tostring(#registered),
+    "chat-messaging lockdown: " .. tostring(SoundMessagingLocked()),
+  }
+  if #store > 0 then
+    local shown = {}
+    local n = math.min(#store, 12)
+    for i = 1, n do
+      shown[i] = tostring(store[i])
+    end
+    lines[#lines + 1] = "ids: " .. table.concat(shown, ", ")
+  end
+  spellId = tonumber(spellId)
+  if type(spellId) == "number" and spellId > 0 then
+    local unit = type(unitToken) == "string" and unitToken ~= "" and unitToken or "player"
+    local found = false
+    for i = 1, #store do
+      if store[i] == spellId then
+        found = true
+        break
+      end
+    end
+    lines[#lines + 1] = "query " .. unit .. ":" .. tostring(spellId) .. " learned=" .. (found and "yes" or "no")
+  else
+    lines[#lines + 1] = "Pair query: /zdsound <spellID> [unitToken]"
+  end
+  local text = table.concat(lines, "\n")
+  if DEFAULT_CHAT_FRAME then
+    for i = 1, #lines do
+      DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r " .. lines[i])
+    end
+  end
+  return text
 end
 
 function ns.EnableAlerts(_addon)

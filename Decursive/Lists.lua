@@ -53,23 +53,11 @@ local function Addon()
 end
 
 local function Accessible(value)
-  if value == nil then
-    return true
-  end
-  if type(issecretvalue) == "function" and issecretvalue(value) then
-    if type(canaccessvalue) == "function" then
-      return canaccessvalue(value) == true
-    end
-    return false
-  end
-  return true
+  return ns.IsAccessible(value)
 end
 
 local function Public(value)
-  if not Accessible(value) then
-    return nil
-  end
-  return value
+  return ns.PublicValue(value)
 end
 
 local function PublicString(value)
@@ -470,17 +458,21 @@ function ns.ApplyUnitLists(units, pack)
       kept[#kept + 1] = unit
     end
   end
-  local order = pack and pack.mufs and pack.mufs.order
-  if order ~= "PRIORITY" then
-    return kept
-  end
   local ranked = {}
+  local anyPrio = false
   for i = 1, #kept do
+    local rank = ns.UnitPrioRank(kept[i])
+    if rank < 1000 then
+      anyPrio = true
+    end
     ranked[i] = {
       unit = kept[i],
       i = i,
-      rank = ns.UnitPrioRank(kept[i]),
+      rank = rank,
     }
+  end
+  if not anyPrio then
+    return kept
   end
   table.sort(ranked, function(a, b)
     if a.rank ~= b.rank then

@@ -5,21 +5,9 @@ local ROW_W = 180
 local ROW_H = 32
 local ICON = 32
 local HANDLE_H = 18
-local DISPEL_FILTER = "HARMFUL|RAID_PLAYER_DISPELLABLE"
 local TEAL = {0.32, 0.86, 0.82, 1}
 local TEXT = {0.88, 0.93, 0.96, 1}
 local MUTED = {0.50, 0.60, 0.66, 1}
-
-local CLASS_DISPEL = {
-  PALADIN = {4987, 213644},
-  PRIEST = {527, 213634},
-  DRUID = {88423, 2782},
-  SHAMAN = {77130, 51886},
-  MONK = {115450, 218164},
-  EVOKER = {360823, 365585, 374251},
-  MAGE = {475},
-  WARLOCK = {89808},
-}
 
 local TYPE_LABELS = {
   Magic = "Magic",
@@ -39,8 +27,6 @@ local poolReady = false
 local pending = false
 local eventsOn = false
 local eventFrame
-local cureName
-local cureId
 local scanElapsed = 0
 
 local function Addon()
@@ -56,322 +42,35 @@ local function GetPack()
 end
 
 local function Accessible(value)
-  if value == nil then
-    return true
-  end
-  if type(issecretvalue) == "function" and issecretvalue(value) then
-    if type(canaccessvalue) == "function" then
-      return canaccessvalue(value) == true
-    end
-    return false
-  end
-  return true
+  return ns.IsAccessible(value)
 end
 
 local function Public(value)
-  if not Accessible(value) then
-    return nil
-  end
-  return value
+  return ns.PublicValue(value)
 end
 
 local function LockedDown()
   return InCombatLockdown and InCombatLockdown()
 end
 
-local function IsTrue(value)
-  if not Accessible(value) then
-    return false
-  end
-  return value == true or value == 1
-end
-
-local function UnitPresent(unit)
-  if not unit or not UnitExists then
-    return unit ~= nil
-  end
-  local exists = UnitExists(unit)
-  if not Accessible(exists) then
-    return true
-  end
-  return exists == true
-end
-
-local function IsPlayerToken(unit)
-  if unit == "player" then
-    return true
-  end
-  if UnitIsUnit then
-    local same = UnitIsUnit(unit, "player")
-    if Accessible(same) and same then
-      return true
-    end
-  end
-  return false
-end
-
 local function IsPubliclyDead(unit)
-  if not UnitIsDeadOrGhost then
-    return false
-  end
-  local dead = UnitIsDeadOrGhost(unit)
-  if not Accessible(dead) then
-    return false
-  end
-  return dead == true
-end
-
-local function PlayerClassFile()
-  if not UnitClass then
-    return nil
-  end
-  local _name, file = UnitClass("player")
-  return Public(file)
-end
-
-local function SpellKnown(spellId)
-  if C_SpellBook then
-    if C_SpellBook.IsSpellKnown and IsTrue(C_SpellBook.IsSpellKnown(spellId)) then
-      return true
-    end
-    local banks = Enum and Enum.SpellBookSpellBank
-    if banks then
-      if C_SpellBook.IsSpellKnown and IsTrue(C_SpellBook.IsSpellKnown(spellId, banks.Player)) then
-        return true
-      end
-    end
-    if C_SpellBook.IsSpellInSpellBook and IsTrue(C_SpellBook.IsSpellInSpellBook(spellId)) then
-      return true
-    end
-  end
-  if IsPlayerSpell and IsTrue(IsPlayerSpell(spellId)) then
-    return true
-  end
-  if IsSpellKnown and IsTrue(IsSpellKnown(spellId)) then
-    return true
-  end
-  return false
-end
-
-local function SpellName(spellId)
-  local name
-  if C_Spell and C_Spell.GetSpellName then
-    name = C_Spell.GetSpellName(spellId)
-  elseif C_Spell and C_Spell.GetSpellInfo then
-    local info = C_Spell.GetSpellInfo(spellId)
-    if type(info) == "table" then
-      name = info.name
-    end
-  end
-  if type(name) == "string" and Accessible(name) and name ~= "" then
-    return name
-  end
-  return nil
-end
-
-local function FirstKnown(ids)
-  if type(ids) ~= "table" then
-    return nil, nil
-  end
-  for i = 1, #ids do
-    local id = ids[i]
-    if SpellKnown(id) then
-      local name = SpellName(id)
-      if name then
-        return name, id
-      end
-    end
-  end
-  return nil, nil
+  return ns.IsUnitDeadPublic(unit)
 end
 
 local function ResolveCureSpell()
-  if cureName then
-    return cureName, cureId
-  end
-  local classFile = PlayerClassFile()
-  if type(classFile) == "string" and CLASS_DISPEL[classFile] then
-    cureName, cureId = FirstKnown(CLASS_DISPEL[classFile])
-    if cureName then
-      return cureName, cureId
-    end
-  end
-  for _, ids in pairs(CLASS_DISPEL) do
-    local name, id = FirstKnown(ids)
-    if name then
-      cureName, cureId = name, id
-      return cureName, cureId
-    end
-  end
-  return nil, nil
+  return ns.GetPrimaryCure(GetPack())
 end
 
 local function SpellInRange(unit, spell, spellId)
-  local result
-  if C_Spell and C_Spell.IsSpellInRange then
-    if spellId then
-      result = C_Spell.IsSpellInRange(spellId, unit)
-    elseif spell then
-      result = C_Spell.IsSpellInRange(spell, unit)
-    end
-  elseif IsSpellInRange and spell then
-    result = IsSpellInRange(spell, unit)
-  end
-  if not Accessible(result) then
-    return nil
-  end
-  if result == false or result == 0 then
-    return false
-  end
-  if result == true or result == 1 then
-    return true
-  end
-  return nil
-end
-
-local function TryDandersUnits()
-  local df = _G.DandersFrames
-  if type(df) ~= "table" then
-    return nil
-  end
-  local names = {"GetOrderedUnits", "GetUnitOrder", "GetRoster", "GetRosterUnits", "GetUnitList"}
-  local fn
-  for i = 1, #names do
-    local candidate = df[names[i]]
-    if type(candidate) == "function" then
-      fn = candidate
-      break
-    end
-  end
-  if not fn and type(df.API) == "table" then
-    for i = 1, #names do
-      local candidate = df.API[names[i]]
-      if type(candidate) == "function" then
-        fn = candidate
-        df = df.API
-        break
-      end
-    end
-  end
-  if not fn then
-    return nil
-  end
-  local ok, result = pcall(fn, df)
-  if not ok or type(result) ~= "table" then
-    return nil
-  end
-  local units = {}
-  for i = 1, #result do
-    local row = result[i]
-    local unit
-    if type(row) == "string" then
-      unit = row
-    elseif type(row) == "table" then
-      unit = row.unit or row.unitToken or row.token
-    end
-    if type(unit) == "string" and Accessible(unit) then
-      units[#units + 1] = unit
-    end
-  end
-  if #units == 0 then
-    return nil
-  end
-  return units
-end
-
-local function AppendUnit(units, seen, unit, pack)
-  if type(unit) ~= "string" or seen[unit] then
-    return
-  end
-  if not UnitPresent(unit) then
-    return
-  end
-  if pack.sorting.includePlayer == false and IsPlayerToken(unit) then
-    return
-  end
-  if pack.sorting.skipDead and IsPubliclyDead(unit) then
-    return
-  end
-  seen[unit] = true
-  units[#units + 1] = unit
-end
-
-local function AppendPet(units, seen, owner, pack)
-  if not pack.sorting.includePets then
-    return
-  end
-  local pet
-  if owner == "player" then
-    pet = "playerpet"
-  elseif owner:find("^party%d+$") then
-    pet = owner .. "pet"
-  elseif owner:find("^raid%d+$") then
-    pet = owner .. "pet"
-  end
-  if pet then
-    AppendUnit(units, seen, pet, pack)
-  end
+  return ns.SpellRangeState(unit, spell, spellId)
 end
 
 local function BuildRoster(pack)
-  local units = {}
-  local seen = {}
-  local order = pack.mufs.order or "GROUP"
-  if order == "DANDERSFRAMES" then
-    local danders = TryDandersUnits()
-    if danders then
-      for i = 1, #danders do
-        AppendUnit(units, seen, danders[i], pack)
-        AppendPet(units, seen, danders[i], pack)
-      end
-      if ns.ApplyUnitLists then
-        return ns.ApplyUnitLists(units, pack)
-      end
-      return units
-    end
-  end
-  if IsInRaid and IsInRaid() then
-    for i = 1, 40 do
-      local unit = "raid" .. i
-      AppendUnit(units, seen, unit, pack)
-      AppendPet(units, seen, unit, pack)
-    end
-    if ns.ApplyUnitLists then
-      return ns.ApplyUnitLists(units, pack)
-    end
-    return units
-  end
-  if pack.sorting.includePlayer ~= false then
-    AppendUnit(units, seen, "player", pack)
-    AppendPet(units, seen, "player", pack)
-  end
-  if IsInGroup and IsInGroup() then
-    for i = 1, 4 do
-      local unit = "party" .. i
-      AppendUnit(units, seen, unit, pack)
-      AppendPet(units, seen, unit, pack)
-    end
-  end
-  if ns.ApplyUnitLists then
-    return ns.ApplyUnitLists(units, pack)
-  end
-  return units
+  return ns.BuildRoster(pack)
 end
 
 local function FilterRange(units, pack)
-  if not pack.alerts.liveListOnlyInRange then
-    return units
-  end
-  local spell, spellId = ResolveCureSpell()
-  local kept = {}
-  for i = 1, #units do
-    local unit = units[i]
-    local inRange = SpellInRange(unit, spell, spellId)
-    if inRange ~= false then
-      kept[#kept + 1] = unit
-    end
-  end
-  return kept
+  return ns.FilterRosterRange(units, pack)
 end
 
 local function GetSavedPoint()
@@ -502,11 +201,14 @@ local function AttachAuraContainer(row)
   if container.SetUnit then
     container:SetUnit(unit)
   end
-  if container.AddAuraSlot then
-    container:AddAuraSlot("dispel", DISPEL_FILTER, {
-      initializeFrame = function(frame)
-        BindLiveSlot(frame)
-      end,
+  local function initSlot(frame)
+    BindLiveSlot(frame)
+  end
+  if ns.ApplyDetectionSlots then
+    ns.ApplyDetectionSlots(container, GetPack(), initSlot)
+  elseif container.AddAuraSlot then
+    container:AddAuraSlot("dispel", ns.NATIVE_DISPEL_FILTER or "HARMFUL|RAID_PLAYER_DISPELLABLE", {
+      initializeFrame = initSlot,
     })
   end
 end
@@ -893,8 +595,6 @@ local function RegisterEvents()
   eventFrame = CreateFrame("Frame")
   eventFrame:SetScript("OnEvent", function(_, event)
     if event == "SPELLS_CHANGED" then
-      cureName = nil
-      cureId = nil
       ns.RefreshLiveList()
     elseif event == "UNIT_PET" then
       ns.RefreshLiveList()

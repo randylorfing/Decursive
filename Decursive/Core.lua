@@ -9,6 +9,9 @@ ns.addon = Decursive
 Decursive.APP_NAME = "Decursive"
 
 local function Notify()
+  if ns.InvalidateDetection then
+    ns.InvalidateDetection()
+  end
   if ns.RefreshOptions then
     ns.RefreshOptions()
   end
@@ -34,6 +37,22 @@ function Decursive:OnInitialize()
   end
   self:RegisterChatCommand("dcr", "OpenOptions")
   self:RegisterChatCommand("decursive", "OpenOptions")
+  self:RegisterChatCommand("dcrsoullink", function(msg)
+    if ns.HandleSoulLinkSlash then
+      ns.HandleSoulLinkSlash(msg)
+    end
+  end)
+  self:RegisterChatCommand("dcrsoullinkstatus", function()
+    if ns.PrintSoulLinkStatus then
+      ns.PrintSoulLinkStatus()
+    end
+  end)
+  self:RegisterChatCommand("zdsound", function(msg)
+    local spellText, unitToken = tostring(msg or ""):match("^%s*(%d+)%s*(%S*)")
+    if ns.PrintAuraSoundDiagnostics then
+      ns.PrintAuraSoundDiagnostics(tonumber(spellText), unitToken)
+    end
+  end)
 end
 
 function Decursive:OnEnable()
@@ -42,6 +61,9 @@ function Decursive:OnEnable()
   self:RegisterEvent("PLAYER_ENTERING_WORLD", "OnEnteringWorld")
   self:RegisterEvent("GROUP_ROSTER_UPDATE", "OnGroupRosterUpdate")
   self:RegisterEvent("PLAYER_REGEN_ENABLED", "OnRegenEnabled")
+  if ns.EnableDetection then
+    ns.EnableDetection()
+  end
   if ns.EnableMUFs then
     ns.EnableMUFs(self)
   end
@@ -82,6 +104,9 @@ function Decursive:OnEnteringWorld()
 end
 
 function Decursive:OnSpecChanged()
+  if ns.ScheduleFollowerRosterGuard then
+    ns.ScheduleFollowerRosterGuard()
+  end
   if ns.IsOptionsShown and ns.IsOptionsShown() then
     return
   end
