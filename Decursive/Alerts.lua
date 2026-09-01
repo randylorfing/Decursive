@@ -183,8 +183,53 @@ local function SyncNativeSounds()
   pendingSync = false
 end
 
+local moveMode = false
+
+local function SaveTextPoint()
+  if not textFrame then
+    return
+  end
+  local addon = Addon()
+  if not addon or not addon.db or not addon.db.char then
+    return
+  end
+  local point, _, relPoint, x, y = textFrame:GetPoint(1)
+  addon.db.char.alertTextPoint = {point, relPoint, x, y}
+end
+
+local function RestoreTextPoint()
+  local addon = Addon()
+  local saved = addon and addon.db and addon.db.char and addon.db.char.alertTextPoint
+  if type(saved) ~= "table" or not textFrame then
+    return
+  end
+  local point, relPoint, x, y = saved[1], saved[2], saved[3], saved[4]
+  if type(point) == "string" and type(relPoint) == "string" then
+    textFrame:ClearAllPoints()
+    textFrame:SetPoint(point, UIParent, relPoint, x or 0, y or 0)
+  end
+end
+
+local function ApplyMoveMode()
+  if not textFrame then
+    return
+  end
+  if InCombatLockdown and InCombatLockdown() then
+    return
+  end
+  textFrame:EnableMouse(moveMode)
+  textFrame:SetMovable(moveMode)
+  if moveMode then
+    textFrame:RegisterForDrag("LeftButton")
+    textFrame:Show()
+  else
+    textFrame:RegisterForDrag()
+  end
+end
+
 local function EnsureTextFrame()
   if textFrame then
+    ApplyMoveMode()
     return
   end
   textFrame = CreateFrame("Frame", "DecursiveRebuildDispelText", UIParent)
@@ -192,16 +237,29 @@ local function EnsureTextFrame()
   textFrame:SetPoint("CENTER", 0, 120)
   textFrame:SetFrameStrata("HIGH")
   textFrame:Hide()
+  RestoreTextPoint()
   textFont = textFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
   textFont:SetAllPoints()
   textFont:SetJustifyH("CENTER")
   textFont:SetTextColor(TEAL[1], TEAL[2], TEAL[3])
+  textFrame:SetScript("OnDragStart", function(self)
+    if moveMode then
+      self:StartMoving()
+    end
+  end)
+  textFrame:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    SaveTextPoint()
+  end)
   textFrame:SetScript("OnUpdate", function(self)
     if hideAt > 0 and GetTime and GetTime() >= hideAt then
       hideAt = 0
-      self:Hide()
+      if not moveMode then
+        self:Hide()
+      end
     end
   end)
+  ApplyMoveMode()
 end
 
 local function ShowDispelText(message, pack)
@@ -513,6 +571,16 @@ function ns.HandleAlertsSlash(msg)
       end
     end
   end
+  if msg == "move" then
+    moveMode = not moveMode
+    EnsureTextFrame()
+    ApplyMoveMode()
+    local state = moveMode and "unlocked" or "locked"
+    if DEFAULT_CHAT_FRAME then
+      DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text " .. state .. ". Drag to move, /dcralerts move to lock.")
+    end
+    return
+  end
   if msg == "on" then
     pack.alerts.sound = true
     pack.alerts.dispelEnabled = true
@@ -535,11 +603,16 @@ function ns.HandleAlertsSlash(msg)
   end
   if msg ~= "" and msg ~= "status" then
     if DEFAULT_CHAT_FRAME then
-      DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r /dcralerts [on|off|status]")
+      DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r /dcralerts [on|off|status|move]")
     end
     return
   end
   Status()
+end
+
+function ns.HandleAlertDiagSlash(msg)
+  msg = strtrim(tostring(msg or ""))
+  ns.PrintAuraSoundDiagnostics(tonumber(msg), nil)
 end
 
 function ns.EnableAlerts(_addon)

@@ -1695,11 +1695,13 @@ function ns.PrintAddonStatus(pack)
 end
 
 function ns.PrintSlashHelp()
-  SoulLinkChat("/dcr /decursive  options")
+  SoulLinkChat("/dcr /decursive /zd /zdecursive  options")
   SoulLinkChat("/dcrstatus  profile, environment, spec, detection dump")
   SoulLinkChat("/dcrdiag  12.1 API, combat, packs, macro drop")
+  SoulLinkChat("/dcrreport  identity plus diagnostics")
   SoulLinkChat("/dcridentity  character, current spec, dormant spec rows")
-  SoulLinkChat("/dcralerts [on|off|status]  editing-pack alerts")
+  SoulLinkChat("/dcralerts [on|off|status|move]  editing-pack alerts, drag text")
+  SoulLinkChat("/dcralertdiag  aura sound diagnostic")
   SoulLinkChat("/dcrreset [pack|profile|all]  reset editing pack by default")
   SoulLinkChat("/dcrhelp  this list")
   SoulLinkChat("/dcrpr /dcrsk  priority and skip lists")
@@ -1833,6 +1835,11 @@ end
 
 local function HasAPI(root, name)
   return type(root) == "table" and type(root[name]) == "function"
+end
+
+function ns.PrintReport()
+  ns.PrintIdentity()
+  ns.PrintDiagnostics()
 end
 
 function ns.PrintDiagnostics()

@@ -37,6 +37,8 @@ function Decursive:OnInitialize()
   end
   self:RegisterChatCommand("dcr", "OpenOptions")
   self:RegisterChatCommand("decursive", "OpenOptions")
+  self:RegisterChatCommand("zd", "OpenOptions")
+  self:RegisterChatCommand("zdecursive", "OpenOptions")
   self:RegisterChatCommand("dcrsoullink", function(msg)
     if ns.HandleSoulLinkSlash then
       ns.HandleSoulLinkSlash(msg)
@@ -79,6 +81,20 @@ function Decursive:OnInitialize()
   self:RegisterChatCommand("dcralerts", function(msg)
     if ns.HandleAlertsSlash then
       ns.HandleAlertsSlash(msg)
+    end
+  end)
+  self:RegisterChatCommand("dcrreport", function()
+    if ns.PrintReport then
+      ns.PrintReport()
+    elseif ns.PrintDiagnostics then
+      ns.PrintDiagnostics()
+    end
+  end)
+  self:RegisterChatCommand("dcralertdiag", function(msg)
+    if ns.HandleAlertDiagSlash then
+      ns.HandleAlertDiagSlash(msg)
+    elseif ns.PrintAuraSoundDiagnostics then
+      ns.PrintAuraSoundDiagnostics()
     end
   end)
 end
