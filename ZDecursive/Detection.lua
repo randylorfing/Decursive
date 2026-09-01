@@ -1842,8 +1842,8 @@ function ns.PrintAddonStatus(pack)
 end
 
 function ns.PrintSlashHelp()
-  SoulLinkChat("/zd /zdecursive  options")
-  SoulLinkChat("/dcr /dcrhelp  this list")
+  SoulLinkChat("/zdecursive /zd /dcr  options")
+  SoulLinkChat("/dcrhelp  this list")
   SoulLinkChat("/dcrstatus  profile, environment, spec, detection dump")
   SoulLinkChat("/dcrdiag  12.1 API, combat, packs, macro drop")
   SoulLinkChat("/dcrreport  identity plus diagnostics")

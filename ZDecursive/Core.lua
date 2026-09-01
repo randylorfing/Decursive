@@ -35,24 +35,9 @@ function Decursive:OnInitialize()
   if ns.RegisterLists then
     ns.RegisterLists(self)
   end
+  self:RegisterChatCommand("dcr", "OpenOptions")
   self:RegisterChatCommand("zd", "OpenOptions")
   self:RegisterChatCommand("zdecursive", "OpenOptions")
-  self:RegisterChatCommand("dcr", function()
-    if ns.PrintSlashHelp then
-      ns.PrintSlashHelp()
-    end
-  end)
-  if self.UnregisterChatCommand then
-    self:UnregisterChatCommand("decursive")
-  end
-  SlashCmdList["ACECONSOLE_DECURSIVE"] = nil
-  _G["SLASH_ACECONSOLE_DECURSIVE1"] = nil
-  SlashCmdList["DECURSIVE"] = nil
-  _G["SLASH_DECURSIVE1"] = nil
-  if type(hash_SlashCmdList) == "table" then
-    hash_SlashCmdList["/DECURSIVE"] = nil
-    hash_SlashCmdList["/decursive"] = nil
-  end
   self:RegisterChatCommand("dcrsoullink", function(msg)
     if ns.HandleSoulLinkSlash then
       ns.HandleSoulLinkSlash(msg)
@@ -114,9 +99,6 @@ function Decursive:OnInitialize()
 end
 
 function Decursive:OnEnable()
-  if self.UnregisterChatCommand then
-    self:UnregisterChatCommand("decursive")
-  end
   self:EnsureSpecAssignments()
   self:ApplyResolvedProfile("login")
   self:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED", "OnSpecChanged")

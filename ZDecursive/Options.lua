@@ -1845,7 +1845,7 @@ local function BuildFrame()
   if Settings and Settings.RegisterCanvasLayoutCategory then
     local holder = CreateFrame("Frame")
     holder:SetSize(640, 200)
-    local note = Font(holder, "GameFontHighlight", "Use /zd or /zdecursive or the button below.")
+    local note = Font(holder, "GameFontHighlight", "Use /zdecursive, /zd, or /dcr or the button below.")
     note:SetPoint("TOPLEFT", 16, -16)
     local open = MakeButton(holder, "Open Zhaohu's Decursive", 240, "gold")
     open:SetPoint("TOPLEFT", 16, -48)
