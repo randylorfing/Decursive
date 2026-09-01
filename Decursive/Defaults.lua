@@ -221,6 +221,7 @@ ns.defaults = {
     optionsHeight = 780,
     optionsSimple = true,
     mufPoint = {point = "CENTER", x = 0, y = 0},
+    liveListPoint = {point = "CENTER", x = 220, y = 80},
   },
   profile = {
     environments = ns.MakeEnvironments(),

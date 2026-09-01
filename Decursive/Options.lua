@@ -266,6 +266,9 @@ local function PathSet(section, key)
     if ns.RefreshAlerts then
       ns.RefreshAlerts()
     end
+    if ns.RefreshLiveList then
+      ns.RefreshLiveList()
+    end
     if ui.RefreshPreview then
       ui.RefreshPreview()
     end
@@ -278,6 +281,9 @@ local function AfterPackChange()
   end
   if ns.RefreshAlerts then
     ns.RefreshAlerts()
+  end
+  if ns.RefreshLiveList then
+    ns.RefreshLiveList()
   end
   if ui.RefreshPreview then
     ui.RefreshPreview()
@@ -456,6 +462,8 @@ local CATALOG = {
   {page = "alerts", label = "Live list rows", kind = "slider", min = 1, max = 20, step = 1, get = PathGet("alerts", "liveListAmount"), set = PathSet("alerts", "liveListAmount")},
   {page = "alerts", label = "Live list scan (seconds)", kind = "slider", min = 0.05, max = 1, step = 0.05, get = PathGet("alerts", "liveListScan"), set = PathSet("alerts", "liveListScan")},
   {page = "alerts", label = "Reverse live list", kind = "toggle", get = PathGet("alerts", "liveListReverse"), set = PathSet("alerts", "liveListReverse")},
+  {page = "alerts", label = "Live list scale", kind = "slider", min = 0.5, max = 2, step = 0.05, get = PathGet("alerts", "liveListScale"), set = PathSet("alerts", "liveListScale")},
+  {page = "alerts", label = "Live list opacity", kind = "slider", min = 0.2, max = 1, step = 0.05, get = PathGet("alerts", "liveListAlpha"), set = PathSet("alerts", "liveListAlpha")},
 
   {page = "advanced", label = "Debug chat", kind = "toggle", get = PathGet("advanced", "debug"), set = PathSet("advanced", "debug")},
   {page = "advanced", label = "Check delay (seconds)", kind = "slider", min = 0.05, max = 1, step = 0.05, get = PathGet("advanced", "checkDelay"), set = PathSet("advanced", "checkDelay")},
@@ -555,11 +563,13 @@ local ROW_META = {
   ["alerts|Print errors"] = {group = "Chat"},
   ["alerts|Chat status messages"] = {group = "Chat"},
   ["alerts|Soul Link battle-rez warning"] = {group = "Chat"},
-  ["alerts|Live list"] = {group = "Live list"},
+  ["alerts|Live list"] = {group = "Live list", simple = true},
   ["alerts|Live list only in range"] = {group = "Live list"},
-  ["alerts|Live list rows"] = {group = "Live list"},
+  ["alerts|Live list rows"] = {group = "Live list", simple = true},
   ["alerts|Live list scan (seconds)"] = {group = "Live list"},
   ["alerts|Reverse live list"] = {group = "Live list"},
+  ["alerts|Live list scale"] = {group = "Live list"},
+  ["alerts|Live list opacity"] = {group = "Live list"},
   ["advanced|Debug chat"] = {group = "Engine"},
   ["advanced|Check delay (seconds)"] = {group = "Engine"},
   ["advanced|Hide start messages"] = {group = "Engine"},
@@ -724,10 +734,10 @@ local function IsCollapsed(page, group)
   end
   local pageMap = ui.collapsed[page]
   if not pageMap then
-    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Dispel text" and group ~= "Clicks"
+    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Dispel text" and group ~= "Clicks" and group ~= "Live list"
   end
   if pageMap[group] == nil then
-    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Dispel text" and group ~= "Clicks"
+    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Dispel text" and group ~= "Clicks" and group ~= "Live list"
   end
   return pageMap[group]
 end

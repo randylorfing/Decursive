@@ -18,6 +18,9 @@ local function Notify()
   if ns.RefreshAlerts then
     ns.RefreshAlerts()
   end
+  if ns.RefreshLiveList then
+    ns.RefreshLiveList()
+  end
 end
 
 ns.Notify = Notify
@@ -42,6 +45,9 @@ function Decursive:OnEnable()
   if ns.EnableAlerts then
     ns.EnableAlerts(self)
   end
+  if ns.EnableLiveList then
+    ns.EnableLiveList(self)
+  end
 end
 
 function Decursive:OnGroupRosterUpdate()
@@ -51,6 +57,9 @@ function Decursive:OnGroupRosterUpdate()
   if ns.RefreshAlerts then
     ns.RefreshAlerts()
   end
+  if ns.RefreshLiveList then
+    ns.RefreshLiveList()
+  end
 end
 
 function Decursive:OnRegenEnabled()
@@ -59,6 +68,9 @@ function Decursive:OnRegenEnabled()
   end
   if ns.RefreshAlerts then
     ns.RefreshAlerts()
+  end
+  if ns.RefreshLiveList then
+    ns.RefreshLiveList()
   end
 end
 
