@@ -817,7 +817,7 @@ local function BuildSlots(enabled, pack, selfOnly)
     candidateFilters = nil,
     mode = allMode and "all" or "byme",
   }
-  if nativeCount > 0 and nativeCount < 4 then
+  if nativeCount > 0 then
     main.candidateFilters = {includeDispelTypes = nativeMap}
   elseif nativeCount == 0 then
     main = nil
@@ -1478,6 +1478,87 @@ local function AppendUnit(units, seen, unit, pack, allowMissing)
   units[#units + 1] = unit
 end
 
+local function OwnerTokenForPet(unit)
+  if unit == "pet" then
+    return "player"
+  end
+  local partyIndex = type(unit) == "string" and unit:match("^partypet(%d+)$")
+  if partyIndex then
+    return "party" .. partyIndex
+  end
+  local raidIndex = type(unit) == "string" and unit:match("^raidpet(%d+)$")
+  if raidIndex then
+    return "raid" .. raidIndex
+  end
+  return nil
+end
+
+local function PairPetsWithOwners(units, pack)
+  if type(units) ~= "table" then
+    return units
+  end
+  local includePets = not pack or not pack.sorting or pack.sorting.includePets ~= false
+  if pack and pack.cure and pack.cure.curePets == false then
+    includePets = false
+  end
+  local owners = {}
+  local petsByOwner = {}
+  local leftoverPets = {}
+  for i = 1, #units do
+    local unit = units[i]
+    if type(unit) == "string" then
+      local owner = OwnerTokenForPet(unit)
+      if owner then
+        if not petsByOwner[owner] then
+          petsByOwner[owner] = unit
+        end
+        leftoverPets[#leftoverPets + 1] = unit
+      else
+        owners[#owners + 1] = unit
+      end
+    end
+  end
+  local playerIndex
+  for i = 1, #owners do
+    if IsPlayerToken(owners[i]) then
+      playerIndex = i
+      break
+    end
+  end
+  if playerIndex and playerIndex > 1 then
+    local player = table.remove(owners, playerIndex)
+    table.insert(owners, 1, player)
+  end
+  local out = {}
+  local placed = {}
+  local function place(unit)
+    if type(unit) ~= "string" or placed[unit] or unit:find("^arena%d+$") then
+      return
+    end
+    placed[unit] = true
+    out[#out + 1] = unit
+  end
+  for i = 1, #owners do
+    local owner = owners[i]
+    place(owner)
+    if includePets then
+      local pet = petsByOwner[owner]
+      if not pet and IsPlayerToken(owner) then
+        pet = petsByOwner["player"]
+      end
+      if pet then
+        place(pet)
+      end
+    end
+  end
+  if includePets then
+    for i = 1, #leftoverPets do
+      place(leftoverPets[i])
+    end
+  end
+  return out
+end
+
 local function AppendPet(units, seen, owner, pack)
   if not pack.sorting or not pack.sorting.includePets then
     return
@@ -1553,12 +1634,11 @@ function ns.BuildRoster(pack)
   RestoreFollowerUnits(units, seen)
   CaptureFollowerSnapshot(units)
   if ns.WrapRosterLists then
-    return ns.WrapRosterLists(units, pack)
+    units = ns.WrapRosterLists(units, pack)
+  elseif ns.ApplyUnitLists then
+    units = ns.ApplyUnitLists(units, pack)
   end
-  if ns.ApplyUnitLists then
-    return ns.ApplyUnitLists(units, pack)
-  end
-  return units
+  return PairPetsWithOwners(units, pack)
 end
 
 function ns.DetectionSummary(pack)
@@ -1750,7 +1830,6 @@ function ns.GetDispelColorMap(pack)
     Enrage = C(colors.enrage),
     Charm = C(colors.charm),
     Bleed = C(colors.bleed),
-    None = C(colors.afflicted),
   }
 end
 

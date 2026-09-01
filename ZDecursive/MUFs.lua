@@ -389,7 +389,6 @@ local function DispelColorMap(pack)
     Enrage = C(colors.enrage),
     Charm = C(colors.charm),
     Bleed = C(colors.bleed),
-    None = C(colors.afflicted),
   }
   return map
 end
@@ -431,9 +430,10 @@ local function BindAuraSlot(slot, pack, cover)
     slot._decursiveFill = tex
   end
   if tex.SetColorTexture then
-    tex:SetColorTexture(1, 1, 1, 1)
+    tex:SetColorTexture(1, 1, 1, 0)
   end
   local options = {
+    showAlways = false,
     showWhenHarmful = true,
     showWhenHelpful = false,
     showWithoutDispelType = false,
@@ -446,8 +446,6 @@ local function BindAuraSlot(slot, pack, cover)
     slot:AddDispelTypeTexture(tex, options)
   elseif slot.SetAuraBorder then
     slot:SetAuraBorder(tex, options)
-  elseif slot.SetIcon then
-    slot:SetIcon(tex)
   end
 end
 
@@ -1269,7 +1267,7 @@ local function PaintSquare(btn, pack, unit)
     petminus = 4
   end
   local inset = borderOn and BORDER_PX or 0
-  local inner = math.max(4, w - inset * 2)
+  local inner = math.max(4, w - inset * 2 - petminus)
   btn.fillTex:ClearAllPoints()
   btn.fillTex:SetPoint("CENTER")
   btn.fillTex:SetSize(inner, inner)
