@@ -230,9 +230,6 @@ local function DisplayMutationBlocked()
   if ns.AuraDisplayMutationBlocked then
     return ns.AuraDisplayMutationBlocked()
   end
-  if LockedDown() then
-    return true
-  end
   if ns.HasActiveAddonRestriction then
     return ns.HasActiveAddonRestriction()
   end
@@ -397,22 +394,44 @@ local function DispelColorMap(pack)
   return map
 end
 
-local function BindAuraSlot(slot, pack)
+local function BindAuraSlot(slot, pack, cover)
   if not slot then
     return
   end
-  slot:ClearAllPoints()
-  slot:SetAllPoints()
+  if slot.ClearAllPoints then
+    slot:ClearAllPoints()
+  end
+  if slot.SetAllPoints then
+    if cover then
+      slot:SetAllPoints(cover)
+    else
+      slot:SetAllPoints()
+    end
+  end
   if slot.EnableMouse then
     slot:EnableMouse(false)
+  end
+  if slot.SetMouseClickEnabled then
+    slot:SetMouseClickEnabled(false)
+  end
+  if slot.SetMouseMotionEnabled then
+    slot:SetMouseMotionEnabled(false)
+  end
+  local host = cover
+  if host and host.GetParent then
+    host = host:GetParent() or host
+  end
+  if host and host.GetFrameLevel and slot.SetFrameLevel then
+    slot:SetFrameLevel((host:GetFrameLevel() or 0) + 24)
   end
   local tex = slot._decursiveFill
   if not tex then
     tex = slot:CreateTexture(nil, "ARTWORK")
     tex:SetAllPoints(slot)
-    tex:SetTexture(WHITE)
-    tex:SetVertexColor(1, 1, 1, 1)
     slot._decursiveFill = tex
+  end
+  if tex.SetColorTexture then
+    tex:SetColorTexture(1, 1, 1, 1)
   end
   local options = {
     showWhenHarmful = true,
@@ -420,10 +439,6 @@ local function BindAuraSlot(slot, pack)
     showWithoutDispelType = false,
     customDispelColorMap = (ns.GetDispelColorMap and ns.GetDispelColorMap(pack)) or DispelColorMap(pack),
   }
-  local styles = Enum and Enum.CustomAuraButtonDispelTypeTextureStyle
-  if styles and styles.PreserveAsset then
-    options.style = styles.PreserveAsset
-  end
   if slot.ClearDispelTypeTextures then
     slot:ClearDispelTypeTextures()
   end
@@ -1114,12 +1129,12 @@ local function AttachPaint(btn, pack, unit)
   if type(unit) ~= "string" or unit == "" then
     return
   end
-  if LockedDown() then
+  if DisplayMutationBlocked() then
     pending = true
     return
   end
   local function initFn(frame)
-    BindAuraSlot(frame, pack)
+    BindAuraSlot(frame, pack, btn.fillTex)
   end
   if btn.auraContainer then
     if ns.AttachDetectionContainer then

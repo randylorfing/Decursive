@@ -187,9 +187,6 @@ function ns.HasActiveAddonRestriction()
 end
 
 function ns.AuraDisplayMutationBlocked()
-  if InCombatLockdown and InCombatLockdown() then
-    return true
-  end
   return ns.HasActiveAddonRestriction()
 end
 
@@ -1626,20 +1623,16 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
       candidateFilters = slot.candidateFilters,
     }
     if container._dcrSlotKeys[slot.key] then
-      if not inCombat and not restricted then
+      if restricted then
+        pendingRestrictionSlots = true
+      else
         if container.SetAuraSlotFilterString then
           container:SetAuraSlotFilterString(slot.key, slot.filter)
         end
         if container.SetAuraSlotCandidateFilters then
           container:SetAuraSlotCandidateFilters(slot.key, slot.candidateFilters)
         end
-      elseif inCombat then
-        pendingCombatSlots = true
-      else
-        pendingRestrictionSlots = true
       end
-    elseif inCombat then
-      pendingCombatSlots = true
     elseif restricted then
       pendingRestrictionSlots = true
     elseif container.AddAuraSlot then
@@ -1690,9 +1683,6 @@ end
 
 function ns.AttachDetector(parent, unit, pack, initFn)
   if type(unit) ~= "string" or unit == "" then
-    return nil
-  end
-  if InCombatLockdown and InCombatLockdown() then
     return nil
   end
   if not parent then
