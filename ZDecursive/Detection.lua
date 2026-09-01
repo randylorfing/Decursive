@@ -1775,8 +1775,10 @@ function ns.AttachDetector(parent, unit, pack, initFn)
   if container.SetAllPoints then
     container:SetAllPoints(parent)
   end
-  if container.EnableMouse then
-    container:EnableMouse(false)
+  if not (InCombatLockdown and InCombatLockdown()) then
+    if container.EnableMouse then
+      container:EnableMouse(false)
+    end
   end
   if not container.SetUnit then
     if container.SetEnabled then

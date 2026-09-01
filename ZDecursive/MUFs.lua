@@ -119,6 +119,32 @@ local function LockedDown()
   return InCombatLockdown and InCombatLockdown()
 end
 
+local PASS_BUTTONS = {"LeftButton", "RightButton", "MiddleButton", "Button4", "Button5"}
+
+local function PassClicks(frame)
+  if not frame then
+    return
+  end
+  if LockedDown() then
+    return
+  end
+  if frame.EnableMouse then
+    frame:EnableMouse(false)
+  end
+  if frame.SetMouseClickEnabled then
+    frame:SetMouseClickEnabled(false)
+  end
+  if frame.SetMouseMotionEnabled then
+    frame:SetMouseMotionEnabled(false)
+  end
+  if frame.SetPropagateMouseClicks then
+    frame:SetPropagateMouseClicks(true)
+  end
+  if frame.SetPassThroughButtons then
+    frame:SetPassThroughButtons(PASS_BUTTONS[1], PASS_BUTTONS[2], PASS_BUTTONS[3], PASS_BUTTONS[4], PASS_BUTTONS[5])
+  end
+end
+
 local function ColorOf(c, fallback)
   if type(c) == "table" then
     return c[1] or 0, c[2] or 0, c[3] or 0, c[4] or 1
@@ -407,15 +433,7 @@ local function BindAuraSlot(slot, pack, cover)
       slot:SetAllPoints()
     end
   end
-  if slot.EnableMouse then
-    slot:EnableMouse(false)
-  end
-  if slot.SetMouseClickEnabled then
-    slot:SetMouseClickEnabled(false)
-  end
-  if slot.SetMouseMotionEnabled then
-    slot:SetMouseMotionEnabled(false)
-  end
+  PassClicks(slot)
   local host = cover
   if host and host.GetParent then
     host = host:GetParent() or host
@@ -975,21 +993,7 @@ local function IdentitySlotOptions(btn)
       if slot.SetAllPoints then
         slot:SetAllPoints(btn)
       end
-      if slot.EnableMouse then
-        slot:EnableMouse(true)
-      end
-      if slot.SetMouseClickEnabled then
-        slot:SetMouseClickEnabled(false)
-      end
-      if slot.SetPropagateMouseClicks then
-        slot:SetPropagateMouseClicks(true)
-      end
-      if slot.SetPassThroughButtons then
-        slot:SetPassThroughButtons("LeftButton", "RightButton", "MiddleButton", "Button4", "Button5")
-      end
-      if slot.SetMouseMotionEnabled then
-        slot:SetMouseMotionEnabled(true)
-      end
+      PassClicks(slot)
       if slot.SetTooltipAnchorPoint then
         slot:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)
       end

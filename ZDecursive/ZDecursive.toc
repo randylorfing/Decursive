@@ -2,7 +2,7 @@
 ## Title: Zhaohu's Decursive
 ## Notes: Detect Dispel Protect
 ## Author: Zhaohu
-## Version: 13.0.0-detect.17
+## Version: 13.0.0-detect.18
 ## SavedVariables: DecursiveRebuildDB
 ## DefaultState: enabled
 ## X-License: GPLv3
