@@ -90,6 +90,7 @@ ns.PACK = {
     doNotBlacklistPrio = true,
     curePets = true,
     skipStealthed = false,
+    filterMode = "BY_ME",
     order = {"magic", "curse", "poison", "disease", "enrage", "charm", "bleed"},
   },
   mouse = {

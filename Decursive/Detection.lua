@@ -55,8 +55,10 @@ local BATTLE_REZ = {20484, 61999, 391054}
 local SOUL_LINK_SPELL_ID = 1259646
 local SOUL_LINK_ITEM_ID = 269586
 local POISON_CLEANSING_TOTEM = 383013
-local NATIVE_FILTER = "HARMFUL|RAID_PLAYER_DISPELLABLE"
+local BY_ME_FILTER = "HARMFUL|RAID"
+local ALL_FILTER = "HARMFUL|DISPELLABLE"
 local GAP_FILTER = "HARMFUL|!RAID_PLAYER_DISPELLABLE"
+local NATIVE_FILTER = BY_ME_FILTER
 local FOLLOWER_GUARD_SECONDS = 12
 local FOLLOWER_RETRY = {0.10, 0.35, 1.00, 2.00, 4.00, 7.00, 10.00}
 
@@ -630,67 +632,121 @@ function ns.GetEngineDispelGaps(selfOnly)
   end
   local names = {}
   if poison then
-    names[#names + 1] = "Poison"
+    names.Poison = true
   end
   if bleed then
-    names[#names + 1] = "Bleed"
+    names.Bleed = true
   end
   return names
 end
 
-local function BuildSlots(enabled, pack)
+local function MapSize(map)
+  if type(map) ~= "table" then
+    return 0
+  end
+  local n = 0
+  for _ in pairs(map) do
+    n = n + 1
+  end
+  return n
+end
+
+local function BlizzMap(keys)
+  local names = {}
+  for i = 1, #keys do
+    local blizz = TYPE_BLIZZ[keys[i]]
+    if type(blizz) == "string" then
+      names[blizz] = true
+    end
+  end
+  return names
+end
+
+function ns.IsAllDispellableMode(pack)
+  if type(pack) ~= "table" or type(pack.cure) ~= "table" then
+    return false
+  end
+  local mode = pack.cure.filterMode or pack.cure.dispellableMode
+  if mode == "ALL" or mode == "DISPELLABLE" then
+    return true
+  end
+  return pack.cure.showAllDispellable == true
+end
+
+local function AuraToken(key, fallback)
+  local filters = AuraUtil and AuraUtil.AuraFilters
+  local token = filters and filters[key]
+  token = Public(token)
+  if type(token) == "string" and token ~= "" then
+    return token
+  end
+  return fallback
+end
+
+local function LiveMainFilter(allMode)
+  if allMode then
+    return "HARMFUL|" .. AuraToken("Dispellable", "DISPELLABLE")
+  end
+  return "HARMFUL|" .. AuraToken("Raid", "RAID")
+end
+
+local function LiveGapFilter()
+  local raid = AuraToken("Raid", "RAID")
+  local rpd = AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
+  return "HARMFUL|!" .. raid .. "|!" .. rpd
+end
+
+local function BuildSlots(enabled, pack, selfOnly)
+  local allMode = ns.IsAllDispellableMode(pack)
+  local mainFilter = LiveMainFilter(allMode)
   local nativeKeys = {}
-  local gapKeys = {}
   for i = 1, #enabled do
     local key = enabled[i]
     if FRIENDLY_NATIVE[key] then
       nativeKeys[#nativeKeys + 1] = key
-    else
-      gapKeys[#gapKeys + 1] = key
     end
   end
   local slots = {}
-  local nativeNames = BlizzNames(nativeKeys)
+  local nativeMap = BlizzMap(nativeKeys)
+  local nativeCount = MapSize(nativeMap)
   local main = {
     key = "dispel",
-    filter = NATIVE_FILTER,
+    filter = mainFilter,
     candidateFilters = nil,
+    mode = allMode and "all" or "byme",
   }
-  if #nativeNames > 0 and #nativeNames < 4 then
-    main.candidateFilters = {includeDispelTypes = nativeNames}
-  elseif #nativeNames == 0 then
+  if nativeCount > 0 and nativeCount < 4 then
+    main.candidateFilters = {includeDispelTypes = nativeMap}
+  elseif nativeCount == 0 then
     main = nil
   end
   if main then
     slots[#slots + 1] = main
   end
-  local gapSeen = {}
-  local gapNames = BlizzNames(gapKeys)
-  for i = 1, #gapNames do
-    gapSeen[gapNames[i]] = true
-  end
-  local engine = ns.GetEngineDispelGaps(true)
-  if type(engine) == "table" then
-    for i = 1, #engine do
-      local name = engine[i]
-      if not gapSeen[name] then
-        gapSeen[name] = true
-        gapNames[#gapNames + 1] = name
+  if not allMode then
+    local gap = ns.GetEngineDispelGaps(selfOnly)
+    if type(gap) == "table" then
+      if pack and pack.cure and pack.cure.poison == false then
+        gap.Poison = nil
+      end
+      if pack and pack.cure and pack.cure.bleed == false then
+        gap.Bleed = nil
+      end
+      if MapSize(gap) > 0 then
+        slots[#slots + 1] = {
+          key = "gap",
+          filter = LiveGapFilter(),
+          candidateFilters = {includeDispelTypes = gap},
+        }
       end
     end
-  end
-  if #gapNames > 0 then
-    slots[#slots + 1] = {
-      key = "dispel-extra",
-      filter = GAP_FILTER,
-      candidateFilters = {includeDispelTypes = gapNames},
-    }
   end
   if #slots == 0 then
     slots[1] = {
       key = "dispel",
-      filter = NATIVE_FILTER,
+      filter = mainFilter,
       candidateFilters = nil,
+      mode = allMode and "all" or "byme",
     }
   end
   return slots
@@ -714,6 +770,7 @@ local function Signature(pack)
   local race = PlayerRaceFile() or "?"
   bits[#bits + 1] = race
   bits[#bits + 1] = tostring(KnowsPoisonCleansingTotem())
+  bits[#bits + 1] = ns.IsAllDispellableMode(pack) and "all" or "byme"
   return table.concat(bits, "|")
 end
 
@@ -738,7 +795,7 @@ function ns.GetDetectionModel(pack)
   for i = 1, #customActions do
     actions[#actions + 1] = customActions[i]
   end
-  local slots = BuildSlots(enabled, pack)
+  local slots = BuildSlots(enabled, pack, true)
   local primary = actions[1]
   local model = {
     enabledTypes = enabled,
@@ -758,9 +815,14 @@ function ns.GetDetectionModel(pack)
   return model
 end
 
-function ns.GetDetectionSlots(pack)
+function ns.GetDetectionSlots(pack, unit)
+  pack = pack or GetPack()
   local model = ns.GetDetectionModel(pack)
-  return model.slots
+  local selfOnly = true
+  if unit then
+    selfOnly = ns.IsPlayerUnit(unit) == true
+  end
+  return BuildSlots(model.enabledTypes, pack, selfOnly)
 end
 
 function ns.GetAuraFilter(pack)
@@ -1106,6 +1168,9 @@ function ns.BuildRoster(pack)
   end
   RestoreFollowerUnits(units, seen)
   CaptureFollowerSnapshot(units)
+  if ns.WrapRosterLists then
+    return ns.WrapRosterLists(units, pack)
+  end
   if ns.ApplyUnitLists then
     return ns.ApplyUnitLists(units, pack)
   end
@@ -1143,15 +1208,22 @@ function ns.DetectionSummary(pack)
   if ns.IsArenaInstance() then
     lines[#lines + 1] = "Arena instance: Live List and Alerts use group roster, not arenaN"
   end
+  local slots = model.slots
+  if type(slots) == "table" and slots[1] then
+    lines[#lines + 1] = "Filter: " .. tostring(slots[1].filter) .. " (" .. tostring(slots[1].mode or "byme") .. ")"
+    if slots[2] then
+      lines[#lines + 1] = "Gap: " .. tostring(slots[2].filter)
+    end
+  end
   lines[#lines + 1] = "Click map parked. Detection does not install MUF attributes."
   return table.concat(lines, "\n")
 end
 
-function ns.ApplyDetectionSlots(container, pack, initFn)
+function ns.ApplyDetectionSlots(container, pack, initFn, unit)
   if not container or not container.AddAuraSlot then
     return false
   end
-  local slots = ns.GetDetectionSlots(pack)
+  local slots = ns.GetDetectionSlots(pack, unit)
   if type(container._dcrSlotKeys) ~= "table" then
     container._dcrSlotKeys = {}
   end
@@ -1172,6 +1244,31 @@ function ns.ApplyDetectionSlots(container, pack, initFn)
       container:AddAuraSlot(slot.key, slot.filter, info)
       container._dcrSlotKeys[slot.key] = true
     end
+  end
+  local wanted = {}
+  for i = 1, #slots do
+    wanted[slots[i].key] = true
+  end
+  if container._dcrSlotKeys.gap and not wanted.gap and container.SetAuraSlotCandidateFilters then
+    container:SetAuraSlotCandidateFilters("gap", {includeDispelTypes = {}})
+  end
+  return true
+end
+
+function ns.AttachDetectionContainer(container, unit, pack, initFn)
+  if not container then
+    return false
+  end
+  pack = pack or GetPack()
+  if container.SetEnabled then
+    container:SetEnabled(false)
+  end
+  if container.SetUnit and unit then
+    container:SetUnit(unit)
+  end
+  ns.ApplyDetectionSlots(container, pack, initFn, unit)
+  if container.SetEnabled then
+    container:SetEnabled(true)
   end
   return true
 end
@@ -1204,7 +1301,9 @@ function ns.GetDispelColorMap(pack)
 end
 
 ns.DETECTION_TYPES = TYPE_KEYS
-ns.NATIVE_DISPEL_FILTER = NATIVE_FILTER
+ns.BY_ME_DISPEL_FILTER = BY_ME_FILTER
+ns.ALL_DISPEL_FILTER = ALL_FILTER
+ns.NATIVE_DISPEL_FILTER = BY_ME_FILTER
 ns.GAP_DISPEL_FILTER = GAP_FILTER
 ns.SOUL_LINK_SPELL_ID = SOUL_LINK_SPELL_ID
 ns.SOUL_LINK_ITEM_ID = SOUL_LINK_ITEM_ID
@@ -1301,7 +1400,7 @@ function ns.EnableDetection()
     if event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_ROLES_ASSIGNED" or event == "TRAIT_CONFIG_UPDATED" then
       ns.ScheduleFollowerRosterGuard()
     end
-    if event == "SPELLS_CHANGED" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED" then
+    if event == "SPELLS_CHANGED" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED" or event == "PLAYER_TALENT_UPDATE" then
       if ns.RefreshLiveList then
         ns.RefreshLiveList()
       end
@@ -1328,6 +1427,7 @@ function ns.EnableDetection()
   local extra = {
     "TRAIT_CONFIG_UPDATED",
     "PLAYER_ROLES_ASSIGNED",
+    "PLAYER_TALENT_UPDATE",
   }
   for i = 1, #extra do
     local name = extra[i]
@@ -1340,3 +1440,18 @@ function ns.EnableDetection()
     end
   end
 end
+
+ns.Detection = {
+  Accessible = ns.IsAccessible,
+  Public = ns.PublicValue,
+  Roster = ns.BuildRoster,
+  FilterRange = ns.FilterRosterRange,
+  InRange = ns.UnitInRangeKeep,
+  ApplySlots = ns.ApplyDetectionSlots,
+  Attach = ns.AttachDetectionContainer,
+  SoulLink = ns.GetSoulLinkState,
+  InArena = ns.IsArenaInstance,
+  EngineGaps = ns.GetEngineDispelGaps,
+  Invalidate = ns.InvalidateDetection,
+  Enable = ns.EnableDetection,
+}

@@ -260,6 +260,9 @@ end
 local function PathSet(section, key)
   return function(value)
     Pack()[section][key] = value
+    if ns.InvalidateDetection then
+      ns.InvalidateDetection()
+    end
     if ns.RefreshMUFs then
       ns.RefreshMUFs()
     end
@@ -387,6 +390,7 @@ local CATALOG = {
   {page = "sorting", label = "Skip dead and offline", kind = "toggle", get = PathGet("sorting", "skipDead"), set = PathSet("sorting", "skipDead")},
 
   {page = "cure", label = "Click mode", kind = "choice", values = {AUTO = "AUTO  ·  two-button"}, get = PathGet("cure", "mode"), set = PathSet("cure", "mode")},
+  {page = "cure", label = "Detection filter", kind = "choice", values = {BY_ME = "By me (HARMFUL|RAID)", ALL = "All dispellable"}, get = PathGet("cure", "filterMode"), set = PathSet("cure", "filterMode")},
   {page = "cure", label = "Magic", kind = "toggle", get = PathGet("cure", "magic"), set = PathSet("cure", "magic")},
   {page = "cure", label = "Curse", kind = "toggle", get = PathGet("cure", "curse"), set = PathSet("cure", "curse")},
   {page = "cure", label = "Poison", kind = "toggle", get = PathGet("cure", "poison"), set = PathSet("cure", "poison")},
@@ -514,6 +518,7 @@ local ROW_META = {
   ["sorting|Center on player"] = {group = "Roster"},
   ["sorting|Skip dead and offline"] = {group = "Roster"},
   ["cure|Click mode"] = {group = "Clicks", simple = true},
+  ["cure|Detection filter"] = {group = "Clicks", simple = true},
   ["cure|Left click"] = {group = "Clicks"},
   ["cure|Right click"] = {group = "Clicks"},
   ["cure|Magic"] = {group = "Types", simple = true},

@@ -339,7 +339,7 @@ local function ShowSoulLinkWarning(destName)
     return
   end
   local sl = ns.GetSoulLinkState and ns.GetSoulLinkState(pack)
-  if sl and sl.enabled == false then
+  if not sl or sl.available ~= true then
     return
   end
   local who = UnitLabel(nil, destName)

@@ -175,13 +175,23 @@ local function BindLiveSlot(slot)
 end
 
 local function AttachAuraContainer(row)
+  if row.auraSkipped then
+    return
+  end
+  local unit = row.unit or "player"
+  local function initSlot(frame)
+    BindLiveSlot(frame)
+  end
   if row.auraContainer then
-    if row.auraContainer.SetEnabled then
-      row.auraContainer:SetEnabled(true)
+    if not LockedDown() and ns.AttachDetectionContainer then
+      ns.AttachDetectionContainer(row.auraContainer, unit, GetPack(), initSlot)
+    elseif row.auraContainer.SetUnit then
+      row.auraContainer:SetUnit(unit)
     end
     return
   end
-  if row.auraSkipped then
+  if LockedDown() then
+    pending = true
     return
   end
   local container = MakeAuraContainer(row)
@@ -193,23 +203,21 @@ local function AttachAuraContainer(row)
   if container.EnableMouse then
     container:EnableMouse(false)
   end
-  if container.SetEnabled then
-    container:SetEnabled(true)
-  end
   row.auraContainer = container
-  local unit = row.unit or "player"
-  if container.SetUnit then
-    container:SetUnit(unit)
-  end
-  local function initSlot(frame)
-    BindLiveSlot(frame)
-  end
-  if ns.ApplyDetectionSlots then
-    ns.ApplyDetectionSlots(container, GetPack(), initSlot)
-  elseif container.AddAuraSlot then
-    container:AddAuraSlot("dispel", ns.NATIVE_DISPEL_FILTER or "HARMFUL|RAID_PLAYER_DISPELLABLE", {
-      initializeFrame = initSlot,
-    })
+  if ns.AttachDetectionContainer then
+    ns.AttachDetectionContainer(container, unit, GetPack(), initSlot)
+  else
+    if container.SetUnit then
+      container:SetUnit(unit)
+    end
+    if container.AddAuraSlot then
+      container:AddAuraSlot("dispel", ns.BY_ME_DISPEL_FILTER or ns.NATIVE_DISPEL_FILTER or "HARMFUL|RAID", {
+        initializeFrame = initSlot,
+      })
+    end
+    if container.SetEnabled then
+      container:SetEnabled(true)
+    end
   end
 end
 
@@ -404,9 +412,6 @@ local function LayoutRows(units, pack)
       end
       PaintRow(row, pack, unit)
       AttachAuraContainer(row)
-      if row.auraContainer and row.auraContainer.SetUnit then
-        row.auraContainer:SetUnit(unit)
-      end
       row:Show()
     else
       row.assigned = false

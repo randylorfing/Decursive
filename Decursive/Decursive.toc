@@ -11,8 +11,8 @@
 embeds.xml
 Defaults.lua
 Core.lua
-Detection.lua
 Lists.lua
+Detection.lua
 MUFs.lua
 LiveList.lua
 Alerts.lua

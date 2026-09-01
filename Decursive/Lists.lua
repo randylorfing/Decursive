@@ -53,11 +53,23 @@ local function Addon()
 end
 
 local function Accessible(value)
-  return ns.IsAccessible(value)
+  if value == nil then
+    return true
+  end
+  if type(issecretvalue) == "function" and issecretvalue(value) then
+    if type(canaccessvalue) == "function" then
+      return canaccessvalue(value) == true
+    end
+    return false
+  end
+  return true
 end
 
 local function Public(value)
-  return ns.PublicValue(value)
+  if not Accessible(value) then
+    return nil
+  end
+  return value
 end
 
 local function PublicString(value)
@@ -447,7 +459,7 @@ function ns.UnitPrioRank(unit)
   return 1000
 end
 
-function ns.ApplyUnitLists(units, pack)
+function ns.WrapRosterLists(units, pack)
   if type(units) ~= "table" then
     return units
   end
@@ -473,6 +485,42 @@ function ns.ApplyUnitLists(units, pack)
   end
   if not anyPrio then
     return kept
+  end
+  table.sort(ranked, function(a, b)
+    if a.rank ~= b.rank then
+      return a.rank < b.rank
+    end
+    return a.i < b.i
+  end)
+  local out = {}
+  for i = 1, #ranked do
+    out[i] = ranked[i].unit
+  end
+  return out
+end
+
+function ns.ApplyUnitLists(units, pack)
+  if type(units) ~= "table" then
+    return units
+  end
+  local kept = {}
+  for i = 1, #units do
+    local unit = units[i]
+    if type(unit) == "string" and not ns.IsUnitSkipped(unit) then
+      kept[#kept + 1] = unit
+    end
+  end
+  local order = pack and pack.mufs and pack.mufs.order
+  if order ~= "PRIORITY" then
+    return kept
+  end
+  local ranked = {}
+  for i = 1, #kept do
+    ranked[i] = {
+      unit = kept[i],
+      i = i,
+      rank = ns.UnitPrioRank(kept[i]),
+    }
   end
   table.sort(ranked, function(a, b)
     if a.rank ~= b.rank then
