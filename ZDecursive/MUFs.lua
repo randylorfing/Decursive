@@ -18,6 +18,9 @@ local COLOR_SL_OUT = {1, 0.82, 0, 1}
 local COLOR_FAIL = {1, 0.08, 0.08, 1}
 local COLOR_READY = {0.10, 1.00, 0.24, 1}
 local COLOR_CLEAR = {1, 1, 1, 0}
+local COLOR_RANGE_YELLOW = {1.00, 0.82, 0.00, 1}
+local COLOR_RANGE_OVERLAY = {1, 1, 0}
+local STATUS_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 
 local FRIENDLY_TYPES = {
   magic = true,
@@ -949,44 +952,8 @@ local function ApplyClickAttributes(btn, pack, unit)
   return true
 end
 
-local function AttachIdentityTooltip(btn, pack, unit)
-  if type(unit) ~= "string" or unit == "" then
-    return
-  end
-  if not IdentityTooltipAllowed(pack) then
-    if btn.identityContainer and btn.identityContainer.SetEnabled and not DisplayMutationBlocked() then
-      btn.identityContainer:SetEnabled(false)
-    end
-    return
-  end
-  if DisplayMutationBlocked() then
-    pending = true
-    return
-  end
-  if btn.identityContainer then
-    if btn.identityContainer.SetUnit then
-      btn.identityContainer:SetUnit(unit)
-    end
-    if btn.identityContainer.SetEnabled then
-      btn.identityContainer:SetEnabled(true)
-    end
-    return
-  end
-  local ok, container = pcall(CreateFrame, "AuraContainer", nil, btn, "CustomAuraContainerTemplate")
-  if not ok or not container then
-    return
-  end
-  if container.SetAllPoints then
-    container:SetAllPoints(btn)
-  end
-  if container.EnableMouse then
-    container:EnableMouse(false)
-  end
-  if not container.SetUnit or not container.AddAuraSlot then
-    return
-  end
-  container:SetUnit(unit)
-  local options = {
+local function IdentitySlotOptions(btn)
+  return {
     initializeFrame = function(slot)
       if slot.ClearAllPoints then
         slot:ClearAllPoints()
@@ -1017,7 +984,87 @@ local function AttachIdentityTooltip(btn, pack, unit)
       end
     end,
   }
-  container:AddAuraSlot("identity", "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+end
+
+local function AddIdentityCarrier(container, key, filter, options)
+  if not container or type(key) ~= "string" then
+    return false
+  end
+  if type(container._dcrIdentityKeys) ~= "table" then
+    container._dcrIdentityKeys = {}
+  end
+  if container._dcrIdentityKeys[key] then
+    return true
+  end
+  if container.AddAuraSlot then
+    container:AddAuraSlot(key, filter, options)
+    container._dcrIdentityKeys[key] = "slot"
+    return true
+  end
+  if container.AddAuraGroup then
+    container:AddAuraGroup(key, filter, options)
+    if container.SetAuraGroupMaxFrameCount then
+      container:SetAuraGroupMaxFrameCount(key, 1)
+    end
+    container._dcrIdentityKeys[key] = "group"
+    return true
+  end
+  return false
+end
+
+local function AttachIdentityTooltip(btn, pack, unit)
+  if type(unit) ~= "string" or unit == "" then
+    return
+  end
+  if not IdentityTooltipAllowed(pack) then
+    if btn.identityContainer and btn.identityContainer.SetEnabled and not DisplayMutationBlocked() then
+      btn.identityContainer:SetEnabled(false)
+    end
+    return
+  end
+  if DisplayMutationBlocked() then
+    pending = true
+    return
+  end
+  if btn.identityContainer then
+    local container = btn.identityContainer
+    if container.SetUnit then
+      container:SetUnit(unit)
+    end
+    if type(container._dcrIdentityKeys) ~= "table" then
+      container._dcrIdentityKeys = { identity = "slot" }
+    end
+    if not container._dcrIdentityKeys.alldebuffs then
+      if container.SetEnabled then
+        container:SetEnabled(false)
+      end
+      AddIdentityCarrier(container, "alldebuffs", "HARMFUL", IdentitySlotOptions(btn))
+    end
+    if container.SetEnabled then
+      container:SetEnabled(true)
+    end
+    return
+  end
+  local ok, container = pcall(CreateFrame, "AuraContainer", nil, btn, "CustomAuraContainerTemplate")
+  if not ok or not container then
+    return
+  end
+  if container.SetAllPoints then
+    container:SetAllPoints(btn)
+  end
+  if container.EnableMouse then
+    container:EnableMouse(false)
+  end
+  if not container.SetUnit then
+    return
+  end
+  if not container.AddAuraSlot and not container.AddAuraGroup then
+    return
+  end
+  container:SetUnit(unit)
+  local options = IdentitySlotOptions(btn)
+  AddIdentityCarrier(container, "identity", "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
+  AddIdentityCarrier(container, "alldebuffs", "HARMFUL", options)
   if container.SetEnabled then
     container:SetEnabled(true)
   end
@@ -1066,6 +1113,17 @@ local function PaintRaidIcon(btn, unit)
   end
 end
 
+local function PrimaryCureRangeState(unit, pack)
+  if not ns.SpellRangeState then
+    return true
+  end
+  local spell, spellId
+  if ns.GetPrimaryCure then
+    spell, spellId = ns.GetPrimaryCure(pack)
+  end
+  return ns.SpellRangeState(unit, spell, spellId)
+end
+
 local function PaintManagedOverlays(btn, pack, unit)
   if not btn or not btn.assigned or type(unit) ~= "string" then
     if btn then
@@ -1083,6 +1141,9 @@ local function PaintManagedOverlays(btn, pack, unit)
       end
       if btn.failTex then
         btn.failTex:Hide()
+      end
+      if btn.rangeOverlay then
+        btn.rangeOverlay:Hide()
       end
       if btn.raidIcon then
         btn.raidIcon:Hide()
@@ -1120,20 +1181,28 @@ local function PaintManagedOverlays(btn, pack, unit)
     end
   end
   local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
-  local rangeFail = false
-  if pack.mufs.dimOutOfRange and ns.SpellRangeState then
-    local spell, spellId
-    if ns.GetPrimaryCure then
-      spell, spellId = ns.GetPrimaryCure(pack)
-    end
-    rangeFail = ns.SpellRangeState(unit, spell, spellId) ~= true
-  end
   if btn.failTex then
-    if restricted or rangeFail then
+    if restricted then
       btn.failTex:SetColorTexture(COLOR_FAIL[1], COLOR_FAIL[2], COLOR_FAIL[3], 0.28)
       btn.failTex:Show()
     else
       btn.failTex:Hide()
+    end
+  end
+  if btn.rangeOverlay then
+    local showRange = false
+    if pack.mufs.dimOutOfRange then
+      showRange = PrimaryCureRangeState(unit, pack) ~= true
+    end
+    if showRange then
+      local dim = pack.mufs.dimAmount
+      if type(dim) ~= "number" then
+        dim = 0.45
+      end
+      btn.rangeOverlay:SetColorTexture(COLOR_RANGE_OVERLAY[1], COLOR_RANGE_OVERLAY[2], COLOR_RANGE_OVERLAY[3], dim)
+      btn.rangeOverlay:Show()
+    else
+      btn.rangeOverlay:Hide()
     end
   end
   PaintRaidIcon(btn, unit)
@@ -1186,19 +1255,6 @@ local function PaintSquare(btn, pack, unit)
       alpha = pack.mufs.inactiveOpacity or 0.65
     end
   end
-  if pack.mufs.dimOutOfRange and ns.SpellRangeState then
-    local spell, spellId
-    if ns.GetPrimaryCure then
-      spell, spellId = ns.GetPrimaryCure(pack)
-    end
-    if ns.SpellRangeState(unit, spell, spellId) ~= true then
-      local dim = pack.mufs.dimAmount
-      if type(dim) ~= "number" then
-        dim = 0.45
-      end
-      alpha = alpha * dim
-    end
-  end
   ApplyColor(btn.fillTex, fill, alpha)
   if btn.charmTex then
     btn.charmTex:Hide()
@@ -1215,18 +1271,20 @@ local function PaintSquare(btn, pack, unit)
   PaintManagedOverlays(btn, pack, unit)
 end
 local function PlaceStatusLight(btn, size, enabled)
-  local light = btn.statusLight
-  if not light then
-    return
-  end
   local q = math.max(4, math.floor(size / 4))
-  light:SetSize(q, q)
-  light:ClearAllPoints()
-  light:SetPoint("BOTTOM", btn, "TOP", 0, 1)
-  if enabled then
-    light:Show()
-  else
-    light:Hide()
+  local layers = {btn.statusLight, btn.statusLightRange}
+  for i = 1, #layers do
+    local light = layers[i]
+    if light then
+      light:SetSize(q, q)
+      light:ClearAllPoints()
+      light:SetPoint("BOTTOM", btn, "TOP", 0, 1)
+      if enabled then
+        light:Show()
+      else
+        light:Hide()
+      end
+    end
   end
 end
 
@@ -1236,26 +1294,26 @@ local function UpdateStatusLights()
   end
   local pack = GetPack()
   local enabled = pack.mufs.statusLight
-  local spell, spellId
-  if ns.GetPrimaryCure then
-    spell, spellId = ns.GetPrimaryCure(pack)
-  end
   for i = 1, #pool do
     local btn = pool[i]
     if btn.assigned and enabled then
-      btn.statusLight:Show()
-      local inRange = true
-      if ns.SpellRangeState then
-        inRange = ns.SpellRangeState(btn.unit, spell, spellId) == true
+      if btn.statusLight then
+        btn.statusLight:Show()
+      end
+      if btn.statusLightRange then
+        btn.statusLightRange:Show()
       end
       local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
-      if restricted or inRange ~= true then
-        btn.statusLight:SetColorTexture(COLOR_FAIL[1], COLOR_FAIL[2], COLOR_FAIL[3], 1)
-      else
-        btn.statusLight:SetColorTexture(COLOR_READY[1], COLOR_READY[2], COLOR_READY[3], 1)
+      ApplyBooleanVertex(btn.statusLight, restricted ~= true, COLOR_READY, COLOR_FAIL)
+      local inRange = PrimaryCureRangeState(btn.unit, pack) == true
+      ApplyBooleanVertex(btn.statusLightRange, inRange, COLOR_CLEAR, COLOR_RANGE_YELLOW)
+    else
+      if btn.statusLight then
+        btn.statusLight:Hide()
       end
-    elseif btn.statusLight then
-      btn.statusLight:Hide()
+      if btn.statusLightRange then
+        btn.statusLightRange:Hide()
+      end
     end
   end
 end
@@ -1418,20 +1476,32 @@ local function CreateMUF(parent)
   btn.cdText:SetTextColor(1, 1, 1, 1)
   btn.cdText:Hide()
 
-  btn.statusLight = btn:CreateTexture(nil, "OVERLAY")
-  btn.statusLight:SetColorTexture(COLOR_READY[1], COLOR_READY[2], COLOR_READY[3], 1)
+  btn.statusLight = btn:CreateTexture(nil, "OVERLAY", nil, 6)
+  btn.statusLight:SetTexture(STATUS_MASK)
+  btn.statusLight:SetVertexColor(COLOR_READY[1], COLOR_READY[2], COLOR_READY[3], 1)
   btn.statusLight:Hide()
   btn.statusLight:SetSize(6, 6)
+
+  btn.statusLightRange = btn:CreateTexture(nil, "OVERLAY", nil, 7)
+  btn.statusLightRange:SetTexture(STATUS_MASK)
+  btn.statusLightRange:SetVertexColor(COLOR_CLEAR[1], COLOR_CLEAR[2], COLOR_CLEAR[3], COLOR_CLEAR[4])
+  btn.statusLightRange:Hide()
+  btn.statusLightRange:SetSize(6, 6)
 
   btn.stealthTex = btn:CreateTexture(nil, "ARTWORK", nil, 3)
   btn.stealthTex:SetAllPoints(btn.fillTex)
   btn.stealthTex:SetColorTexture(1, 1, 1, 1)
   btn.stealthTex:SetVertexColor(0, 0, 0, 0)
 
-  btn.failTex = btn:CreateTexture(nil, "ARTWORK", nil, 5)
+  btn.failTex = btn:CreateTexture(nil, "ARTWORK", nil, 4)
   btn.failTex:SetAllPoints(btn.fillTex)
   btn.failTex:SetColorTexture(COLOR_FAIL[1], COLOR_FAIL[2], COLOR_FAIL[3], 0.28)
   btn.failTex:Hide()
+
+  btn.rangeOverlay = btn:CreateTexture(nil, "ARTWORK", nil, 5)
+  btn.rangeOverlay:SetAllPoints(btn.fillTex)
+  btn.rangeOverlay:SetColorTexture(COLOR_RANGE_OVERLAY[1], COLOR_RANGE_OVERLAY[2], COLOR_RANGE_OVERLAY[3], 0.45)
+  btn.rangeOverlay:Hide()
 
   btn.deadFill = btn:CreateTexture(nil, "ARTWORK", nil, 6)
   btn.deadFill:SetAllPoints(btn.fillTex)
