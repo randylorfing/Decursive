@@ -55,7 +55,7 @@ local BATTLE_REZ = {20484, 61999, 391054}
 local SOUL_LINK_SPELL_ID = 1259646
 local SOUL_LINK_ITEM_ID = 269586
 local POISON_CLEANSING_TOTEM = 383013
-local BY_ME_FILTER = "HARMFUL|RAID"
+local BY_ME_FILTER = "HARMFUL|RAID_PLAYER_DISPELLABLE"
 local ALL_FILTER = "HARMFUL|DISPELLABLE"
 local GAP_FILTER = "HARMFUL|!RAID_PLAYER_DISPELLABLE"
 local NATIVE_FILTER = BY_ME_FILTER
@@ -76,6 +76,7 @@ local follower = {
 
 local eventsOn = false
 local eventFrame
+local pendingCombatSlots = false
 
 local function Accessible(value)
   if value == nil then
@@ -594,6 +595,18 @@ local function BlizzNames(keys)
   return names
 end
 
+local poisonProbeLogged = false
+
+local function LogPoisonProbeOnce()
+  if poisonProbeLogged then
+    return
+  end
+  poisonProbeLogged = true
+  if DEFAULT_CHAT_FRAME then
+    DEFAULT_CHAT_FRAME:AddMessage("|cff52dbd1Decursive|r cannot test for Poison Cleansing Totem. No poison gap.")
+  end
+end
+
 local function KnowsPoisonCleansingTotem()
   local sb = C_SpellBook
   local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
@@ -610,10 +623,20 @@ local function KnowsPoisonCleansingTotem()
     end
     return nil
   end
-  if SpellInBook(POISON_CLEANSING_TOTEM, true) then
-    return true
+  if IsPlayerSpell then
+    local known = IsPlayerSpell(POISON_CLEANSING_TOTEM)
+    if not Accessible(known) then
+      return nil
+    end
+    if known == true then
+      return true
+    end
+    if known == false then
+      return false
+    end
   end
-  return false
+  LogPoisonProbeOnce()
+  return nil
 end
 
 function ns.GetEngineDispelGaps(selfOnly)
@@ -685,15 +708,18 @@ end
 
 local function LiveMainFilter(allMode)
   if allMode then
-    return "HARMFUL|" .. AuraToken("Dispellable", "DISPELLABLE")
+    local token = AuraToken("Dispellable", "DISPELLABLE")
+    if token then
+      return "HARMFUL|" .. token
+    end
+    return "HARMFUL|" .. AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
   end
-  return "HARMFUL|" .. AuraToken("Raid", "RAID")
+  return "HARMFUL|" .. AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
 end
 
 local function LiveGapFilter()
-  local raid = AuraToken("Raid", "RAID")
   local rpd = AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
-  return "HARMFUL|!" .. raid .. "|!" .. rpd
+  return "HARMFUL|!" .. rpd
 end
 
 local function BuildSlots(enabled, pack, selfOnly)
@@ -849,16 +875,10 @@ function ns.GetSoulLinkState(pack)
   return ns.GetSoulLinkFallback(pack)
 end
 
-function ns.SpellRangeState(unit, spell, spellId)
-  if type(unit) ~= "string" then
-    return nil
-  end
-  if unit == "player" then
-    return true
-  end
+local function ProbeSpellRange(spell, spellId, unit)
   local result
   if C_Spell and C_Spell.IsSpellInRange then
-    if spellId then
+    if type(spellId) == "number" then
       result = C_Spell.IsSpellInRange(spellId, unit)
     elseif spell then
       result = C_Spell.IsSpellInRange(spell, unit)
@@ -878,16 +898,73 @@ function ns.SpellRangeState(unit, spell, spellId)
   return nil
 end
 
+function ns.SpellRangeState(unit, spell, spellId)
+  if type(unit) ~= "string" or unit == "" then
+    return false
+  end
+  if unit == "player" or ns.IsPlayerUnit(unit) then
+    return true
+  end
+  if UnitExists then
+    local exists = UnitExists(unit)
+    if not Accessible(exists) then
+      return false
+    end
+    if exists ~= true then
+      return false
+    end
+  end
+  if UnitPhaseReason then
+    local phase = UnitPhaseReason(unit)
+    if Accessible(phase) and phase then
+      return false
+    end
+  end
+  local inCombat = InCombatLockdown and InCombatLockdown()
+  local friendly = ProbeSpellRange(spell, spellId, unit)
+  if friendly == true then
+    return true
+  end
+  if friendly == false then
+    if not inCombat and CheckInteractDistance then
+      local follow = CheckInteractDistance(unit, 4)
+      if Accessible(follow) and follow then
+        return true
+      end
+    end
+    return false
+  end
+  if ns.IsUnitDeadPublic(unit) then
+    return false
+  end
+  if not inCombat and CheckInteractDistance then
+    local follow = CheckInteractDistance(unit, 4)
+    if Accessible(follow) then
+      return follow and true or false
+    end
+  end
+  if inCombat and UnitInRange then
+    local inRange, checked = UnitInRange(unit)
+    if type(issecretvalue) == "function" and issecretvalue(inRange) then
+      return false
+    end
+    if Accessible(checked) and checked == true and Accessible(inRange) then
+      return inRange == true
+    end
+    return false
+  end
+  if inCombat and friendly == nil then
+    return true
+  end
+  return false
+end
+
 function ns.IsSpellInRangePublic(unit, spell, spellId)
   return ns.SpellRangeState(unit, spell, spellId)
 end
 
 function ns.UnitInRangeKeep(unit, spell, spellId)
-  local state = ns.SpellRangeState(unit, spell, spellId)
-  if state == false then
-    return false
-  end
-  return true
+  return ns.SpellRangeState(unit, spell, spellId) == true
 end
 
 function ns.FilterRosterRange(units, pack)
@@ -919,17 +996,38 @@ function ns.GetPublicInstanceType()
   return nil
 end
 
+local lastArenaHint = false
+
 function ns.IsArenaInstance()
+  if IsInInstance then
+    local inInstance, instanceType = IsInInstance()
+    instanceType = Public(instanceType)
+    if instanceType == "arena" then
+      lastArenaHint = true
+      return true
+    end
+    if type(instanceType) == "string" and instanceType ~= "" and instanceType ~= "arena" then
+      lastArenaHint = false
+    elseif lastArenaHint then
+      return true
+    end
+  end
   if IsActiveBattlefieldArena then
     local inArena = IsActiveBattlefieldArena()
     if IsTrue(inArena) then
+      lastArenaHint = true
       return true
     end
   end
   if C_PvP and C_PvP.IsArena and IsTrue(C_PvP.IsArena()) then
+    lastArenaHint = true
     return true
   end
-  return ns.GetPublicInstanceType() == "arena"
+  if ns.GetPublicInstanceType() == "arena" then
+    lastArenaHint = true
+    return true
+  end
+  return lastArenaHint
 end
 
 local function UnitPresent(unit)
@@ -1241,8 +1339,12 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
         container:SetAuraSlotCandidateFilters(slot.key, slot.candidateFilters)
       end
     else
-      container:AddAuraSlot(slot.key, slot.filter, info)
-      container._dcrSlotKeys[slot.key] = true
+      if InCombatLockdown and InCombatLockdown() then
+        pendingCombatSlots = true
+      else
+        container:AddAuraSlot(slot.key, slot.filter, info)
+        container._dcrSlotKeys[slot.key] = true
+      end
     end
   end
   local wanted = {}
@@ -1259,11 +1361,11 @@ function ns.AttachDetectionContainer(container, unit, pack, initFn)
   if not container then
     return false
   end
-  pack = pack or GetPack()
-  if container.SetEnabled then
-    container:SetEnabled(false)
+  if type(unit) ~= "string" or unit == "" then
+    return false
   end
-  if container.SetUnit and unit then
+  pack = pack or GetPack()
+  if container.SetUnit then
     container:SetUnit(unit)
   end
   ns.ApplyDetectionSlots(container, pack, initFn, unit)
@@ -1395,12 +1497,33 @@ function ns.EnableDetection()
   end
   eventsOn = true
   eventFrame = CreateFrame("Frame")
-  eventFrame:SetScript("OnEvent", function(_, event)
+  eventFrame:SetScript("OnEvent", function(_, event, unit)
     ns.InvalidateDetection()
+    if event == "PLAYER_REGEN_ENABLED" then
+      pendingCombatSlots = false
+      if ns.RefreshLiveList then
+        ns.RefreshLiveList()
+      end
+      if ns.RefreshAlerts then
+        ns.RefreshAlerts()
+      end
+      return
+    end
+    if event == "UNIT_IN_RANGE_UPDATE" then
+      if ns.RefreshLiveList then
+        ns.RefreshLiveList()
+      end
+      return
+    end
     if event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_ROLES_ASSIGNED" or event == "TRAIT_CONFIG_UPDATED" then
       ns.ScheduleFollowerRosterGuard()
     end
-    if event == "SPELLS_CHANGED" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED" or event == "PLAYER_TALENT_UPDATE" then
+    local talentEvent = event == "SPELLS_CHANGED" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED" or event == "PLAYER_TALENT_UPDATE"
+    if talentEvent and InCombatLockdown and InCombatLockdown() then
+      pendingCombatSlots = true
+      return
+    end
+    if talentEvent then
       if ns.RefreshLiveList then
         ns.RefreshLiveList()
       end
@@ -1424,6 +1547,8 @@ function ns.EnableDetection()
   eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
   eventFrame:RegisterEvent("UNIT_PET")
   eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+  eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+  eventFrame:RegisterEvent("UNIT_IN_RANGE_UPDATE")
   local extra = {
     "TRAIT_CONFIG_UPDATED",
     "PLAYER_ROLES_ASSIGNED",
