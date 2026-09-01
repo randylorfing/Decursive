@@ -150,6 +150,9 @@ end
 function Decursive:OnEnteringWorld()
   self:EnsureSpecAssignments()
   self:ApplyResolvedProfile("world")
+  if ns.ApplyAlertMoveMode then
+    ns.ApplyAlertMoveMode()
+  end
 end
 
 function Decursive:OnSpecChanged()

@@ -1706,6 +1706,7 @@ function ns.PrintSlashHelp()
   SoulLinkChat("/dcrhelp  this list")
   SoulLinkChat("/dcrpr /dcrsk  priority and skip lists")
   SoulLinkChat("/dcrsoullink [on|off|status]  emergency Soul Link fallback")
+  SoulLinkChat("/dcrsoullinkstatus  Soul Link item/spell dump")
   SoulLinkChat("/zdsound [spellID] [unit]  aura sound diagnostic")
 end
 
