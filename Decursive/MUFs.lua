@@ -908,23 +908,83 @@ local function EnsureHeader()
   header:SetFrameStrata("MEDIUM")
   RestorePoint()
 
-  handle = CreateFrame("Button", nil, header)
-  handle:SetSize(14, 8)
-  handle:SetPoint("BOTTOMLEFT", header, "TOPLEFT", 0, 2)
-  handle.tex = handle:CreateTexture(nil, "ARTWORK")
-  handle.tex:SetAllPoints()
-  handle.tex:SetColorTexture(0.32, 0.86, 0.82, 0.9)
-  handle:RegisterForDrag("LeftButton")
-  handle:SetScript("OnDragStart", function()
+  -- Alpha.4 DcrMUFsContainerDragButton: 20x20 square on the top-left of the grid.
+  handle = CreateFrame("Button", "DecursiveRebuildMUFHandle", header)
+  handle:SetSize(20, 20)
+  handle:SetClampedToScreen(true)
+  handle:SetPoint("BOTTOMLEFT", header, "TOPLEFT", 0, 0)
+  handle.fill = handle:CreateTexture(nil, "BACKGROUND")
+  handle.fill:SetPoint("CENTER")
+  handle.fill:SetSize(16, 16)
+  handle.fill:SetColorTexture(0.12, 0.16, 0.18, 1)
+  handle.edge1 = handle:CreateTexture(nil, "BORDER")
+  handle.edge1:SetPoint("BOTTOMLEFT")
+  handle.edge1:SetPoint("TOPRIGHT", handle, "BOTTOMRIGHT", 0, 2)
+  handle.edge2 = handle:CreateTexture(nil, "BORDER")
+  handle.edge2:SetPoint("TOPLEFT", 0, -2)
+  handle.edge2:SetPoint("BOTTOMRIGHT", handle, "BOTTOMLEFT", 2, 2)
+  handle.edge3 = handle:CreateTexture(nil, "BORDER")
+  handle.edge3:SetPoint("TOPLEFT")
+  handle.edge3:SetPoint("BOTTOMRIGHT", handle, "TOPRIGHT", 0, -2)
+  handle.edge4 = handle:CreateTexture(nil, "BORDER")
+  handle.edge4:SetPoint("TOPRIGHT", 0, -2)
+  handle.edge4:SetPoint("BOTTOMLEFT", handle, "BOTTOMRIGHT", -2, 2)
+  local edge = {0.05, 0.08, 0.10, 1}
+  handle.edge1:SetColorTexture(unpack(edge))
+  handle.edge2:SetColorTexture(unpack(edge))
+  handle.edge3:SetColorTexture(unpack(edge))
+  handle.edge4:SetColorTexture(unpack(edge))
+  handle:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+  handle:RegisterForClicks("AnyUp")
+  handle.isMoving = false
+  handle:SetScript("OnMouseDown", function(self, button)
+    if LockedDown() then
+      return
+    end
     local pack = GetPack()
     if pack.mufs.locked then
       return
     end
-    header:StartMoving()
+    if button == "LeftButton" and IsAltKeyDown and IsAltKeyDown() then
+      self.isMoving = true
+      header:StartMoving()
+    end
   end)
-  handle:SetScript("OnDragStop", function()
-    header:StopMovingOrSizing()
-    SavePoint()
+  handle:SetScript("OnMouseUp", function(self, button)
+    if self.isMoving and not LockedDown() then
+      header:StopMovingOrSizing()
+      self.isMoving = false
+      SavePoint()
+    elseif button == "RightButton" and IsAltKeyDown and IsAltKeyDown() then
+      if ns.ShowOptions then
+        ns.ShowOptions()
+      end
+    end
+  end)
+  handle:SetScript("OnHide", function(self)
+    if self.isMoving and not LockedDown() then
+      header:StopMovingOrSizing()
+    end
+    self.isMoving = false
+  end)
+  handle:SetScript("OnEnter", function(self)
+    local pack = GetPack()
+    if pack.mufs.showHelp == false then
+      return
+    end
+    if not GameTooltip then
+      return
+    end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:AddLine("Zhaohu's Decursive")
+    GameTooltip:AddLine("Alt-Left: move MUFs", 0.32, 0.86, 0.82)
+    GameTooltip:AddLine("Alt-Right: options", 0.32, 0.86, 0.82)
+    GameTooltip:Show()
+  end)
+  handle:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
   end)
 
   header:SetScript("OnUpdate", OnHeaderUpdate)
@@ -1012,12 +1072,18 @@ function ns.LayoutMUFs()
   header:SetMovable(not pack.mufs.locked)
   header:Show()
 
-  if pack.mufs.hideHandle or pack.mufs.locked then
+  if pack.mufs.hideHandle then
     handle:Hide()
     handle:EnableMouse(false)
   else
     handle:Show()
     handle:EnableMouse(true)
+    handle:ClearAllPoints()
+    if pack.mufs.growUp then
+      handle:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, 0)
+    else
+      handle:SetPoint("BOTTOMLEFT", header, "TOPLEFT", 0, 0)
+    end
   end
 
   local anchor
