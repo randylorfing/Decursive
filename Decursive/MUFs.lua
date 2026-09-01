@@ -1,6 +1,6 @@
 local ADDON_NAME, ns = ...
 
-local POOL_SIZE = 45
+local POOL_SIZE = 80
 local BORDER_PX = 2
 local GCD = 1.5
 local DISPEL_FILTER = "HARMFUL|RAID_PLAYER_DISPELLABLE"

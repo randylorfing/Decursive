@@ -15,6 +15,9 @@ local function Notify()
   if ns.RefreshMUFs then
     ns.RefreshMUFs()
   end
+  if ns.RefreshAlerts then
+    ns.RefreshAlerts()
+  end
 end
 
 ns.Notify = Notify
@@ -36,17 +39,26 @@ function Decursive:OnEnable()
   if ns.EnableMUFs then
     ns.EnableMUFs(self)
   end
+  if ns.EnableAlerts then
+    ns.EnableAlerts(self)
+  end
 end
 
 function Decursive:OnGroupRosterUpdate()
   if ns.RefreshMUFs then
     ns.RefreshMUFs()
   end
+  if ns.RefreshAlerts then
+    ns.RefreshAlerts()
+  end
 end
 
 function Decursive:OnRegenEnabled()
   if ns.RefreshMUFs then
     ns.RefreshMUFs()
+  end
+  if ns.RefreshAlerts then
+    ns.RefreshAlerts()
   end
 end
 
