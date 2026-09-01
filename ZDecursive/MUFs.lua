@@ -735,7 +735,14 @@ function ns.RebuildClickModel(pack)
       for i = 1, #cures do
         local action = cures[i]
         local actionKey = "spell:" .. tostring(action.spellId)
+        local itemKey
+        if type(action.itemId) == "number" and action.itemId > 0 then
+          itemKey = "item:" .. tostring(action.itemId)
+        end
         local binding = keyToBinding[manual[actionKey]]
+        if not binding and itemKey then
+          binding = keyToBinding[manual[itemKey]]
+        end
         if binding and not ReservedGesture(binding) and not used[binding] then
           if not (bandage and binding == PVP_BANDAGE_GESTURE) then
             local row = MakeCureRow(action, binding)
@@ -914,26 +921,6 @@ local function ApplyClickAttributes(btn, pack, unit)
     end
   end
 
-  if model.mode == "MANUAL" then
-    local mouse = pack.mouse or {}
-    for i = 1, #MOUSE_BUTTONS do
-      local spec = MOUSE_BUTTONS[i]
-      local binding = spec.binding
-      if not installed[binding] and not ReservedGesture(binding) then
-        local action = mouse[spec.key]
-        if action == "TARGET" then
-          SetSecure(btn, binding:format("type"), "target")
-          SetSecure(btn, binding:format("unit"), unit)
-        elseif action == "FOCUS" then
-          SetSecure(btn, binding:format("type"), "focus")
-          SetSecure(btn, binding:format("unit"), unit)
-        elseif action == "ASSIST" then
-          SetSecure(btn, binding:format("type"), "assist")
-          SetSecure(btn, binding:format("unit"), unit)
-        end
-      end
-    end
-  end
   return true
 end
 
@@ -1706,9 +1693,6 @@ function ns.LayoutMUFs()
       PaintSquare(btn, pack, unit)
       PlaceStatusLight(btn, size, pack.mufs.statusLight)
       AttachPaint(btn, pack, unit)
-      if btn.auraContainer and btn.auraContainer.SetUnit and not DisplayMutationBlocked() then
-        btn.auraContainer:SetUnit(unit)
-      end
       btn:Show()
     else
       btn.assigned = false
@@ -1760,6 +1744,7 @@ function ns.RecoverMUFsAfterCombat()
     mufsConfigured = false
     return false
   end
+  ns.RebuildClickModel()
   if not EnsureHeader() then
     pending = true
     mufsConfigured = false

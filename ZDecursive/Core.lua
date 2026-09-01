@@ -36,9 +36,19 @@ function Decursive:OnInitialize()
     ns.RegisterLists(self)
   end
   self:RegisterChatCommand("dcr", "OpenOptions")
-  self:RegisterChatCommand("decursive", "OpenOptions")
   self:RegisterChatCommand("zd", "OpenOptions")
   self:RegisterChatCommand("zdecursive", "OpenOptions")
+  if self.UnregisterChatCommand then
+    self:UnregisterChatCommand("decursive")
+  end
+  SlashCmdList["ACECONSOLE_DECURSIVE"] = nil
+  _G["SLASH_ACECONSOLE_DECURSIVE1"] = nil
+  SlashCmdList["DECURSIVE"] = nil
+  _G["SLASH_DECURSIVE1"] = nil
+  if type(hash_SlashCmdList) == "table" then
+    hash_SlashCmdList["/DECURSIVE"] = nil
+    hash_SlashCmdList["/decursive"] = nil
+  end
   self:RegisterChatCommand("dcrsoullink", function(msg)
     if ns.HandleSoulLinkSlash then
       ns.HandleSoulLinkSlash(msg)
