@@ -242,6 +242,15 @@ end
 local function PathSet(section, key)
   return function(value)
     Pack()[section][key] = value
+    if ns.RefreshMUFs then
+      ns.RefreshMUFs()
+    end
+    if ns.RefreshAlerts then
+      ns.RefreshAlerts()
+    end
+    if ui.RefreshPreview then
+      ui.RefreshPreview()
+    end
   end
 end
 local PAGES = {"mufs", "sorting", "cure", "color", "alerts", "advanced", "assign"}
@@ -655,6 +664,132 @@ local function IsCollapsed(page, group)
   return pageMap[group]
 end
 
+
+local PREVIEW_COLORS = {"magic", "curse", "poison", "disease", "healthy"}
+
+local function PreviewSize(pack, env)
+  if env == "RAID" then
+    return pack.mufs.raidSize or 20
+  end
+  if env == "DUNGEON" or env == "MYTHIC_PLUS" then
+    return pack.mufs.partySize or 20
+  end
+  return pack.mufs.partySize or 20
+end
+
+local function RefreshPreview()
+  if not ui.previewHost or not ui.previewSquares then
+    return
+  end
+  local addon = Addon()
+  if not addon then
+    return
+  end
+  local pack = addon:GetEditingPack()
+  local env = addon:GetEditingEnvironment()
+  local size = PreviewSize(pack, env)
+  local hSpace = pack.mufs.horizontalSpacing or 2
+  local vSpace = pack.mufs.verticalSpacing or 2
+  if pack.mufs.linkSpacing then
+    vSpace = hSpace
+  end
+  local hostW = ui.previewHost:GetWidth()
+  if not hostW or hostW < 100 then
+    hostW = 960
+  end
+  local n = 5
+  local pad = 16
+  local need = n * size + (n - 1) * hSpace
+  local avail = hostW - pad * 2
+  local scale = 1
+  if need > avail and need > 0 then
+    scale = avail / need
+  end
+  if size * scale > 48 then
+    scale = 48 / size
+  end
+  local draw = math.max(8, size * scale)
+  local gap = hSpace * scale
+  local growRight = pack.mufs.growFromRight
+  local shown = pack.mufs.show ~= false
+  local colors = pack.colors or {}
+  local captionKind = "party"
+  if env == "RAID" then
+    captionKind = "raid"
+  end
+  if ui.previewCaption then
+    ui.previewCaption:SetText(string.format("Size preview  ·  %s %dpx  ·  gap %dpx", captionKind, size, hSpace))
+  end
+  local rowWidth = n * draw + (n - 1) * gap
+  local startX
+  if growRight then
+    startX = hostW - pad - draw
+  else
+    startX = pad
+  end
+  for i = 1, n do
+    local sq = ui.previewSquares[i]
+    local key = PREVIEW_COLORS[i]
+    local c = colors[key] or GOLD
+    sq.fill:SetColorTexture(c[1] or 0.3, c[2] or 0.8, c[3] or 0.8, shown and (c[4] or 1) or 0.22)
+    local br = colors.border or {0.05, 0.08, 0.10, 1}
+    sq.border:SetColorTexture(br[1], br[2], br[3], shown and 1 or 0.22)
+    sq:SetSize(draw, draw)
+    sq.fill:ClearAllPoints()
+    sq.fill:SetPoint("CENTER")
+    sq.fill:SetSize(math.max(4, draw - 4), math.max(4, draw - 4))
+    sq:ClearAllPoints()
+    local x
+    if growRight then
+      x = startX - (i - 1) * (draw + gap)
+    else
+      x = startX + (i - 1) * (draw + gap)
+    end
+    sq:SetPoint("BOTTOMLEFT", ui.previewHost, "BOTTOMLEFT", x, 10)
+  end
+  if ui.previewHandle then
+    ui.previewHandle:SetSize(math.min(20, draw), math.min(20, draw))
+    ui.previewHandle:ClearAllPoints()
+    if pack.mufs.growUp then
+      ui.previewHandle:SetPoint("TOPLEFT", ui.previewSquares[1], "BOTTOMLEFT", 0, 0)
+    else
+      ui.previewHandle:SetPoint("BOTTOMLEFT", ui.previewSquares[1], "TOPLEFT", 0, 0)
+    end
+    ui.previewHandle:SetShown(pack.mufs.hideHandle ~= true)
+  end
+end
+
+ui.RefreshPreview = RefreshPreview
+
+local function BuildMufPreview(parent)
+  local host = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+  Paint(host, {0.05, 0.09, 0.12, 1}, BORDER)
+  host:SetHeight(88)
+  local caption = Font(host, "GameFontDisable", "Size preview")
+  caption:SetPoint("TOPLEFT", 14, -8)
+  caption:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  ui.previewCaption = caption
+  ui.previewHost = host
+  ui.previewSquares = {}
+  for i = 1, 5 do
+    local sq = CreateFrame("Frame", nil, host)
+    sq.border = sq:CreateTexture(nil, "BACKGROUND")
+    sq.border:SetAllPoints()
+    sq.fill = sq:CreateTexture(nil, "ARTWORK")
+    ui.previewSquares[i] = sq
+  end
+  local handle = CreateFrame("Frame", nil, host)
+  handle:SetSize(20, 20)
+  handle.border = handle:CreateTexture(nil, "BACKGROUND")
+  handle.border:SetAllPoints()
+  handle.border:SetColorTexture(0.05, 0.08, 0.10, 1)
+  handle.fill = handle:CreateTexture(nil, "ARTWORK")
+  handle.fill:SetPoint("CENTER")
+  handle.fill:SetSize(16, 16)
+  handle.fill:SetColorTexture(0.12, 0.16, 0.18, 1)
+  ui.previewHandle = handle
+end
+
 local function LayoutCatalog()
   if not ui.sections then
     return
@@ -662,6 +797,15 @@ local function LayoutCatalog()
   for page, sections in pairs(ui.sections) do
     local y = 0
     local child = ui.pageChildren and ui.pageChildren[page]
+    if page == "mufs" and ui.previewHost then
+      ui.previewHost:ClearAllPoints()
+      ui.previewHost:SetPoint("TOPLEFT", 0, 0)
+      ui.previewHost:SetPoint("TOPRIGHT", 0, 0)
+      ui.previewHost:SetHeight(88)
+      ui.previewHost:Show()
+      y = -96
+      RefreshPreview()
+    end
     for _, section in ipairs(sections) do
       local visibleRows = {}
       for _, item in ipairs(section.rows) do
@@ -814,6 +958,7 @@ local function Refresh()
   ui.assign.specEnabled:SetOn(row and row.enabled)
   ui.assign.specProfile:SetText((row and row.profile) or "Default")
   LayoutCatalog()
+  RefreshPreview()
 end
 
 ns.RefreshOptions = Refresh
@@ -981,6 +1126,9 @@ local function BuildPages(content)
         end
       end
       ui.sections[pageKey] = sections
+      if pageKey == "mufs" then
+        BuildMufPreview(child)
+      end
       local hint = Font(child, "GameFontHighlight", "Click Simple (top right) to show all options for this environment.")
       hint:SetJustifyH("LEFT")
       hint:SetHeight(18)
