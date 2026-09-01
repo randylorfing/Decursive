@@ -72,9 +72,9 @@ function Decursive:OnInitialize()
   self:RegisterChatCommand("dcrreset", function(msg)
     self:HandleResetSlash(msg)
   end)
-  self:RegisterChatCommand("dcridentity", function()
+  self:RegisterChatCommand("dcridentity", function(msg)
     if ns.PrintIdentity then
-      ns.PrintIdentity()
+      ns.PrintIdentity(msg)
     end
   end)
   self:RegisterChatCommand("dcralerts", function(msg)
