@@ -1,14 +1,14 @@
 local ADDON_NAME, ns = ...
 
-local GOLD = {0.93, 0.74, 0.28, 1}
-local GOLD_DIM = {0.93, 0.74, 0.28, 0.35}
-local TEXT = {0.93, 0.91, 0.86, 1}
-local MUTED = {0.58, 0.56, 0.50, 1}
-local BG = {0.055, 0.06, 0.08, 0.97}
-local HEADER = {0.09, 0.095, 0.12, 1}
-local CARD = {0.11, 0.12, 0.145, 1}
-local BORDER = {0.32, 0.27, 0.16, 0.9}
-local TAB_IDLE = {0.14, 0.145, 0.17, 1}
+local GOLD = {0.32, 0.86, 0.82, 1}
+local GOLD_DIM = {0.32, 0.86, 0.82, 0.32}
+local TEXT = {0.88, 0.93, 0.96, 1}
+local MUTED = {0.50, 0.60, 0.66, 1}
+local BG = {0.045, 0.07, 0.095, 0.97}
+local HEADER = {0.07, 0.11, 0.15, 1}
+local CARD = {0.09, 0.13, 0.17, 1}
+local BORDER = {0.16, 0.34, 0.40, 0.85}
+local TAB_IDLE = {0.10, 0.14, 0.18, 1}
 local DANGER = {0.75, 0.28, 0.22, 1}
 
 local ui = {
@@ -60,7 +60,7 @@ local function MakeButton(parent, label, width, kind)
   local fill = TAB_IDLE
   local border = BORDER
   if kind == "gold" then
-    fill = {0.22, 0.17, 0.08, 1}
+    fill = {0.07, 0.22, 0.22, 1}
     border = GOLD
   elseif kind == "danger" then
     fill = {0.18, 0.08, 0.07, 1}
@@ -106,7 +106,7 @@ local function MakeToggle(parent)
   function btn:SetOn(on)
     self._on = not not on
     if self._on then
-      Paint(self, {0.28, 0.21, 0.08, 1}, GOLD)
+      Paint(self, {0.07, 0.24, 0.24, 1}, GOLD)
       self.knob:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
       self.knob:ClearAllPoints()
       self.knob:SetPoint("RIGHT", -3, 0)
@@ -256,7 +256,7 @@ local function Refresh()
 
   for key, chip in pairs(ui.envChips) do
     if key == env then
-      Paint(chip, {0.24, 0.18, 0.08, 1}, GOLD)
+      Paint(chip, {0.07, 0.22, 0.24, 1}, GOLD)
       chip.label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
     else
       Paint(chip, TAB_IDLE, {0.25, 0.25, 0.28, 1})
@@ -266,7 +266,7 @@ local function Refresh()
 
   for key, tab in pairs(ui.tabs) do
     if key == ui.tab then
-      Paint(tab, {0.2, 0.16, 0.08, 1}, GOLD)
+      Paint(tab, {0.06, 0.20, 0.22, 1}, GOLD)
       tab.label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
       ui.pages[key]:Show()
     else
@@ -379,7 +379,7 @@ local function BuildPages(content)
   ui.previewHost = CreateFrame("Frame", nil, mufsCard, "BackdropTemplate")
   ui.previewHost:SetPoint("TOPLEFT", 16, -68)
   ui.previewHost:SetSize(788, 84)
-  Paint(ui.previewHost, {0.07, 0.075, 0.09, 1}, GOLD_DIM)
+  Paint(ui.previewHost, {0.05, 0.09, 0.11, 1}, GOLD_DIM)
   ui.previewSquares = {}
   for i = 1, 5 do
     local sq = ui.previewHost:CreateTexture(nil, "ARTWORK")
