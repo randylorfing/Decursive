@@ -1590,7 +1590,7 @@ local function CreateMUF(parent)
   btn.skullTex:SetTexture(SKULL_TEXTURE)
   btn.skullTex:SetVertexColor(1, 1, 1, 0)
 
-  btn.raidIcon = btn:CreateTexture(nil, "OVERLAY", nil, 8)
+  btn.raidIcon = btn:CreateTexture(nil, "OVERLAY", nil, 7)
   btn.raidIcon:SetPoint("TOPLEFT", btn.fillTex, "TOPLEFT", -1, 1)
   btn.raidIcon:SetSize(8, 8)
   btn.raidIcon:Hide()
