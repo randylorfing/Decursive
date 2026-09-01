@@ -644,14 +644,18 @@ local function PaintSquare(btn, pack, unit)
   for _, edge in ipairs({btn.outer1, btn.outer2, btn.outer3, btn.outer4}) do
     if edge then
       if borderOn then
-        edge:SetColorTexture(r, g, b, a)
+        edge:SetColorTexture(r, g, b, pack.mufs.borderTransp or 0.2)
         edge:Show()
       else
         edge:Hide()
       end
     end
   end
-  local alpha = 1
+  local idle = pack.mufs.centerTransp
+  if type(idle) ~= "number" then
+    idle = 0.35
+  end
+  local alpha = (fill[4] or 1) * idle
   if dead then
     alpha = pack.mufs.inactiveOpacity or 0.65
   elseif UnitIsConnected then
@@ -666,9 +670,6 @@ local function PaintSquare(btn, pack, unit)
   end
   if btn.playerMark then
     if pack.mufs.centerText and IsPlayerToken(unit) then
-      btn.playerMark:SetText("P")
-      btn.playerMark:Show()
-    elseif IsPlayerToken(unit) then
       btn.playerMark:SetText("P")
       btn.playerMark:Show()
     else
@@ -954,27 +955,7 @@ local function EnsureHeader()
   handle:SetSize(20, 20)
   handle:SetClampedToScreen(true)
   handle:SetPoint("BOTTOMLEFT", header, "TOPLEFT", 0, 0)
-  handle.fill = handle:CreateTexture(nil, "BACKGROUND")
-  handle.fill:SetPoint("CENTER")
-  handle.fill:SetSize(16, 16)
-  handle.fill:SetColorTexture(0.12, 0.16, 0.18, 1)
-  handle.edge1 = handle:CreateTexture(nil, "BORDER")
-  handle.edge1:SetPoint("BOTTOMLEFT")
-  handle.edge1:SetPoint("TOPRIGHT", handle, "BOTTOMRIGHT", 0, 2)
-  handle.edge2 = handle:CreateTexture(nil, "BORDER")
-  handle.edge2:SetPoint("TOPLEFT", 0, -2)
-  handle.edge2:SetPoint("BOTTOMRIGHT", handle, "BOTTOMLEFT", 2, 2)
-  handle.edge3 = handle:CreateTexture(nil, "BORDER")
-  handle.edge3:SetPoint("TOPLEFT")
-  handle.edge3:SetPoint("BOTTOMRIGHT", handle, "TOPRIGHT", 0, -2)
-  handle.edge4 = handle:CreateTexture(nil, "BORDER")
-  handle.edge4:SetPoint("TOPRIGHT", 0, -2)
-  handle.edge4:SetPoint("BOTTOMLEFT", handle, "BOTTOMRIGHT", -2, 2)
-  local edge = {0.05, 0.08, 0.10, 1}
-  handle.edge1:SetColorTexture(unpack(edge))
-  handle.edge2:SetColorTexture(unpack(edge))
-  handle.edge3:SetColorTexture(unpack(edge))
-  handle.edge4:SetColorTexture(unpack(edge))
+  -- Alpha.4 handle is blank until hover. Highlight only, ADD blend.
   handle:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
   handle:RegisterForClicks("AnyUp")
   handle.isMoving = false
