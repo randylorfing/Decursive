@@ -2231,6 +2231,12 @@ function ns.EnableDetection()
       eventFrame:RegisterEvent(name)
     end
   end
+  local addon = Addon()
+  if addon and addon.RegisterChatCommand then
+    addon:RegisterChatCommand("dcridentity", function(msg)
+      ns.PrintIdentity(msg)
+    end)
+  end
 end
 
 ns.Detection = {
