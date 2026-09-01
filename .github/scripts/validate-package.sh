@@ -192,6 +192,7 @@ while IFS= read -r pattern; do
     fi
 done <<'PATTERNS'
 RELEASE_PROCESS.md
+AUDIT.md
 RELEASE_NOTES_v11*.md
 RELEASE_NOTES_v12.0*.md
 Todo.txt

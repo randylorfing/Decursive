@@ -48,6 +48,9 @@ ignore:
     # Windows extraction prompts to overwrite. Shipped by mistake in v12.1.2.
     - README.md
     - RELEASE_PROCESS.md
+    # Factory/maintainer audit. Same class as RELEASE_PROCESS.md: a repo-root
+    # file that must not land inside users' AddOns folders.
+    - AUDIT.md
     # GitHub needs the repository-root GPL text for license discovery, but the
     # addon already ships LICENSE.txt in each packaged addon folder through
     # license-output below.

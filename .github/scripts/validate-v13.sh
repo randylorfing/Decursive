@@ -220,7 +220,8 @@ if [ -e Decursive_Options/LICENSE.txt ] \
 fi
 if ! rg -q --fixed-strings 'Decursive/branding' .pkgmeta \
     || ! rg -q --fixed-strings 'Decursive/RELEASE_NOTES_v12.0*.md' .pkgmeta \
-    || ! rg -q --fixed-strings 'Decursive/docs' .pkgmeta; then
+    || ! rg -q --fixed-strings 'Decursive/docs' .pkgmeta \
+    || ! rg -q --fixed-strings 'AUDIT.md' .pkgmeta; then
     fail 'Source-only assets or superseded release notes lack package-ignore rules.'
 fi
 if ! rg -q --fixed-strings 'license-output: LICENSE.txt' .pkgmeta; then
