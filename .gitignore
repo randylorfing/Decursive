@@ -3,3 +3,6 @@ Thumbs.db
 *.zip
 .release/
 .pkgmeta.bak
+OVERNIGHT-DETECTION-REVIEW.md
+rebuild-audit-8am.md
+rebuild-vs-alpha-8am.md

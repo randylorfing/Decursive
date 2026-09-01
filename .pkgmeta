@@ -1,4 +1,4 @@
-﻿# vim:syntax=YAML:expandtab
+# vim:syntax=YAML:expandtab
 # Rebuild is a single addon folder (Decursive/). package-as stages the
 # checkout one level under that name, so the self-referencing move-folders
 # entry is required or Decursive.toc lands at
@@ -11,15 +11,16 @@ move-folders:
 # Ignore paths are relative to the REPO ROOT. With package-as: Decursive,
 # anything left at the root ships inside the addon unless listed here.
 ignore:
-    - README.md
+    # Durable: any root markdown would ship inside the addon. README.md
+    # is dropped by this glob; do not add a README exception.
+    - "*.md"
     - LICENSE
     - .gitignore
     - .gitattributes
     - .editorconfig
     - .cursor
     - docs
-    # Durable: these files do not all exist yet. A filename denylist
-    # that only names today's notes will miss the next one.
+    # Still ignore these under Decursive/; root *.md does not match nested paths.
     - CHANGELOG.md
     - OldChangeLog.md
     - WhatsNew.md
