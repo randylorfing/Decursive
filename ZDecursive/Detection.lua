@@ -1848,6 +1848,7 @@ function ns.PrintSlashHelp()
   SoulLinkChat("/dcrdiag  12.1 API, combat, packs, macro drop")
   SoulLinkChat("/dcrreport  identity plus diagnostics")
   SoulLinkChat("/dcridentity  character, current spec, dormant spec rows")
+  SoulLinkChat("/dcridentity alldebuffs  native tooltip HARMFUL vs dispellable")
   SoulLinkChat("/dcralerts [on|off|status|move]  editing-pack alerts, drag text")
   SoulLinkChat("/dcralertdiag  aura sound diagnostic")
   SoulLinkChat("/dcrreset [pack|profile|all]  reset editing pack by default")
@@ -1929,7 +1930,43 @@ function ns.DropOversizedMacros(pack)
   return dropped
 end
 
-function ns.PrintIdentity()
+function ns.IdentityShowAllDebuffs()
+  local addon = Addon()
+  if addon and addon.db and addon.db.global then
+    return addon.db.global.identityShowAllDebuffs == true
+  end
+  return ns.identityShowAllDebuffs == true
+end
+
+function ns.SetIdentityShowAllDebuffs(enabled)
+  local on = enabled == true
+  ns.identityShowAllDebuffs = on
+  local addon = Addon()
+  if addon and addon.db and addon.db.global then
+    addon.db.global.identityShowAllDebuffs = on
+  end
+end
+
+function ns.PrintIdentity(msg)
+  local cmd = ""
+  if type(msg) == "string" then
+    cmd = msg:match("^%s*(.-)%s*$") or ""
+    cmd = cmd:lower()
+  end
+  if cmd == "alldebuffs" then
+    local on = not ns.IdentityShowAllDebuffs()
+    ns.SetIdentityShowAllDebuffs(on)
+    if on then
+      SoulLinkChat("Native tooltip will show ALL harmful debuffs.")
+    else
+      SoulLinkChat("Native tooltip will show dispellable debuffs only.")
+    end
+    SoulLinkChat("/reload if the identity carrier was already created.")
+    if ns.RefreshMUFs then
+      ns.RefreshMUFs()
+    end
+    return
+  end
   local addon = Addon()
   local lines = {"identity"}
   if addon and addon.GetCharacterKey then
@@ -1975,6 +2012,11 @@ function ns.PrintIdentity()
   end
   if addon and addon.db and addon.db.GetCurrentProfile then
     lines[#lines + 1] = "resolved profile: " .. tostring(addon.db:GetCurrentProfile())
+  end
+  if ns.IdentityShowAllDebuffs() then
+    lines[#lines + 1] = "identity tooltip: ALL harmful debuffs"
+  else
+    lines[#lines + 1] = "identity tooltip: dispellable plus alldebuffs carrier"
   end
   for i = 1, #lines do
     SoulLinkChat(lines[i])

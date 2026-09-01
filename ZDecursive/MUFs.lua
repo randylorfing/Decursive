@@ -20,6 +20,7 @@ local COLOR_READY = {0.10, 1.00, 0.24, 1}
 local COLOR_CLEAR = {1, 1, 1, 0}
 local COLOR_RANGE_YELLOW = {1.00, 0.82, 0.00, 1}
 local COLOR_RANGE_OVERLAY = {1, 1, 0}
+local COLOR_STATUS_READY = {0.34, 0.34, 0.34, 0}
 local STATUS_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 
 local FRIENDLY_TYPES = {
@@ -986,14 +987,31 @@ local function IdentitySlotOptions(btn)
   }
 end
 
-local function AddIdentityCarrier(container, key, filter, options)
-  if not container or type(key) ~= "string" then
+local function IdentityFilter()
+  if ns.IdentityShowAllDebuffs and ns.IdentityShowAllDebuffs() then
+    return "HARMFUL"
+  end
+  return "HARMFUL|RAID_PLAYER_DISPELLABLE"
+end
+
+local function AddIdentityCarrier(container, filter, options)
+  if not container then
     return false
   end
+  local key = "identity"
   if type(container._dcrIdentityKeys) ~= "table" then
     container._dcrIdentityKeys = {}
   end
   if container._dcrIdentityKeys[key] then
+    return true
+  end
+  local wantAll = filter == "HARMFUL"
+  if wantAll and container.AddAuraGroup then
+    container:AddAuraGroup(key, filter, options)
+    if container.SetAuraGroupMaxFrameCount then
+      container:SetAuraGroupMaxFrameCount(key, 1)
+    end
+    container._dcrIdentityKeys[key] = "group"
     return true
   end
   if container.AddAuraSlot then
@@ -1012,6 +1030,27 @@ local function AddIdentityCarrier(container, key, filter, options)
   return false
 end
 
+local function TuneIdentityCarrier(container, options)
+  if not container then
+    return false
+  end
+  local key = "identity"
+  local filter = IdentityFilter()
+  if type(container._dcrIdentityKeys) ~= "table" then
+    container._dcrIdentityKeys = {}
+  end
+  local kind = container._dcrIdentityKeys[key]
+  if kind == "slot" and container.SetAuraSlotFilterString then
+    container:SetAuraSlotFilterString(key, filter)
+    return true
+  end
+  if kind == "group" and container.SetAuraGroupFilterString then
+    container:SetAuraGroupFilterString(key, filter)
+    return true
+  end
+  return AddIdentityCarrier(container, filter, options)
+end
+
 local function AttachIdentityTooltip(btn, pack, unit)
   if type(unit) ~= "string" or unit == "" then
     return
@@ -1026,20 +1065,16 @@ local function AttachIdentityTooltip(btn, pack, unit)
     pending = true
     return
   end
+  local options = IdentitySlotOptions(btn)
   if btn.identityContainer then
     local container = btn.identityContainer
+    if container.SetEnabled then
+      container:SetEnabled(false)
+    end
     if container.SetUnit then
       container:SetUnit(unit)
     end
-    if type(container._dcrIdentityKeys) ~= "table" then
-      container._dcrIdentityKeys = { identity = "slot" }
-    end
-    if not container._dcrIdentityKeys.alldebuffs then
-      if container.SetEnabled then
-        container:SetEnabled(false)
-      end
-      AddIdentityCarrier(container, "alldebuffs", "HARMFUL", IdentitySlotOptions(btn))
-    end
+    TuneIdentityCarrier(container, options)
     if container.SetEnabled then
       container:SetEnabled(true)
     end
@@ -1061,10 +1096,11 @@ local function AttachIdentityTooltip(btn, pack, unit)
   if not container.AddAuraSlot and not container.AddAuraGroup then
     return
   end
+  if container.SetEnabled then
+    container:SetEnabled(false)
+  end
   container:SetUnit(unit)
-  local options = IdentitySlotOptions(btn)
-  AddIdentityCarrier(container, "identity", "HARMFUL|RAID_PLAYER_DISPELLABLE", options)
-  AddIdentityCarrier(container, "alldebuffs", "HARMFUL", options)
+  AddIdentityCarrier(container, IdentityFilter(), options)
   if container.SetEnabled then
     container:SetEnabled(true)
   end
@@ -1197,7 +1233,7 @@ local function PaintManagedOverlays(btn, pack, unit)
     if showRange then
       local dim = pack.mufs.dimAmount
       if type(dim) ~= "number" then
-        dim = 0.45
+        dim = 0.60
       end
       btn.rangeOverlay:SetColorTexture(COLOR_RANGE_OVERLAY[1], COLOR_RANGE_OVERLAY[2], COLOR_RANGE_OVERLAY[3], dim)
       btn.rangeOverlay:Show()
@@ -1304,8 +1340,19 @@ local function UpdateStatusLights()
         btn.statusLightRange:Show()
       end
       local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
-      ApplyBooleanVertex(btn.statusLight, restricted ~= true, COLOR_READY, COLOR_FAIL)
-      local inRange = PrimaryCureRangeState(btn.unit, pack) == true
+      local now = GetTime and GetTime() or 0
+      local resultOn = COLOR_STATUS_READY
+      if restricted then
+        resultOn = COLOR_FAIL
+      elseif (btn.statusUntil or 0) > now then
+        if btn.statusOk then
+          resultOn = COLOR_READY
+        else
+          resultOn = COLOR_FAIL
+        end
+      end
+      ApplyBooleanVertex(btn.statusLight, true, resultOn, COLOR_STATUS_READY)
+      local inRange = PrimaryCureRangeState(btn.unit, pack)
       ApplyBooleanVertex(btn.statusLightRange, inRange, COLOR_CLEAR, COLOR_RANGE_YELLOW)
     else
       if btn.statusLight then
@@ -1376,7 +1423,25 @@ local function UpdateCooldowns()
   end
 end
 
+local function MarkStatusResult(destGUID, ok)
+  if type(destGUID) ~= "string" or destGUID == "" then
+    return
+  end
+  local now = GetTime and GetTime() or 0
+  for i = 1, #pool do
+    local btn = pool[i]
+    if btn.assigned and btn.unit and UnitGUID then
+      local guid = Public(UnitGUID(btn.unit))
+      if guid == destGUID then
+        btn.statusOk = ok == true
+        btn.statusUntil = now + 3
+      end
+    end
+  end
+end
+
 local function OnPlayerDispel(destGUID)
+  MarkStatusResult(destGUID, true)
   local pack = GetPack()
   if not pack.alerts.cooldown then
     return
@@ -1392,15 +1457,20 @@ local function OnCLEU()
   end
   local _timestamp, subevent, _hideCaster, sourceGUID, _sourceName, _sourceFlags, _sourceRaidFlags, destGUID = CombatLogGetCurrentEventInfo()
   subevent = Public(subevent)
-  if subevent ~= "SPELL_DISPEL" then
-    return
-  end
   sourceGUID = Public(sourceGUID)
+  destGUID = Public(destGUID)
   local playerGUID = UnitGUID and Public(UnitGUID("player"))
   if not sourceGUID or not playerGUID or sourceGUID ~= playerGUID then
     return
   end
-  OnPlayerDispel(Public(destGUID))
+  if subevent == "SPELL_CAST_FAILED" then
+    MarkStatusResult(destGUID, false)
+    return
+  end
+  if subevent ~= "SPELL_DISPEL" then
+    return
+  end
+  OnPlayerDispel(destGUID)
 end
 
 local function WireTooltip(btn)
@@ -1500,7 +1570,7 @@ local function CreateMUF(parent)
 
   btn.rangeOverlay = btn:CreateTexture(nil, "ARTWORK", nil, 5)
   btn.rangeOverlay:SetAllPoints(btn.fillTex)
-  btn.rangeOverlay:SetColorTexture(COLOR_RANGE_OVERLAY[1], COLOR_RANGE_OVERLAY[2], COLOR_RANGE_OVERLAY[3], 0.45)
+  btn.rangeOverlay:SetColorTexture(COLOR_RANGE_OVERLAY[1], COLOR_RANGE_OVERLAY[2], COLOR_RANGE_OVERLAY[3], 0.60)
   btn.rangeOverlay:Hide()
 
   btn.deadFill = btn:CreateTexture(nil, "ARTWORK", nil, 6)

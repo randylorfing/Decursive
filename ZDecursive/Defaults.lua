@@ -54,7 +54,7 @@ ns.PACK = {
     stealthStatus = true,
     scale = 1.5,
     dimOutOfRange = true,
-    dimAmount = 0.45,
+    dimAmount = 0.60,
     secondaryAffliction = true,
     pulseSecondary = false,
     shareCooldown = true,
@@ -217,6 +217,7 @@ ns.defaults = {
     accountProfile = "Default",
     characters = {},
     specs = {},
+    identityShowAllDebuffs = false,
   },
   char = {
     editingEnvironment = "OPEN_WORLD",
