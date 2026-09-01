@@ -1565,6 +1565,7 @@ function D:SetConfiguration() -- {{{
     D.Status.delayedDebuffOccurences = 0;
     D.Status.delayedUnDebuffOccurences = 0;
     D.Status.prio_macro = {};
+    D.Status.ConfigureComplete = false;
 
     D.Stealthed_Units = {};
 
@@ -1736,49 +1737,13 @@ function D:SetConfiguration() -- {{{
         end
     end
 
-    D.DcrFullyInitialized = true; -- everything should be OK
-
-    -- The aura-sound event frame can receive PLAYER_ENTERING_WORLD before the
-    -- main initialization flag becomes true. Always perform one clean deferred
-    -- registration pass here so live sound cannot depend on a later roster or
-    -- zoning event.
-    if D.RefreshProtectedAuraSounds then
-        if C_Timer and C_Timer.After then
-            C_Timer.After(0, function()
-                if D.DcrFullyInitialized and D.RefreshProtectedAuraSounds then
-                    D:RefreshProtectedAuraSounds("initialization complete");
-                end
-            end)
-        else
-            D:RefreshProtectedAuraSounds("initialization complete");
-        end
+    -- DcrFullyInitialized used to be set here even when Init's Configure
+    -- deferred in combat. PEW/zone/ScheduledTasks/rebuildMUFsAfterZone and
+    -- /zdmuf initialized=yes all honor this flag, so it must mean Configure
+    -- actually completed. Combat /reload recovery runs on PLAYER_REGEN_ENABLED.
+    if D.Status.ConfigureComplete then
+        D:MarkConfigurationReady("SetConfiguration");
     end
-
-    -- v11.0.2: initialize/migrate independent Party and Raid MUF sizes and
-    -- immediately apply the size matching the player's current group context.
-    if D.MicroUnitF and D.MicroUnitF.ApplyContextMUFScale then
-        D.MicroUnitF:ApplyContextMUFScale();
-    end
-
-    D:ShowHideButtons(true);
-    D:AutoHideShowMUFs();
-
-    -- SetConfiguration recreates D.Status and clears the authoritative roster.
-    -- It runs not only at initial login but also after profile copy/reset/swap.
-    -- Once player identity is available, always replay the bounded roster/MUF
-    -- convergence so a later configuration pass cannot erase a successful
-    -- PLAYER_ENTERING_WORLD recovery and leave only /reload able to restore it.
-    if DC.MyGUID and DC.MyGUID ~= "NONE" then
-        if D.RefreshDecursiveAfterRoster then
-            D:RefreshDecursiveAfterRoster("CONFIGURATION_COMPLETE");
-        elseif D.MicroUnitF and D.MicroUnitF.Delayed_MFsDisplay_Update then
-            D.Groups_datas_are_invalid = true;
-            D.MicroUnitF:Delayed_MFsDisplay_Update();
-        end
-    end
-
-
-    D.MicroUnitF:Delayed_Force_FullUpdate(); -- schedule all attributes of exixting MUF to update
 
     D:SetMinimapIcon();
 
@@ -1873,13 +1838,23 @@ function D:Init() --{{{
     end
 
     -- SET MF FRAME AS WRITTEN IN THE CURRENT PROFILE {{{
-    -- Set the scale and place the MF container correctly
+    -- Set the scale and place the MF container correctly. The container owns
+    -- secure MUF action buttons, so Hide/EnableMouse must not run in lockdown.
     if D.profile.ShowDebuffsFrame then
         D.MicroUnitF:Show();
-    else
+    elseif not (InCombatLockdown and InCombatLockdown()) then
         D.MFContainer:Hide();
     end
-    D.MFContainerHandle:EnableMouse(not D.profile.HideMUFsHandle);
+    if InCombatLockdown and InCombatLockdown() then
+        D:AddDelayedFunctionCall("Dcr_InitMUFHandleMouse", function()
+            if D.MFContainerHandle then
+                D.MFContainerHandle:EnableMouse(not D.profile.HideMUFsHandle);
+            end
+            return true;
+        end);
+    else
+        D.MFContainerHandle:EnableMouse(not D.profile.HideMUFsHandle);
+    end
 
     -- }}}
 
@@ -2065,6 +2040,9 @@ function D:Configure() --{{{
 
     if InCombatLockdown() then
         D:Debug("|cFFFF0000D:Configure postponed, in combat!|r");
+        if self.Status then
+            self.Status.ConfigureComplete = false;
+        end
         D:AddDelayedFunctionCall (
         "Configure", self.Configure,
         self);
@@ -2211,9 +2189,143 @@ function D:Configure() --{{{
 
     D:NotifyConfigurationChanged();
 
+    if self.Status then
+        self.Status.ConfigureComplete = true;
+    end
     return true;
 
 end --}}}
+
+-- Post-Configure work that used to run even when Configure deferred in combat.
+-- PEW/zone/ScheduledTasks/rebuildMUFsAfterZone and /zdmuf initialized=yes
+-- honor DcrFullyInitialized, so it is set only after Configure completed.
+function D:MarkConfigurationReady(reason)
+    if InCombatLockdown and InCombatLockdown() then
+        return false;
+    end
+    if not (self.Status and self.Status.ConfigureComplete) then
+        return false;
+    end
+
+    local firstReady = not self.DcrFullyInitialized;
+    self.DcrFullyInitialized = true;
+    if not firstReady then
+        return true;
+    end
+
+    if self.RefreshProtectedAuraSounds then
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0, function()
+                if D.DcrFullyInitialized and D.RefreshProtectedAuraSounds then
+                    D:RefreshProtectedAuraSounds("initialization complete");
+                end
+            end)
+        else
+            self:RefreshProtectedAuraSounds("initialization complete");
+        end
+    end
+
+    if self.MicroUnitF and self.MicroUnitF.ApplyContextMUFScale then
+        self.MicroUnitF:ApplyContextMUFScale();
+    end
+
+    self:ShowHideButtons(true);
+    self:AutoHideShowMUFs();
+
+    if DC.MyGUID and DC.MyGUID ~= "NONE" then
+        if self.RefreshDecursiveAfterRoster then
+            self:RefreshDecursiveAfterRoster(reason or "CONFIGURATION_COMPLETE");
+        elseif self.MicroUnitF and self.MicroUnitF.Delayed_MFsDisplay_Update then
+            self.Groups_datas_are_invalid = true;
+            self.MicroUnitF:Delayed_MFsDisplay_Update();
+        end
+    end
+
+    if self.MicroUnitF and self.MicroUnitF.Delayed_Force_FullUpdate then
+        self.MicroUnitF:Delayed_Force_FullUpdate();
+    end
+    return true;
+end
+
+-- One ordered post-lockdown flush. Do not add a CombatScheduler MUF path.
+-- Configure/SetCureOrder (prio_macro + SmartRez cache) THEN Show/Create THEN
+-- UpdateAttributes. DelayedFunctionCalls hash order is not this recovery.
+function D:RecoverSecureMUFsAfterCombat(reason)
+    if InCombatLockdown and InCombatLockdown() then
+        return false;
+    end
+    if type(self.Status) ~= "table" then
+        return false;
+    end
+
+    -- 1. Fill FoundSpells / prio_macro / SmartRez from the OOC path first.
+    --    An empty in-combat GetSmartRezActions cache must not be the source
+    --    of the first post-regen UpdateAttributes (H3).
+    if not self.Status.ConfigureComplete then
+        if self.Configure then
+            self:Configure();
+        end
+    else
+        if self.GetSmartRezActions then
+            self:GetSmartRezActions();
+        end
+        if self.SetCureOrder then
+            self:SetCureOrder();
+        end
+    end
+
+    if self.Status.ConfigureComplete then
+        self:MarkConfigurationReady(reason or "PLAYER_REGEN_ENABLED");
+    else
+        return false;
+    end
+
+    -- 2. Show the container if the profile wants MUFs visible.
+    if self.profile and self.profile.ShowDebuffsFrame and self.MicroUnitF and self.MicroUnitF.Show then
+        self.MicroUnitF:Show();
+    end
+
+    -- 3. Create missing squares for the current roster, then place them.
+    if self.GetUnitArray then
+        self.Groups_datas_are_invalid = true;
+        self:GetUnitArray();
+    end
+
+    local muf = self.MicroUnitF
+    local status = self.Status
+    if muf and muf.Create and type(status.Unit_Array) == "table" then
+        local unitNum = tonumber(status.UnitNum) or #status.Unit_Array
+        local maxUnit = tonumber(muf.MaxUnit) or unitNum
+        local numToShow = (maxUnit < unitNum) and maxUnit or unitNum
+        for i = 1, numToShow do
+            local unit = status.Unit_Array[i]
+            if type(unit) == "string" and (not muf.ExistingPerUNIT or not muf.ExistingPerUNIT[unit]) then
+                muf:Create(unit, i)
+            end
+        end
+    elseif self.DebuffsFrame_Update then
+        local passes = 12
+        for _ = 1, passes do
+            self:DebuffsFrame_Update()
+        end
+    end
+
+    if muf and muf.MFsDisplay_Update then
+        muf:MFsDisplay_Update();
+    end
+
+    -- 4. Install the OOC-built macrotext now that lockdown has lifted.
+    local existing = muf and muf.ExistingPerUNIT
+    if type(existing) == "table" then
+        for unit, MF in pairs(existing) do
+            if MF and MF.UpdateAttributes then
+                MF:UpdateAttributes(MF.CurrUnit or unit, true)
+            end
+        end
+    end
+
+    return true;
+end
 
 function D:SetSpellsTranslations(FromDIAG) -- {{{
 

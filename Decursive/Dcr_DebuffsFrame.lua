@@ -412,10 +412,11 @@ end -- }}}
 function MicroUnitF:Create(Unit, ID) -- {{{
 
     if InCombatLockdown() then
-        -- if we are fighting, postpone the call
+        -- if we are fighting, postpone the call. Pass self so the delayed
+        -- factory is MicroUnitF:Create(Unit, ID), not Create(Unit, ID).
         D:AddDelayedFunctionCall (
         "Create"..Unit, self.Create,
-        Unit, ID);
+        self, Unit, ID);
         return false;
     end
 

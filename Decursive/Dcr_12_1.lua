@@ -4106,6 +4106,7 @@ local function recordMUFStartupState(reason, phase)
     MUF_STARTUP_DIAG.phase = phase or "unknown"
     MUF_STARTUP_DIAG.time = GetTime and GetTime() or 0
     MUF_STARTUP_DIAG.initialized = D.DcrFullyInitialized == true
+    MUF_STARTUP_DIAG.configure = D.Status and D.Status.ConfigureComplete == true
     MUF_STARTUP_DIAG.combat = nativeConfigurationBlocked()
     MUF_STARTUP_DIAG.showSetting = D.profile and D.profile.ShowDebuffsFrame == true or false
     MUF_STARTUP_DIAG.autoHideMode = D.profile and tonumber(D.profile.AutoHideMUFs) or 0

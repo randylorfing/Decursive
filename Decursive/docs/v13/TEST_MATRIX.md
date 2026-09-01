@@ -197,26 +197,38 @@ type and confirm a non-dispelling specialization fails closed.
 - If the options companion has not loaded yet, opening settings in combat gives
   a clear retry-after-combat message and performs no LoadOnDemand mutation.
 
-## Combat /reload MUF macrotext (H2/H3)
+## Combat /reload MUF recovery (H2) — **blocker**
 
-Clicks work only on already-installed secure macrotext. Lit AuraContainer
-fill is not a click pass. `/zdmuf` `initialized=yes` is not proof Configure
-ran (`DcrFullyInitialized` is set even when Configure deferred). Record
-`/zdmuf`, `/zdsound`, and `/dcrstatus` after the stimulus and again after
-regen. `/zdmuf` `combat=` is InCombatLockdown(); `/dcrstatus`
-`Combat lockdown:` is D.Status.Combat — record both.
+H2 is a release **blocker**. After a `/reload` that begins while
+`InCombatLockdown()` is true, then regen, MUF squares MUST exist for the
+current roster AND have working installed `macrotext` (cure + smart
+rez/Soul Link as the out-of-combat path would build). No extra `/reload`.
+Recovery must not depend on DelayedFunctionCalls `pairs()` hash order,
+0.3s one-true-return ticks, or which of Configure vs Create vs
+UpdateAttributes wins.
+
+Clicks work only on already-installed secure `macrotext`. Lit
+AuraContainer fill is not a click pass. `/zdmuf` / `/dcrstatus` dumps
+are records, not a pass. `/zdmuf` `initialized=yes` must not mean
+Configure succeeded if it did not (`configure=` is the Configure-complete
+flag). `/zdmuf` `combat=` is InCombatLockdown(); `/dcrstatus`
+`Combat lockdown:` is D.Status.Combat — record both. In-game clicks stay
+unverified in PR text (no client on the agent).
 
 - Out of combat, a lit grouped MUF click MUST cleanse (control).
 - In combat, before any reload, a currently lit square MUST still click
-  (already-installed macrotext).
+  (already-installed macrotext). Do not rewrite or clear that
+  `macrotext` during lockdown.
 - `/reload` while still in combat (ordinary combat lockdown is enough;
   record if an M+ restriction is also on). Do not leave combat. Click a
   lit square, or any grouped square if none is lit: MUST be dead until
   regen. Squares themselves MAY be absent if Create/Show deferred. No
-  ADDON_ACTION_BLOCKED or ADDON_ACTION_FORBIDDEN.
+  ADDON_ACTION_BLOCKED or ADDON_ACTION_FORBIDDEN. Blizzard still blocks
+  SetAttribute / CreateFrame secure buttons / CreateMacro in lockdown.
 - Stay in combat at least 5 seconds and click again: still dead.
-- Leave combat, wait 1–2 seconds, dump the three commands, click again:
-  MUST work; `/zdmuf` existing matches roster.
+- Leave combat: the moment lockdown lifts, recovery is deterministic.
+  Squares present for the roster; clicks working. Dump the three
+  commands as a record, then click again.
 - First `/dcr` this session in combat with Decursive_Options not yet
   loaded: chat must be exactly `Settings cannot be loaded for the first
   time during combat. Try again after combat ends.`; existing MUF clicks
@@ -224,7 +236,9 @@ regen. `/zdmuf` `combat=` is InCombatLockdown(); `/dcrstatus`
 - `/dcrsoullink` in combat: enabled/disabled chat prints immediately;
   installed macrotext and overlay ownership MUST NOT change until regen.
   No blocked/forbidden. If combat `/reload` happened before any OOC
-  GetSmartRezActions build, overlay stays black (no-smart-rez-actions).
+  GetSmartRezActions build, overlay stays black (no-smart-rez-actions)
+  until regen rebuilds rez/Soul Link with Configure/SetCureOrder before
+  UpdateAttributes (H3).
 - `/reload` while InChatMessagingLockdown() is already true: `/zdsound`
   stays deferred; exact-ID live audio may be unavailable; no
   blocked/forbidden. After combat and chat-messaging lockdown both clear,

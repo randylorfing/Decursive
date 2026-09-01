@@ -440,6 +440,13 @@ do
         --D:Debug("Leaving combat");
         self.Status.Combat = false;
 
+        -- Deterministic H2/H3 recovery: Configure/SetCureOrder then Show/Create
+        -- then UpdateAttributes. Do this before other regen flushes so the
+        -- first post-lockdown attribute write cannot see an empty SmartRez cache.
+        if self.RecoverSecureMUFsAfterCombat then
+            self:RecoverSecureMUFsAfterCombat("PLAYER_REGEN_ENABLED");
+        end
+
         if self.ProfileManager then
             self.ProfileManager:HandleCombatEnded()
         end

@@ -75,6 +75,8 @@ fi
     || fail 'The automatic/manual cure-binding behavior harness is missing.'
 [ -f .github/scripts/test-cure-bindings-static.lua ] \
     || fail 'The secure cure-binding static harness is missing.'
+[ -f .github/scripts/test-muf-combat-reload-recovery.lua ] \
+    || fail 'The combat /reload MUF recovery harness is missing.'
 [ -f .github/scripts/run-fengari.js ] \
     || fail 'The reliable local Fengari status runner is missing.'
 [ -f .github/scripts/parse-lua-tree.js ] \
@@ -651,6 +653,7 @@ if [ -n "$lua_runner" ]; then
     "$lua_runner" .github/scripts/test-full-environment-variants-static.lua || status=1
     "$lua_runner" .github/scripts/test-cure-bindings.lua || status=1
     "$lua_runner" .github/scripts/test-cure-bindings-static.lua || status=1
+    "$lua_runner" .github/scripts/test-muf-combat-reload-recovery.lua || status=1
     if "$lua_runner" .github/scripts/test-profile-manager.lua --self-test-failure >/dev/null 2>&1; then
         fail 'The profile-manager harness failure self-test unexpectedly returned success.'
     else

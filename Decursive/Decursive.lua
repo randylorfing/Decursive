@@ -1565,9 +1565,10 @@ function D:PrintMUFStartupDiagnostics()
     end
 
     addLine("--- Zhaohu MUF startup diagnostics ---")
-    addLine(("Build: %s | initialized=%s | combat=%s"):format(
+    addLine(("Build: %s | initialized=%s | configure=%s | combat=%s"):format(
         tostring(self.version or "unknown"),
         self.DcrFullyInitialized and "yes" or "no",
+        (status.ConfigureComplete == true) and "yes" or "no",
         (InCombatLockdown and InCombatLockdown()) and "yes" or "no"))
     addLine(("Settings: ShowDebuffsFrame=%s | AutoHideMUFs=%s"):format(
         profile.ShowDebuffsFrame == true and "true" or "false",
