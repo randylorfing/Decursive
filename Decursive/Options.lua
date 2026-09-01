@@ -314,7 +314,7 @@ local function SetCustomMacro(value)
     pack.advanced = {}
   end
   if #value > MACRO_BYTE_LIMIT then
-    pack.advanced.customMacro = ""
+    pack.advanced.customMacro = nil
     local addon = Addon()
     if addon and addon.Print then
       addon:Print("custom macro dropped (over 255 bytes)")
