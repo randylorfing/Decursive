@@ -131,7 +131,7 @@ ns.PACK = {
     soundPreset = "FEMALE_DISPEL",
     soundChannel = "Master",
     soundDebounce = 2,
-    errorSound = false,
+    errorSound = true,
     nativeAuraSound = true,
     learnSpellIds = true,
     cooldown = true,
@@ -160,6 +160,7 @@ ns.PACK = {
     customMacro = "",
     noKeyWarn = false,
   },
+  customSpells = {},
 }
 
 ns.ENV_OVERRIDES = {
