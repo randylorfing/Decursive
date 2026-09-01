@@ -718,7 +718,7 @@ local function RefreshPreview()
     captionKind = "raid"
   end
   if ui.previewCaption then
-    ui.previewCaption:SetText(string.format("Size preview  ·  %s %dpx  ·  gap %dpx", captionKind, size, hSpace))
+    ui.previewCaption:SetText(string.format("Size preview - %s %dpx - gap %dpx", captionKind, size, hSpace))
   end
   local rowWidth = n * draw + (n - 1) * gap
   local startX
