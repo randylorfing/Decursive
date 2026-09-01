@@ -139,6 +139,9 @@ function Decursive:OnRegenEnabled()
   if ns.RefreshAlerts then
     ns.RefreshAlerts()
   end
+  if ns.ApplyAlertMoveMode then
+    ns.ApplyAlertMoveMode()
+  end
   if ns.RefreshLiveList then
     ns.RefreshLiveList()
   end

@@ -313,6 +313,9 @@ local function SetCustomMacro(value)
   if type(pack.advanced) ~= "table" then
     pack.advanced = {}
   end
+  if pack.advanced.allowMacroEdit ~= true then
+    return
+  end
   if #value > MACRO_BYTE_LIMIT then
     pack.advanced.customMacro = nil
     local addon = Addon()
@@ -1125,7 +1128,12 @@ local function Refresh()
     elseif bind.kind == "color" then
       bind.widget:SetColor(bind.get())
     elseif bind.kind == "text" then
-      bind.widget:SetText(MacroPreview(bind.get()))
+      local advanced = Pack().advanced
+      if type(advanced) ~= "table" or advanced.allowMacroEdit ~= true then
+        bind.widget:SetText("locked")
+      else
+        bind.widget:SetText(MacroPreview(bind.get()))
+      end
     end
   end
 
@@ -1223,6 +1231,10 @@ local function BindRow(parent, y, spec)
     widget = MakeButton(row, "empty", 220)
     widget:SetPoint("RIGHT", -12, 0)
     widget:SetScript("OnClick", function()
+      local advanced = Pack().advanced
+      if type(advanced) ~= "table" or advanced.allowMacroEdit ~= true then
+        return
+      end
       ShowModal(spec.label, spec.get() or "", spec.set)
     end)
   end

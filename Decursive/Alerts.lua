@@ -576,8 +576,13 @@ function ns.HandleAlertsSlash(msg)
     EnsureTextFrame()
     ApplyMoveMode()
     local state = moveMode and "unlocked" or "locked"
+    local locked = InCombatLockdown and InCombatLockdown()
     if DEFAULT_CHAT_FRAME then
-      DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text " .. state .. ". Drag to move, /dcralerts move to lock.")
+      if locked then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text " .. state .. " after combat. Drag then, /dcralerts move to lock.")
+      else
+        DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text " .. state .. ". Drag to move, /dcralerts move to lock.")
+      end
     end
     return
   end
@@ -615,8 +620,14 @@ function ns.HandleAlertDiagSlash(msg)
   ns.PrintAuraSoundDiagnostics(tonumber(msg), nil)
 end
 
+function ns.ApplyAlertMoveMode()
+  EnsureTextFrame()
+  ApplyMoveMode()
+end
+
 function ns.EnableAlerts(_addon)
   EnsureLearnedStore()
   RegisterEvents()
   ns.RefreshAlerts()
+  EnsureTextFrame()
 end
