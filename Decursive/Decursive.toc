@@ -1,0 +1,14 @@
+## Interface: 120100
+## Title: Zhaohu's Decursive
+## Notes: Click-to-cure configuration. Options persist across reloads.
+## Author: Zhaohu
+## Version: 13.0.0-options.1
+## SavedVariables: DecursiveRebuildDB
+## DefaultState: enabled
+## X-License: GPLv3
+## X-Website: https://github.com/randylorfing/Decursive-Rebuild
+
+embeds.xml
+Defaults.lua
+Core.lua
+Options.lua
