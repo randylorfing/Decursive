@@ -14,6 +14,8 @@ local DANGER = {0.75, 0.28, 0.22, 1}
 local ui = {
   tab = "mufs",
   frame = nil,
+  simple = true,
+  collapsed = {},
 }
 
 local function Addon()
@@ -386,6 +388,130 @@ local CATALOG = {
   {page = "advanced", label = "Allow macro editing", kind = "toggle", get = PathGet("advanced", "allowMacroEdit"), set = PathSet("advanced", "allowMacroEdit")},
 }
 
+
+local ROW_META = {
+  ["mufs|Show MUFs"] = {group = "Display", simple = true},
+  ["mufs|Lock position"] = {group = "Display", simple = true},
+  ["mufs|MUF hover tooltip"] = {group = "Display", simple = true},
+  ["mufs|Auto-hide MUFs"] = {group = "Display", simple = true},
+  ["mufs|Hide move handle"] = {group = "Display"},
+  ["mufs|Show help text"] = {group = "Display"},
+  ["mufs|Party MUF size"] = {group = "Size", simple = true, hideEnv = {RAID = true}},
+  ["mufs|Raid MUF size"] = {group = "Size", simple = true, hideEnv = {MYTHIC_PLUS = true, DUNGEON = true}},
+  ["mufs|MUF scale"] = {group = "Size"},
+  ["mufs|Maximum MUFs"] = {group = "Size"},
+  ["mufs|Units per line"] = {group = "Size", simple = true},
+  ["mufs|Link horizontal and vertical spacing"] = {group = "Spacing", simple = true},
+  ["mufs|Horizontal spacing"] = {group = "Spacing", simple = true},
+  ["mufs|Vertical spacing"] = {group = "Spacing", simple = true},
+  ["mufs|Grow upward"] = {group = "Layout"},
+  ["mufs|Grow from right edge"] = {group = "Layout"},
+  ["mufs|Fill columns before rows"] = {group = "Layout"},
+  ["mufs|Show MUF border"] = {group = "Look"},
+  ["mufs|Inactive opacity"] = {group = "Look"},
+  ["mufs|Center unit name"] = {group = "Look"},
+  ["mufs|Show stealth status"] = {group = "Look"},
+  ["mufs|Status indicator light"] = {group = "Status"},
+  ["mufs|Dim out of range"] = {group = "Status"},
+  ["mufs|Out-of-range dim"] = {group = "Status"},
+  ["mufs|Show secondary affliction"] = {group = "Status"},
+  ["mufs|Pulse secondary affliction"] = {group = "Status"},
+  ["mufs|Share cooldown with same-priority MUFs"] = {group = "Status"},
+  ["mufs|Clear cleansed target immediately"] = {group = "Status"},
+  ["mufs|Soul Link fallback"] = {group = "Status"},
+  ["mufs|Secondary affliction border"] = {group = "Status"},
+  ["mufs|Tie center and border opacity"] = {group = "Status"},
+  ["sorting|MUF order"] = {group = "Roster", simple = true},
+  ["sorting|Afflicted units first"] = {group = "Roster", simple = true},
+  ["sorting|Include player"] = {group = "Roster", simple = true},
+  ["sorting|Include pets"] = {group = "Roster", simple = true},
+  ["sorting|Center on player"] = {group = "Roster"},
+  ["sorting|Skip dead and offline"] = {group = "Roster"},
+  ["cure|Click mode"] = {group = "Clicks", simple = true},
+  ["cure|Left click"] = {group = "Clicks"},
+  ["cure|Right click"] = {group = "Clicks"},
+  ["cure|Magic"] = {group = "Types", simple = true},
+  ["cure|Curse"] = {group = "Types", simple = true},
+  ["cure|Poison"] = {group = "Types", simple = true},
+  ["cure|Disease"] = {group = "Types", simple = true},
+  ["cure|Enrage"] = {group = "Types", simple = true},
+  ["cure|Charm"] = {group = "Types"},
+  ["cure|Magic (charmed)"] = {group = "Types"},
+  ["cure|Bleed"] = {group = "Types", simple = true},
+  ["cure|Bleed-effect detection"] = {group = "Rules"},
+  ["cure|Do not skip priority-list units"] = {group = "Rules"},
+  ["cure|Cure pets"] = {group = "Rules"},
+  ["cure|Skip stealthed"] = {group = "Rules"},
+  ["color|Magic"] = {group = "Afflictions", simple = true},
+  ["color|Curse"] = {group = "Afflictions", simple = true},
+  ["color|Poison"] = {group = "Afflictions", simple = true},
+  ["color|Disease"] = {group = "Afflictions", simple = true},
+  ["color|Enrage"] = {group = "Afflictions", simple = true},
+  ["color|Charm"] = {group = "Afflictions"},
+  ["color|Bleed"] = {group = "Afflictions", simple = true},
+  ["color|Healthy MUF"] = {group = "Squares"},
+  ["color|Afflicted MUF"] = {group = "Squares"},
+  ["color|Border"] = {group = "Squares"},
+  ["color|Dead / offline"] = {group = "Squares"},
+  ["color|Out of range"] = {group = "Squares"},
+  ["color|Stealth"] = {group = "Squares"},
+  ["alerts|Dispel text alert"] = {group = "Dispel text", simple = true},
+  ["alerts|Display mode"] = {group = "Dispel text"},
+  ["alerts|Display duration"] = {group = "Dispel text"},
+  ["alerts|Text size"] = {group = "Dispel text"},
+  ["alerts|PvP text"] = {group = "Dispel text", simple = true},
+  ["alerts|Text alerts"] = {group = "Dispel text"},
+  ["alerts|Dispel sound"] = {group = "Sound", simple = true},
+  ["alerts|Sound"] = {group = "Sound"},
+  ["alerts|Sound channel"] = {group = "Sound"},
+  ["alerts|Group debounce"] = {group = "Sound"},
+  ["alerts|Cure-failure sound"] = {group = "Sound"},
+  ["alerts|Native 12.1 aura sounds"] = {group = "Sound"},
+  ["alerts|Learn spell IDs from successful dispels"] = {group = "Sound"},
+  ["alerts|Cooldown overlay"] = {group = "Cooldown", simple = true},
+  ["alerts|Countdown numbers"] = {group = "Cooldown"},
+  ["alerts|Overlay darkness"] = {group = "Cooldown"},
+  ["alerts|Out-of-range status"] = {group = "Cooldown"},
+  ["alerts|Print to default chat"] = {group = "Chat"},
+  ["alerts|Print to custom window"] = {group = "Chat"},
+  ["alerts|Print errors"] = {group = "Chat"},
+  ["alerts|Chat status messages"] = {group = "Chat"},
+  ["alerts|Soul Link battle-rez warning"] = {group = "Chat"},
+  ["alerts|Live list"] = {group = "Live list"},
+  ["alerts|Live list only in range"] = {group = "Live list"},
+  ["alerts|Live list rows"] = {group = "Live list"},
+  ["alerts|Live list scan (seconds)"] = {group = "Live list"},
+  ["alerts|Reverse live list"] = {group = "Live list"},
+  ["advanced|Debug chat"] = {group = "Engine"},
+  ["advanced|Check delay (seconds)"] = {group = "Engine"},
+  ["advanced|Hide start messages"] = {group = "Engine"},
+  ["advanced|Skip-list duration (seconds)"] = {group = "Engine"},
+  ["advanced|MUF refresh rate"] = {group = "Engine"},
+  ["advanced|Disable macro creation"] = {group = "Engine"},
+  ["advanced|Allow macro editing"] = {group = "Engine"},
+}
+
+local GROUP_ORDER = {
+  mufs = {"Display", "Size", "Spacing", "Layout", "Look", "Status"},
+  sorting = {"Roster"},
+  cure = {"Types", "Clicks", "Rules"},
+  color = {"Afflictions", "Squares"},
+  alerts = {"Dispel text", "Sound", "Cooldown", "Chat", "Live list"},
+  advanced = {"Engine"},
+}
+
+for _, spec in ipairs(CATALOG) do
+  local meta = ROW_META[spec.page .. "|" .. spec.label]
+  if meta then
+    spec.group = meta.group
+    spec.simple = meta.simple
+    spec.hideEnv = meta.hideEnv
+  else
+    spec.group = spec.group or "More"
+  end
+end
+
+
 local function ShowModal(title, defaultText, onAccept)
   local f = ui.modal
   f.title:SetText(title)
@@ -444,6 +570,91 @@ local function MatchesSearch(label)
     return true
   end
   return string.find(string.lower(label), q, 1, true) ~= nil
+end
+
+
+local function RowVisible(spec)
+  local env = Addon():GetEditingEnvironment()
+  if spec.hideEnv and spec.hideEnv[env] then
+    return false
+  end
+  local searching = ui.search and ui.search ~= ""
+  if searching then
+    return true
+  end
+  if ui.simple and not spec.simple then
+    return false
+  end
+  return true
+end
+
+local function IsCollapsed(page, group)
+  if ui.simple then
+    return false
+  end
+  local pageMap = ui.collapsed[page]
+  if not pageMap then
+    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Dispel text" and group ~= "Clicks"
+  end
+  if pageMap[group] == nil then
+    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Dispel text" and group ~= "Clicks"
+  end
+  return pageMap[group]
+end
+
+local function LayoutCatalog()
+  if not ui.sections then
+    return
+  end
+  for page, sections in pairs(ui.sections) do
+    local y = 0
+    local child = ui.pageChildren and ui.pageChildren[page]
+    for _, section in ipairs(sections) do
+      local visibleRows = {}
+      for _, item in ipairs(section.rows) do
+        if RowVisible(item.spec) then
+          visibleRows[#visibleRows + 1] = item
+        else
+          item.row:Hide()
+        end
+      end
+      if #visibleRows == 0 then
+        section.header:Hide()
+      else
+        section.header:Show()
+        section.header:ClearAllPoints()
+        section.header:SetPoint("TOPLEFT", 0, y)
+        section.header:SetPoint("TOPRIGHT", 0, y)
+        local collapsed = IsCollapsed(page, section.group)
+        local mark = collapsed and "+" or "-"
+        section.header.label:SetText(mark .. "  " .. section.group)
+        y = y - 32
+        if collapsed then
+          for _, item in ipairs(visibleRows) do
+            item.row:Hide()
+          end
+        else
+          for _, item in ipairs(visibleRows) do
+            item.row:Show()
+            item.row:ClearAllPoints()
+            item.row:SetPoint("TOPLEFT", 12, y)
+            item.row:SetPoint("TOPRIGHT", -12, y)
+            y = y - 40
+          end
+        end
+      end
+    end
+    if child then
+      child:SetHeight(math.max(80, -y + 16))
+    end
+  end
+  if ui.simpleBtn then
+    if ui.simple then
+      ui.simpleBtn:SetText("Simple")
+    else
+      ui.simpleBtn:SetText("All")
+    end
+  end
 end
 
 local function Refresh()
@@ -536,6 +747,7 @@ local function Refresh()
   local row = addon:GetSpecAssignment()
   ui.assign.specEnabled:SetOn(row and row.enabled)
   ui.assign.specProfile:SetText((row and row.profile) or "Default")
+  LayoutCatalog()
 end
 
 ns.RefreshOptions = Refresh
@@ -645,25 +857,60 @@ local function BuildPages(content)
   ui.searchRows = {}
   ui.scrollChildren = {}
 
+  ui.sections = {}
+  ui.pageChildren = {}
   for _, pageKey in ipairs(PAGES) do
     local wrap = CreateFrame("Frame", nil, content)
     wrap:SetAllPoints()
     local child = MakeScrollPage(wrap)
-    local card = MakeCard(child, PAGE_LABELS[pageKey])
-    card:SetPoint("TOPLEFT", 0, 0)
-    card:SetPoint("TOPRIGHT", 0, 0)
-    local y = -48
-    local count = 0
-    for _, spec in ipairs(CATALOG) do
-      if spec.page == pageKey then
-        BindRow(card, y, spec)
-        y = y - 40
-        count = count + 1
-      end
-    end
-    card:SetHeight(math.max(120, 64 + count * 40))
-    child:SetHeight(card:GetHeight() + 16)
+    ui.pageChildren[pageKey] = child
     ui.pages[pageKey] = wrap
+    if pageKey == "assign" then
+      ui.sections[pageKey] = {}
+    else
+      local grouped = {}
+      local order = GROUP_ORDER[pageKey] or {}
+      for _, spec in ipairs(CATALOG) do
+        if spec.page == pageKey then
+          local g = spec.group or "More"
+          if not grouped[g] then
+            grouped[g] = {}
+          end
+          grouped[g][#grouped[g] + 1] = spec
+        end
+      end
+      local sections = {}
+      for _, groupName in ipairs(order) do
+        local specs = grouped[groupName]
+        if specs then
+          local header = CreateFrame("Button", nil, child, "BackdropTemplate")
+          header:SetHeight(28)
+          Paint(header, {0.07, 0.11, 0.14, 1}, BORDER)
+          local hl = Font(header, "GameFontNormal", groupName)
+          hl:SetPoint("LEFT", 12, 0)
+          hl:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+          header.label = hl
+          header.group = groupName
+          header.page = pageKey
+          header:SetScript("OnClick", function(self)
+            if ui.simple then
+              return
+            end
+            ui.collapsed[self.page] = ui.collapsed[self.page] or {}
+            local now = IsCollapsed(self.page, self.group)
+            ui.collapsed[self.page][self.group] = not now
+            LayoutCatalog()
+          end)
+          local rows = {}
+          for _, spec in ipairs(specs) do
+            local row = BindRow(child, -40, spec)
+            rows[#rows + 1] = {row = row, spec = spec}
+          end
+          sections[#sections + 1] = {group = groupName, header = header, rows = rows}
+        end
+      end
+      ui.sections[pageKey] = sections
+    end
   end
 
   local assignWrap = ui.pages.assign
@@ -917,6 +1164,18 @@ local function BuildFrame()
   tabBar:SetPoint("TOPLEFT", 20, -186)
   tabBar:SetPoint("TOPRIGHT", -20, -186)
   tabBar:SetHeight(34)
+  ui.simpleBtn = MakeButton(tabBar, "Simple", 80, "gold")
+  ui.simpleBtn:SetPoint("RIGHT", 0, 0)
+  ui.simpleBtn:SetScript("OnClick", function()
+    ui.simple = not ui.simple
+    local addon = Addon()
+    if addon and addon.db then
+      addon.db.char.optionsSimple = ui.simple
+    end
+    LayoutCatalog()
+    Refresh()
+  end)
+
   ui.tabs = {}
   local tabX = 0
   for _, key in ipairs(PAGES) do
@@ -1022,6 +1281,10 @@ function ns.ShowOptions()
     BuildFrame()
   else
     ApplySavedSize(ui.frame)
+  end
+  local addon = Addon()
+  if addon and addon.db and addon.db.char and addon.db.char.optionsSimple ~= nil then
+    ui.simple = addon.db.char.optionsSimple
   end
   ui.frame:Show()
   LayoutScrollChildren()

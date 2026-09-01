@@ -219,6 +219,7 @@ ns.defaults = {
     editingEnvironment = "OPEN_WORLD",
     optionsWidth = 920,
     optionsHeight = 660,
+    optionsSimple = true,
   },
   profile = {
     environments = ns.MakeEnvironments(),

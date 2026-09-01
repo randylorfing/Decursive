@@ -2,7 +2,7 @@
 ## Title: Zhaohu's Decursive
 ## Notes: Click-to-cure configuration. Options persist across reloads.
 ## Author: Zhaohu
-## Version: 13.0.0-options.3
+## Version: 13.0.0-options.4
 ## SavedVariables: DecursiveRebuildDB
 ## DefaultState: enabled
 ## X-License: GPLv3
