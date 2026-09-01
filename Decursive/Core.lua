@@ -63,9 +63,28 @@ function Decursive:OnInitialize()
       ns.PrintSlashHelp()
     end
   end)
+  self:RegisterChatCommand("dcrdiag", function()
+    if ns.PrintDiagnostics then
+      ns.PrintDiagnostics()
+    end
+  end)
+  self:RegisterChatCommand("dcrreset", function(msg)
+    self:HandleResetSlash(msg)
+  end)
+  self:RegisterChatCommand("dcridentity", function()
+    if ns.PrintIdentity then
+      ns.PrintIdentity()
+    end
+  end)
+  self:RegisterChatCommand("dcralerts", function(msg)
+    if ns.HandleAlertsSlash then
+      ns.HandleAlertsSlash(msg)
+    end
+  end)
 end
 
 function Decursive:OnEnable()
+  self:EnsureSpecAssignments()
   self:ApplyResolvedProfile("login")
   self:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED", "OnSpecChanged")
   self:RegisterEvent("PLAYER_ENTERING_WORLD", "OnEnteringWorld")
@@ -110,10 +129,12 @@ function Decursive:OnRegenEnabled()
 end
 
 function Decursive:OnEnteringWorld()
+  self:EnsureSpecAssignments()
   self:ApplyResolvedProfile("world")
 end
 
 function Decursive:OnSpecChanged()
+  self:EnsureSpecAssignments()
   if ns.ScheduleFollowerRosterGuard then
     ns.ScheduleFollowerRosterGuard()
   end
@@ -226,17 +247,21 @@ function Decursive:EnsureLists()
 end
 
 function Decursive:EnsureEnvironments()
+  ns.lastMacroDrops = 0
   self:EnsureLists()
   local environments = self.db.profile.environments
   if type(environments) ~= "table" then
     self.db.profile.environments = ns.MakeEnvironments()
-    return
+    environments = self.db.profile.environments
   end
   for _, row in ipairs(ns.ENVIRONMENTS) do
     if type(environments[row.key]) ~= "table" then
       environments[row.key] = ns.MakePack(row.key)
     else
       self:FillMissing(environments[row.key], ns.PACK)
+    end
+    if ns.DropOversizedMacros then
+      ns.DropOversizedMacros(environments[row.key])
     end
   end
 end
@@ -400,16 +425,49 @@ function Decursive:RetargetAssignments(oldName, newName)
   end
 end
 
-function Decursive:GetSpecAssignment()
+function Decursive:SpecSlotCount()
+  local count
+  if C_SpecializationInfo and C_SpecializationInfo.GetNumSpecializations then
+    count = C_SpecializationInfo.GetNumSpecializations()
+  elseif GetNumSpecializations then
+    count = GetNumSpecializations()
+  end
+  if type(count) ~= "number" or count < 1 then
+    count = 4
+  end
+  if count > 4 then
+    count = 4
+  end
+  return count
+end
+
+function Decursive:EnsureSpecAssignments()
   local key = self:GetCharacterKey()
-  local spec = self:GetSpecIndex()
-  if not key or not spec then
-    return nil, nil
+  if not key then
+    return nil
   end
   local specMap = self.db.global.specs[key]
-  if not specMap then
+  if type(specMap) ~= "table" then
     specMap = {}
     self.db.global.specs[key] = specMap
+  end
+  for spec = 1, self:SpecSlotCount() do
+    if type(specMap[spec]) ~= "table" then
+      specMap[spec] = {enabled = false, profile = "Default"}
+    end
+  end
+  return specMap
+end
+
+function Decursive:GetSpecAssignment(specIndex)
+  local key = self:GetCharacterKey()
+  if not key then
+    return nil, nil
+  end
+  local specMap = self:EnsureSpecAssignments()
+  local spec = specIndex or self:GetSpecIndex()
+  if not spec or not specMap then
+    return nil, nil
   end
   local row = specMap[spec]
   if type(row) ~= "table" then
@@ -417,4 +475,25 @@ function Decursive:GetSpecAssignment()
     specMap[spec] = row
   end
   return row, spec
+end
+
+function Decursive:HandleResetSlash(msg)
+  msg = strtrim(tostring(msg or "")):lower()
+  if msg == "" or msg == "pack" or msg == "env" then
+    local env = self:GetEditingEnvironment()
+    self:ResetEditingPack()
+    self:Print("reset pack " .. tostring(env))
+    return
+  end
+  if msg == "profile" then
+    self:ResetCurrentProfile()
+    self:Print("reset profile " .. tostring(self.db:GetCurrentProfile()))
+    return
+  end
+  if msg == "all" then
+    self:ResetAllSettings()
+    self:Print("reset all settings")
+    return
+  end
+  self:Print("/dcrreset [pack|profile|all]")
 end

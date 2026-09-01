@@ -1697,10 +1697,166 @@ end
 function ns.PrintSlashHelp()
   SoulLinkChat("/dcr /decursive  options")
   SoulLinkChat("/dcrstatus  profile, environment, spec, detection dump")
+  SoulLinkChat("/dcrdiag  12.1 API, combat, packs, macro drop")
+  SoulLinkChat("/dcridentity  character, current spec, dormant spec rows")
+  SoulLinkChat("/dcralerts [on|off|status]  editing-pack alerts")
+  SoulLinkChat("/dcrreset [pack|profile|all]  reset editing pack by default")
   SoulLinkChat("/dcrhelp  this list")
   SoulLinkChat("/dcrpr /dcrsk  priority and skip lists")
   SoulLinkChat("/dcrsoullink [on|off|status]  emergency Soul Link fallback")
   SoulLinkChat("/zdsound [spellID] [unit]  aura sound diagnostic")
+end
+
+local MACRO_BYTE_LIMIT = 255
+local MACRO_STRING_KEYS = {
+  customMacro = true,
+  customMacroLeft = true,
+  customMacroRight = true,
+  customMacroShift = true,
+  customMacroCtrl = true,
+  customMacroAlt = true,
+  mouseoverMacro = true,
+  userMacro = true,
+  macrotext = true,
+}
+
+ns.lastMacroDrops = 0
+
+local function DropMacroString(parent, key)
+  local value = parent[key]
+  if type(value) ~= "string" then
+    return 0
+  end
+  if #value <= MACRO_BYTE_LIMIT then
+    return 0
+  end
+  parent[key] = nil
+  return 1
+end
+
+local function DropMacroTable(tbl)
+  local dropped = 0
+  if type(tbl) ~= "table" then
+    return 0
+  end
+  for key, value in pairs(tbl) do
+    if type(value) == "string" then
+      if #value > MACRO_BYTE_LIMIT then
+        tbl[key] = nil
+        dropped = dropped + 1
+      end
+    elseif type(value) == "table" then
+      dropped = dropped + DropMacroTable(value)
+    end
+  end
+  return dropped
+end
+
+function ns.DropOversizedMacros(pack)
+  local dropped = 0
+  if type(pack) ~= "table" then
+    return 0
+  end
+  local mufs = pack.mufs
+  if type(mufs) == "table" then
+    for key in pairs(MACRO_STRING_KEYS) do
+      dropped = dropped + DropMacroString(mufs, key)
+    end
+    if type(mufs.customMacros) == "table" then
+      dropped = dropped + DropMacroTable(mufs.customMacros)
+    end
+  end
+  local advanced = pack.advanced
+  if type(advanced) == "table" then
+    for key in pairs(MACRO_STRING_KEYS) do
+      dropped = dropped + DropMacroString(advanced, key)
+    end
+    if type(advanced.customMacros) == "table" then
+      dropped = dropped + DropMacroTable(advanced.customMacros)
+    end
+  end
+  ns.lastMacroDrops = (ns.lastMacroDrops or 0) + dropped
+  return dropped
+end
+
+function ns.PrintIdentity()
+  local addon = Addon()
+  local lines = {"identity"}
+  if addon and addon.GetCharacterKey then
+    lines[#lines + 1] = "character: " .. tostring(addon:GetCharacterKey() or "unknown")
+  end
+  local className, classFile
+  if UnitClass then
+    className, classFile = UnitClass("player")
+  end
+  className = Public(className)
+  classFile = Public(classFile)
+  if type(className) == "string" and className ~= "" then
+    lines[#lines + 1] = "class: " .. className .. " (" .. tostring(classFile or "") .. ")"
+  end
+  local current
+  if addon and addon.GetSpecIndex then
+    current = addon:GetSpecIndex()
+  end
+  if current then
+    local name = addon.GetSpecName and addon:GetSpecName(current) or tostring(current)
+    lines[#lines + 1] = "current spec: " .. tostring(name) .. " (" .. tostring(current) .. ")"
+  else
+    lines[#lines + 1] = "current spec: dormant this login"
+  end
+  if addon and addon.EnsureSpecAssignments then
+    local specMap = addon:EnsureSpecAssignments()
+    local count = addon.SpecSlotCount and addon:SpecSlotCount() or 4
+    for spec = 1, count do
+      local row = specMap and specMap[spec]
+      local label = addon.GetSpecName and addon:GetSpecName(spec) or ("Spec " .. tostring(spec))
+      local state
+      if spec == current then
+        state = "current"
+      else
+        state = "dormant"
+      end
+      if type(row) == "table" and row.enabled then
+        lines[#lines + 1] = state .. " spec " .. tostring(label) .. ": " .. tostring(row.profile)
+      else
+        lines[#lines + 1] = state .. " spec " .. tostring(label) .. ": off"
+      end
+    end
+  end
+  if addon and addon.db and addon.db.GetCurrentProfile then
+    lines[#lines + 1] = "resolved profile: " .. tostring(addon.db:GetCurrentProfile())
+  end
+  for i = 1, #lines do
+    SoulLinkChat(lines[i])
+  end
+end
+
+local function HasAPI(root, name)
+  return type(root) == "table" and type(root[name]) == "function"
+end
+
+function ns.PrintDiagnostics()
+  ns.PrintAddonStatus()
+  local lines = {
+    "display path: AuraContainer + AddAuraSlot",
+    "C_UnitAuras.AddAuraSound: " .. (HasAPI(C_UnitAuras, "AddAuraSound") and "yes" or "no"),
+    "C_Spell.IsSpellInRange: " .. (HasAPI(C_Spell, "IsSpellInRange") and "yes" or "no"),
+    "InCombatLockdown: " .. tostring(InCombatLockdown and InCombatLockdown() or false),
+    "InChatMessagingLockdown: " .. tostring(InChatMessagingLockdown and InChatMessagingLockdown() or false),
+    "canaccessvalue: " .. (type(canaccessvalue) == "function" and "yes" or "no"),
+    "issecretvalue: " .. (type(issecretvalue) == "function" and "yes" or "no"),
+    "macro byte drop last pass: " .. tostring(ns.lastMacroDrops or 0),
+  }
+  local addon = Addon()
+  if addon and addon.db and addon.db.profile and type(addon.db.profile.lists) == "table" then
+    local lists = addon.db.profile.lists
+    local prio = type(lists.priority) == "table" and #lists.priority or 0
+    local skip = type(lists.skip) == "table" and #lists.skip or 0
+    lines[#lines + 1] = "lists: prio " .. tostring(prio) .. " skip " .. tostring(skip)
+  end
+  for i = 1, #lines do
+    SoulLinkChat(lines[i])
+  end
 end
 
 function ns.ToggleSoulLinkFallback()

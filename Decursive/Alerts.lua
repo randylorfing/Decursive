@@ -339,7 +339,7 @@ local function ShowSoulLinkWarning(destName)
     return
   end
   local sl = ns.GetSoulLinkState and ns.GetSoulLinkState(pack)
-  if not sl or sl.available ~= true then
+  if sl and sl.enabled == false then
     return
   end
   local who = UnitLabel(nil, destName)
@@ -486,6 +486,60 @@ function ns.PrintAuraSoundDiagnostics(spellId, unitToken)
     end
   end
   return text
+end
+
+
+function ns.HandleAlertsSlash(msg)
+  msg = strtrim(tostring(msg or "")):lower()
+  local pack = GetPack()
+  if type(pack) ~= "table" then
+    return
+  end
+  if type(pack.alerts) ~= "table" then
+    pack.alerts = {}
+  end
+  local function Status()
+    local lines = {
+      "alerts status",
+      "sound: " .. tostring(pack.alerts.sound == true),
+      "dispelEnabled: " .. tostring(pack.alerts.dispelEnabled ~= false),
+      "nativeAuraSound: " .. tostring(pack.alerts.nativeAuraSound == true),
+      "chat: " .. tostring(pack.alerts.chat ~= false),
+      "errorSound: " .. tostring(pack.alerts.errorSound == true),
+    }
+    if DEFAULT_CHAT_FRAME then
+      for i = 1, #lines do
+        DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r " .. lines[i])
+      end
+    end
+  end
+  if msg == "on" then
+    pack.alerts.sound = true
+    pack.alerts.dispelEnabled = true
+    ns.RefreshAlerts()
+    if ns.Notify then
+      ns.Notify()
+    end
+    Status()
+    return
+  end
+  if msg == "off" then
+    pack.alerts.sound = false
+    pack.alerts.dispelEnabled = false
+    ns.RefreshAlerts()
+    if ns.Notify then
+      ns.Notify()
+    end
+    Status()
+    return
+  end
+  if msg ~= "" and msg ~= "status" then
+    if DEFAULT_CHAT_FRAME then
+      DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r /dcralerts [on|off|status]")
+    end
+    return
+  end
+  Status()
 end
 
 function ns.EnableAlerts(_addon)
