@@ -212,10 +212,10 @@ end
 
 local function ApplyMoveMode()
   if not textFrame then
-    return
+    return false
   end
   if InCombatLockdown and InCombatLockdown() then
-    return
+    return false
   end
   textFrame:EnableMouse(moveMode)
   textFrame:SetMovable(moveMode)
@@ -225,6 +225,7 @@ local function ApplyMoveMode()
   else
     textFrame:RegisterForDrag()
   end
+  return true
 end
 
 local function EnsureTextFrame()
@@ -574,14 +575,13 @@ function ns.HandleAlertsSlash(msg)
   if msg == "move" then
     moveMode = not moveMode
     EnsureTextFrame()
-    ApplyMoveMode()
-    local state = moveMode and "unlocked" or "locked"
-    local locked = InCombatLockdown and InCombatLockdown()
+    local applied = ApplyMoveMode()
     if DEFAULT_CHAT_FRAME then
-      if locked then
-        DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text " .. state .. " after combat. Drag then, /dcralerts move to lock.")
-      else
+      if applied then
+        local state = moveMode and "unlocked" or "locked"
         DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text " .. state .. ". Drag to move, /dcralerts move to lock.")
+      else
+        DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text move deferred until combat ends.")
       end
     end
     return
