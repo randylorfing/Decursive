@@ -98,6 +98,9 @@ end
 local function MakeToggle(parent)
   local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
   btn:SetSize(42, 22)
+  btn:EnableMouse(true)
+  btn:RegisterForClicks("LeftButtonUp")
+  btn:SetFrameLevel((parent:GetFrameLevel() or 1) + 5)
   Paint(btn, {0.18, 0.18, 0.2, 1}, {0.3, 0.3, 0.32, 1})
   local knob = btn:CreateTexture(nil, "OVERLAY")
   knob:SetColorTexture(0.75, 0.75, 0.75, 1)
@@ -149,11 +152,23 @@ local function MakeSlider(parent, minV, maxV, step)
   holder.slider = slider
   holder.valueText = valueText
   function holder:SetNumber(v)
+    holder._suppress = true
     slider:SetValue(v)
+    holder._suppress = false
     if step < 1 then
       valueText:SetText(string.format("%.2f", v))
     else
       valueText:SetText(tostring(math.floor(v + 0.5)))
+    end
+  end
+  function holder:SetEnabled(on)
+    slider:EnableMouse(not not on)
+    if on then
+      thumb:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+      valueText:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    else
+      thumb:SetColorTexture(0.35, 0.40, 0.42, 1)
+      valueText:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
     end
   end
   slider:SetScript("OnValueChanged", function(_, v)
@@ -161,6 +176,9 @@ local function MakeSlider(parent, minV, maxV, step)
       valueText:SetText(string.format("%.2f", v))
     else
       valueText:SetText(tostring(math.floor(v + 0.5)))
+    end
+    if holder._suppress then
+      return
     end
     if holder.OnValueChanged then
       holder:OnValueChanged(v)
@@ -253,6 +271,56 @@ local function PathSet(section, key)
     end
   end
 end
+
+local function AfterPackChange()
+  if ns.RefreshMUFs then
+    ns.RefreshMUFs()
+  end
+  if ns.RefreshAlerts then
+    ns.RefreshAlerts()
+  end
+  if ui.RefreshPreview then
+    ui.RefreshPreview()
+  end
+end
+
+local function SyncSpacingWidgets()
+  local linked = Pack().mufs.linkSpacing
+  for _, bind in ipairs(ui.binds or {}) do
+    if bind.label == "Horizontal spacing" or bind.label == "Vertical spacing" then
+      if bind.widget and bind.widget.SetNumber then
+        bind.widget:SetNumber(bind.get())
+      end
+    end
+    if bind.label == "Vertical spacing" and bind.widget and bind.widget.SetEnabled then
+      bind.widget:SetEnabled(not linked)
+    end
+  end
+end
+
+local function SetLinkSpacing(on)
+  local pack = Pack().mufs
+  pack.linkSpacing = not not on
+  if pack.linkSpacing then
+    pack.verticalSpacing = pack.horizontalSpacing or 2
+  end
+  AfterPackChange()
+  SyncSpacingWidgets()
+end
+
+local function SetLinkedSpacing(key)
+  return function(value)
+    local pack = Pack().mufs
+    pack[key] = value
+    if pack.linkSpacing then
+      pack.horizontalSpacing = value
+      pack.verticalSpacing = value
+    end
+    AfterPackChange()
+    SyncSpacingWidgets()
+  end
+end
+
 local PAGES = {"mufs", "sorting", "cure", "color", "alerts", "advanced", "assign"}
 local PAGE_LABELS = {
   mufs = "MUFs",
@@ -294,9 +362,9 @@ local CATALOG = {
   {page = "mufs", label = "Status indicator light", kind = "toggle", get = PathGet("mufs", "statusLight"), set = PathSet("mufs", "statusLight")},
   {page = "mufs", label = "Party MUF size", kind = "slider", min = 10, max = 80, step = 1, get = PathGet("mufs", "partySize"), set = PathSet("mufs", "partySize")},
   {page = "mufs", label = "Raid MUF size", kind = "slider", min = 10, max = 80, step = 1, get = PathGet("mufs", "raidSize"), set = PathSet("mufs", "raidSize")},
-  {page = "mufs", label = "Link horizontal and vertical spacing", kind = "toggle", get = PathGet("mufs", "linkSpacing"), set = PathSet("mufs", "linkSpacing")},
-  {page = "mufs", label = "Horizontal spacing", kind = "slider", min = 0, max = 100, step = 1, get = PathGet("mufs", "horizontalSpacing"), set = PathSet("mufs", "horizontalSpacing")},
-  {page = "mufs", label = "Vertical spacing", kind = "slider", min = 0, max = 100, step = 1, get = PathGet("mufs", "verticalSpacing"), set = PathSet("mufs", "verticalSpacing")},
+  {page = "mufs", label = "Link horizontal and vertical spacing", kind = "toggle", get = PathGet("mufs", "linkSpacing"), set = SetLinkSpacing},
+  {page = "mufs", label = "Horizontal spacing", kind = "slider", min = 0, max = 100, step = 1, get = PathGet("mufs", "horizontalSpacing"), set = SetLinkedSpacing("horizontalSpacing")},
+  {page = "mufs", label = "Vertical spacing", kind = "slider", min = 0, max = 100, step = 1, get = PathGet("mufs", "verticalSpacing"), set = SetLinkedSpacing("verticalSpacing")},
   {page = "mufs", label = "Grow upward", kind = "toggle", get = PathGet("mufs", "growUp"), set = PathSet("mufs", "growUp")},
   {page = "mufs", label = "Grow from right edge", kind = "toggle", get = PathGet("mufs", "growFromRight"), set = PathSet("mufs", "growFromRight")},
   {page = "mufs", label = "Fill columns before rows", kind = "toggle", get = PathGet("mufs", "verticalLayout"), set = PathSet("mufs", "verticalLayout")},
@@ -921,6 +989,9 @@ local function Refresh()
       bind.widget:SetOn(bind.get())
     elseif bind.kind == "slider" then
       bind.widget:SetNumber(bind.get())
+      if bind.label == "Vertical spacing" and bind.widget.SetEnabled then
+        bind.widget:SetEnabled(not Pack().mufs.linkSpacing)
+      end
     elseif bind.kind == "choice" then
       local v = bind.get()
       bind.widget:SetText(bind.values[v] or tostring(v))
@@ -997,7 +1068,7 @@ local function BindRow(parent, y, spec)
       spec.set(c)
     end
   end
-  ui.binds[#ui.binds + 1] = {kind = spec.kind, widget = widget, get = spec.get, set = spec.set, values = spec.values}
+  ui.binds[#ui.binds + 1] = {kind = spec.kind, widget = widget, get = spec.get, set = spec.set, values = spec.values, label = spec.label}
   return row
 end
 
