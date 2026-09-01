@@ -12,6 +12,9 @@ local function Notify()
   if ns.RefreshOptions then
     ns.RefreshOptions()
   end
+  if ns.RefreshMUFs then
+    ns.RefreshMUFs()
+  end
 end
 
 ns.Notify = Notify
@@ -28,6 +31,23 @@ function Decursive:OnEnable()
   self:ApplyResolvedProfile("login")
   self:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED", "OnSpecChanged")
   self:RegisterEvent("PLAYER_ENTERING_WORLD", "OnEnteringWorld")
+  self:RegisterEvent("GROUP_ROSTER_UPDATE", "OnGroupRosterUpdate")
+  self:RegisterEvent("PLAYER_REGEN_ENABLED", "OnRegenEnabled")
+  if ns.EnableMUFs then
+    ns.EnableMUFs(self)
+  end
+end
+
+function Decursive:OnGroupRosterUpdate()
+  if ns.RefreshMUFs then
+    ns.RefreshMUFs()
+  end
+end
+
+function Decursive:OnRegenEnabled()
+  if ns.RefreshMUFs then
+    ns.RefreshMUFs()
+  end
 end
 
 function Decursive:OnEnteringWorld()
@@ -185,8 +205,29 @@ function Decursive:ResetEditingPack()
   return true
 end
 
+function Decursive:CopyEditingPackTo(targetEnv)
+  if not ns.ENV_SET[targetEnv] then
+    return false, "env"
+  end
+  local src = self:GetEditingEnvironment()
+  if src == targetEnv then
+    return false, "same"
+  end
+  self:EnsureEnvironments()
+  self.db.profile.environments[targetEnv] = ns.DeepCopy(self:GetEditingPack())
+  Notify()
+  return true
+end
+
 function Decursive:ResetCurrentProfile()
   self.db.profile.environments = ns.MakeEnvironments()
+  Notify()
+  return true
+end
+
+function Decursive:ResetAllSettings()
+  self.db:ResetDB("Default")
+  self:EnsureEnvironments()
   Notify()
   return true
 end

@@ -1,8 +1,8 @@
 ## Interface: 120100
 ## Title: Zhaohu's Decursive
-## Notes: Click-to-cure configuration. Options persist across reloads.
+## Notes: Detect Dispel Protect
 ## Author: Zhaohu
-## Version: 13.0.0-options.4
+## Version: 13.0.0-mufs.1
 ## SavedVariables: DecursiveRebuildDB
 ## DefaultState: enabled
 ## X-License: GPLv3
@@ -11,4 +11,5 @@
 embeds.xml
 Defaults.lua
 Core.lua
+MUFs.lua
 Options.lua

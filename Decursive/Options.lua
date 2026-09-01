@@ -171,8 +171,9 @@ end
 
 local function MakeRow(parent, y, label)
   local row = CreateFrame("Frame", nil, parent)
-  row:SetSize(820, 36)
+  row:SetHeight(40)
   row:SetPoint("TOPLEFT", 16, y)
+  row:SetPoint("TOPRIGHT", -16, y)
   local name = Font(row, "GameFontHighlight", label)
   name:SetPoint("LEFT", 8, 0)
   name:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
@@ -511,15 +512,50 @@ for _, spec in ipairs(CATALOG) do
   end
 end
 
+local PAGE_HAS_SIMPLE = {}
+for _, spec in ipairs(CATALOG) do
+  if spec.simple then
+    PAGE_HAS_SIMPLE[spec.page] = true
+  end
+end
+
 
 local function ShowModal(title, defaultText, onAccept)
   local f = ui.modal
   f.title:SetText(title)
   f.edit:SetText(defaultText or "")
   f.edit:HighlightText()
+  f.edit:Show()
+  if f.hint then
+    f.hint:SetText("")
+    f.hint:Hide()
+  end
+  if f.ok then
+    f.ok:SetText("Save")
+  end
   f.onAccept = onAccept
+  f.confirmOnly = false
   f:Show()
   f.edit:SetFocus()
+end
+
+local function ShowConfirm(title, hint, onAccept)
+  local f = ui.modal
+  f.title:SetText(title)
+  f.edit:SetText("")
+  f.edit:Hide()
+  if f.hint then
+    f.hint:SetText(hint or "")
+    f.hint:Show()
+  end
+  if f.ok then
+    f.ok:SetText("Reset")
+  end
+  f.onAccept = function()
+    onAccept()
+  end
+  f.confirmOnly = true
+  f:Show()
 end
 
 local function HideModal()
@@ -564,6 +600,23 @@ local function OpenProfileMenu(anchor, onPick, includeInherit)
   end)
 end
 
+local function OpenEnvCopyMenu(anchor)
+  if not MenuUtil or not MenuUtil.CreateContextMenu then
+    return
+  end
+  local src = Addon():GetEditingEnvironment()
+  MenuUtil.CreateContextMenu(anchor, function(_, root)
+    root:CreateTitle("Copy " .. (ns.ENV_LABELS[src] or src) .. " to")
+    for _, row in ipairs(ns.ENVIRONMENTS) do
+      if row.key ~= src then
+        root:CreateButton(row.label, function()
+          Addon():CopyEditingPackTo(row.key)
+        end)
+      end
+    end
+  end)
+end
+
 local function MatchesSearch(label)
   local q = ui.search or ""
   if q == "" then
@@ -582,7 +635,7 @@ local function RowVisible(spec)
   if searching then
     return true
   end
-  if ui.simple and not spec.simple then
+  if ui.simple and not spec.simple and PAGE_HAS_SIMPLE[spec.page] then
     return false
   end
   return true
@@ -644,6 +697,19 @@ local function LayoutCatalog()
         end
       end
     end
+    local hint = ui.pageHints and ui.pageHints[page]
+    if hint then
+      if ui.simple then
+        hint:ClearAllPoints()
+        hint:SetPoint("TOPLEFT", 16, y - 8)
+        hint:SetPoint("TOPRIGHT", -16, y - 8)
+        hint:SetText("Click Simple (top right) to show all options for this environment.")
+        hint:Show()
+        y = y - 28
+      else
+        hint:Hide()
+      end
+    end
     if child then
       child:SetHeight(math.max(80, -y + 16))
     end
@@ -666,7 +732,7 @@ local function Refresh()
   local profile = addon.db:GetCurrentProfile()
   local env = addon:GetEditingEnvironment()
   ui.profileValue:SetText(profile)
-  ui.resolved:SetText("Active on login: " .. addon:ResolveProfileName())
+  ui.resolved:SetText("Active Profile on login: " .. addon:ResolveProfileName())
   ui.envHint:SetText("Editing " .. (ns.ENV_LABELS[env] or env) .. " inside " .. profile)
 
   for key, chip in pairs(ui.envChips) do
@@ -817,7 +883,7 @@ local function LayoutScrollChildren()
   end
   local inner = ui.body:GetWidth()
   if not inner or inner < 200 then
-    inner = 820
+    inner = 1040
   end
   for _, child in ipairs(ui.scrollChildren or {}) do
     child:SetWidth(inner)
@@ -835,17 +901,21 @@ end
 
 local function ApplySavedSize(f)
   local addon = Addon()
-  local w = 920
-  local h = 660
+  local w = 1100
+  local h = 780
   if addon and addon.db and addon.db.char then
     w = addon.db.char.optionsWidth or w
     h = addon.db.char.optionsHeight or h
   end
-  if w < 720 then
-    w = 720
+  if w <= 920 and h <= 660 then
+    w = 1100
+    h = 780
   end
-  if h < 480 then
-    h = 480
+  if w < 900 then
+    w = 900
+  end
+  if h < 580 then
+    h = 580
   end
   f:SetSize(w, h)
 end
@@ -859,6 +929,7 @@ local function BuildPages(content)
 
   ui.sections = {}
   ui.pageChildren = {}
+  ui.pageHints = {}
   for _, pageKey in ipairs(PAGES) do
     local wrap = CreateFrame("Frame", nil, content)
     wrap:SetAllPoints()
@@ -910,6 +981,12 @@ local function BuildPages(content)
         end
       end
       ui.sections[pageKey] = sections
+      local hint = Font(child, "GameFontHighlight", "Click Simple (top right) to show all options for this environment.")
+      hint:SetJustifyH("LEFT")
+      hint:SetHeight(18)
+      hint:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+      hint:Hide()
+      ui.pageHints[pageKey] = hint
     end
   end
 
@@ -1005,10 +1082,10 @@ local function BuildFrame()
   f:EnableMouse(true)
   f:SetClampedToScreen(true)
   if f.SetResizeBounds then
-    f:SetResizeBounds(720, 480, 1600, 1200)
+    f:SetResizeBounds(900, 580, 1800, 1400)
   else
-    f:SetMinResize(720, 480)
-    f:SetMaxResize(1600, 1200)
+    f:SetMinResize(900, 580)
+    f:SetMaxResize(1800, 1400)
   end
   ApplySavedSize(f)
   Paint(f, BG, BORDER)
@@ -1023,7 +1100,7 @@ local function BuildFrame()
   local header = CreateFrame("Frame", nil, f, "BackdropTemplate")
   header:SetPoint("TOPLEFT", 1, -3)
   header:SetPoint("TOPRIGHT", -1, -3)
-  header:SetHeight(64)
+  header:SetHeight(108)
   Paint(header, HEADER)
   header:EnableMouse(true)
   header:RegisterForDrag("LeftButton")
@@ -1035,14 +1112,33 @@ local function BuildFrame()
   end)
 
   local title = Font(header, "GameFontHighlightLarge", "Zhaohu's Decursive")
-  title:SetPoint("LEFT", 22, 8)
+  title:SetPoint("TOPLEFT", 22, -12)
   title:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-  local subtitle = Font(header, "GameFontDisable", "Profile first. Every setting lives inside the profile you are editing.")
+  local subtitle = Font(header, "GameFontDisable", "Detect Dispel Protect")
   subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
   subtitle:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
 
+  local status = CreateFrame("Frame", nil, header, "BackdropTemplate")
+  status:SetPoint("BOTTOMLEFT", 8, 8)
+  status:SetPoint("BOTTOMRIGHT", -8, 8)
+  status:SetHeight(36)
+  Paint(status, {0.06, 0.18, 0.20, 1}, GOLD)
+  local statusTick = status:CreateTexture(nil, "ARTWORK")
+  statusTick:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
+  statusTick:SetPoint("TOPLEFT", 0, 0)
+  statusTick:SetPoint("BOTTOMLEFT", 0, 0)
+  statusTick:SetWidth(4)
+
+  ui.envHint = Font(status, "GameFontHighlightLarge", "Editing Open World inside Default")
+  ui.envHint:SetPoint("LEFT", 16, 0)
+  ui.envHint:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+
+  ui.resolved = Font(status, "GameFontHighlightLarge", "Active Profile on login: Default")
+  ui.resolved:SetPoint("RIGHT", -16, 0)
+  ui.resolved:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
+
   local close = MakeButton(header, "Close", 72)
-  close:SetPoint("RIGHT", -16, 0)
+  close:SetPoint("TOPRIGHT", -16, -14)
   close:SetScript("OnClick", function()
     f:Hide()
   end)
@@ -1079,8 +1175,8 @@ local function BuildFrame()
   end)
 
   local profileBar = CreateFrame("Frame", nil, f)
-  profileBar:SetPoint("TOPLEFT", 20, -80)
-  profileBar:SetPoint("TOPRIGHT", -20, -80)
+  profileBar:SetPoint("TOPLEFT", 20, -116)
+  profileBar:SetPoint("TOPRIGHT", -20, -116)
   profileBar:SetHeight(48)
 
   local profileLabel = Font(profileBar, "GameFontNormal", "PROFILE")
@@ -1123,42 +1219,53 @@ local function BuildFrame()
     end)
   end)
 
-  local resetBtn = MakeButton(profileBar, "Reset", 72)
-  resetBtn:SetPoint("LEFT", renameBtn, "RIGHT", 6, 0)
-  resetBtn:SetScript("OnClick", function()
-    Addon():ResetEditingPack()
-  end)
-
   local deleteBtn = MakeButton(profileBar, "Delete", 72, "danger")
-  deleteBtn:SetPoint("LEFT", resetBtn, "RIGHT", 6, 0)
+  deleteBtn:SetPoint("LEFT", renameBtn, "RIGHT", 6, 0)
   deleteBtn:SetScript("OnClick", function()
     Addon():DeleteCurrentProfile()
     Refresh()
   end)
 
-  ui.resolved = Font(profileBar, "GameFontDisable", "")
-  ui.resolved:SetPoint("RIGHT", 0, -12)
-  ui.resolved:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  local resetAllBtn = MakeButton(profileBar, "Reset all", 88, "danger")
+  resetAllBtn:SetPoint("RIGHT", 0, -12)
+  resetAllBtn:SetScript("OnClick", function()
+    ShowConfirm("Reset everything?", "Every profile, assignment, and window setting goes back to factory defaults.", function()
+      Addon():ResetAllSettings()
+    end)
+  end)
 
   local envBar = CreateFrame("Frame", nil, f)
-  envBar:SetPoint("TOPLEFT", 20, -136)
-  envBar:SetPoint("TOPRIGHT", -20, -136)
-  envBar:SetHeight(36)
-  ui.envHint = Font(envBar, "GameFontDisable", "")
-  ui.envHint:SetPoint("TOPLEFT", 0, 0)
-  ui.envHint:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  envBar:SetPoint("TOPLEFT", 20, -176)
+  envBar:SetPoint("TOPRIGHT", -20, -176)
+  envBar:SetHeight(28)
 
   ui.envChips = {}
   local chipX = 0
   for _, row in ipairs(ns.ENVIRONMENTS) do
     local chip = MakeButton(envBar, row.label, 118)
-    chip:SetPoint("TOPLEFT", chipX, -14)
+    chip:SetPoint("TOPLEFT", chipX, 0)
     chip:SetScript("OnClick", function()
       Addon():SetEditingEnvironment(row.key)
     end)
     ui.envChips[row.key] = chip
     chipX = chipX + 126
   end
+
+  local envResetBtn = MakeButton(envBar, "Reset env", 88)
+  envResetBtn:SetPoint("TOPRIGHT", 0, 0)
+  envResetBtn:SetScript("OnClick", function()
+    local env = Addon():GetEditingEnvironment()
+    local label = ns.ENV_LABELS[env] or env
+    ShowConfirm("Reset " .. label .. "?", "Only this environment inside the current profile goes back to defaults.", function()
+      Addon():ResetEditingPack()
+    end)
+  end)
+
+  local envCopyBtn = MakeButton(envBar, "Copy to", 80)
+  envCopyBtn:SetPoint("RIGHT", envResetBtn, "LEFT", -6, 0)
+  envCopyBtn:SetScript("OnClick", function(self)
+    OpenEnvCopyMenu(self)
+  end)
 
   ui.simpleBtn = MakeButton(header, "Simple", 72, "gold")
   ui.simpleBtn:SetPoint("RIGHT", searchBox, "LEFT", -8, 0)
@@ -1173,8 +1280,8 @@ local function BuildFrame()
   end)
 
   local tabBar = CreateFrame("Frame", nil, f)
-  tabBar:SetPoint("TOPLEFT", 20, -186)
-  tabBar:SetPoint("TOPRIGHT", -20, -186)
+  tabBar:SetPoint("TOPLEFT", 20, -214)
+  tabBar:SetPoint("TOPRIGHT", -20, -214)
   tabBar:SetHeight(34)
   ui.tabs = {}
   local tabX = 0
@@ -1189,7 +1296,7 @@ local function BuildFrame()
   end
 
   local body = CreateFrame("Frame", nil, f)
-  body:SetPoint("TOPLEFT", 20, -230)
+  body:SetPoint("TOPLEFT", 20, -256)
   body:SetPoint("BOTTOMRIGHT", -20, 20)
   ui.body = body
   BuildPages(body)
@@ -1223,6 +1330,12 @@ local function BuildFrame()
   modal.title = Font(box, "GameFontHighlightLarge", "")
   modal.title:SetPoint("TOPLEFT", 20, -18)
   modal.title:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+  modal.hint = Font(box, "GameFontDisable", "")
+  modal.hint:SetPoint("TOPLEFT", 20, -52)
+  modal.hint:SetWidth(380)
+  modal.hint:SetJustifyH("LEFT")
+  modal.hint:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  modal.hint:Hide()
   local edit = CreateFrame("EditBox", nil, box, "BackdropTemplate")
   edit:SetSize(380, 32)
   edit:SetPoint("TOP", 0, -56)
@@ -1233,16 +1346,25 @@ local function BuildFrame()
   edit:SetScript("OnEscapePressed", HideModal)
   edit:SetScript("OnEnterPressed", function(self)
     if modal.onAccept then
-      modal.onAccept(self:GetText())
+      if modal.confirmOnly then
+        modal.onAccept()
+      else
+        modal.onAccept(self:GetText())
+      end
     end
     HideModal()
   end)
   modal.edit = edit
   local ok = MakeButton(box, "Save", 88, "gold")
+  modal.ok = ok
   ok:SetPoint("BOTTOMRIGHT", -20, 16)
   ok:SetScript("OnClick", function()
     if modal.onAccept then
-      modal.onAccept(edit:GetText())
+      if modal.confirmOnly then
+        modal.onAccept()
+      else
+        modal.onAccept(edit:GetText())
+      end
     end
     HideModal()
   end)

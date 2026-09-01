@@ -217,9 +217,10 @@ ns.defaults = {
   },
   char = {
     editingEnvironment = "OPEN_WORLD",
-    optionsWidth = 920,
-    optionsHeight = 660,
+    optionsWidth = 1100,
+    optionsHeight = 780,
     optionsSimple = true,
+    mufPoint = {point = "CENTER", x = 0, y = 0},
   },
   profile = {
     environments = ns.MakeEnvironments(),
