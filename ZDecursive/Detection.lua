@@ -919,7 +919,14 @@ end
 function ns.InvalidateDetection()
   cache.signature = nil
   cache.model = nil
-  smartRezCache = nil
+  -- Combat consumers must keep the resurrection state of the installed clicks.
+  -- GetSmartRezActions rebuilds it from current capabilities out of combat.
+  if not (InCombatLockdown and InCombatLockdown()) then
+    smartRezCache = nil
+  end
+  if ns.InvalidateClickModel then
+    ns.InvalidateClickModel("DETECTION_INVALIDATED")
+  end
   if ns.DiagnosticModuleRefresh then
     ns.DiagnosticModuleRefresh("Detection")
   end
@@ -1403,15 +1410,25 @@ end
 local lastArenaHint
 
 function ns.IsArenaInstance()
+  local publicInstanceType = ns.GetPublicInstanceType()
+  if type(publicInstanceType) == "string" and publicInstanceType ~= "" then
+    if publicInstanceType == "arena" then
+      lastArenaHint = "arena"
+      return true
+    end
+    lastArenaHint = nil
+    return false
+  end
   if IsInInstance then
-    local inInstance, instanceType = IsInInstance()
+    local _inInstance, instanceType = IsInInstance()
     instanceType = Public(instanceType)
     if instanceType == "arena" then
       lastArenaHint = "arena"
       return true
     end
-    if lastArenaHint == "arena" and (instanceType == nil or instanceType == "" or instanceType == "none") then
-      return true
+    if type(instanceType) == "string" and instanceType ~= "" then
+      lastArenaHint = nil
+      return false
     end
   end
   if IsActiveBattlefieldArena then
@@ -1422,10 +1439,6 @@ function ns.IsArenaInstance()
     end
   end
   if C_PvP and C_PvP.IsArena and IsTrue(C_PvP.IsArena()) then
-    lastArenaHint = "arena"
-    return true
-  end
-  if ns.GetPublicInstanceType() == "arena" then
     lastArenaHint = "arena"
     return true
   end
@@ -1541,6 +1554,7 @@ end
 function ns.ResetRosterForWorldTransition(reason)
   follower.generation = follower.generation + 1
   ClearFollowerSnapshot()
+  lastArenaHint = nil
   rosterContext.transitionReason = type(reason) == "string" and reason or "WORLD_TRANSITION"
   if ns.DiagnosticRecord then
     ns.DiagnosticRecord("FOLLOWER_SNAPSHOT", {
@@ -1863,16 +1877,7 @@ function ns.BuildRoster(pack)
   local size = GroupSize()
   local context = ReadRosterContext()
   if IsInRaid and IsInRaid() then
-    local maxIndex = 40
-    if inArena then
-      if size > 0 and size < maxIndex then
-        maxIndex = size
-      else
-        maxIndex = 5
-      end
-    elseif size > 0 and size < maxIndex then
-      maxIndex = size
-    end
+    local maxIndex = size > 0 and math.min(40, size) or 40
     for i = 1, maxIndex do
       local unit = "raid" .. i
       AppendUnit(units, seen, unit, pack)

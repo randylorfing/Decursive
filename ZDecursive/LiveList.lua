@@ -340,6 +340,9 @@ end
 
 local function WireRow(row)
   row:RegisterForClicks("AnyUp")
+  row:SetAttribute("*type1", "target")
+  row:SetAttribute("*type2", "focus")
+  row:SetAttribute("*type3", "assist")
   row:SetScript("OnEnter", function(self)
     local unit = self.unit
     if not unit or not GameTooltip then
@@ -354,29 +357,10 @@ local function WireRow(row)
       GameTooltip:Hide()
     end
   end)
-  row:SetScript("OnClick", function(self, button)
-    local unit = self.unit
-    if type(unit) ~= "string" then
-      return
-    end
-    if button == "RightButton" then
-      if FocusUnit then
-        FocusUnit(unit)
-      end
-    elseif button == "MiddleButton" then
-      if AssistUnit then
-        AssistUnit(unit)
-      end
-    else
-      if TargetUnit then
-        TargetUnit(unit)
-      end
-    end
-  end)
 end
 
 local function CreateRow(parent)
-  local row = CreateFrame("Button", nil, parent, "BackdropTemplate")
+  local row = CreateFrame("Button", nil, parent, "SecureUnitButtonTemplate,BackdropTemplate")
   row:SetSize(ROW_W, ROW_H)
   row:EnableMouse(true)
   row:SetClampedToScreen(true)
@@ -425,6 +409,10 @@ local function EnsurePool()
   if not header then
     return false
   end
+  if LockedDown() then
+    pending = true
+    return false
+  end
   for i = 1, MAX_ROWS do
     pool[i] = CreateRow(header)
   end
@@ -433,6 +421,10 @@ local function EnsurePool()
 end
 
 local function HideUnused(fromIndex)
+  if LockedDown() then
+    pending = true
+    return false
+  end
   if not poolReady then
     return true
   end
@@ -446,12 +438,17 @@ local function HideUnused(fromIndex)
     end
     row.assigned = false
     row.unit = nil
+    row:SetAttribute("unit", nil)
     row:Hide()
   end
   return cleared
 end
 
 local function HideAll()
+  if LockedDown() then
+    pending = true
+    return false
+  end
   if header then
     header:Hide()
   end
@@ -459,6 +456,10 @@ local function HideAll()
 end
 
 local function LayoutRows(units, pack)
+  if LockedDown() then
+    pending = true
+    return false, "DEFERRED_COMBAT"
+  end
   local reverse = pack.alerts.liveListReverse
   local n = #units
   local height = HANDLE_H + math.max(n, 0) * (ROW_H + 1)
@@ -478,6 +479,7 @@ local function LayoutRows(units, pack)
     if unit then
       row.unit = unit
       row.assigned = true
+      row:SetAttribute("unit", unit)
       row:ClearAllPoints()
       local offset = HANDLE_H + (i - 1) * (ROW_H + 1)
       if reverse then
@@ -500,6 +502,7 @@ local function LayoutRows(units, pack)
       end
       row.assigned = false
       row.unit = nil
+      row:SetAttribute("unit", nil)
       row:Hide()
     end
   end
@@ -559,6 +562,10 @@ local function EnsureHeader()
   if header then
     return true
   end
+  if LockedDown() then
+    pending = true
+    return false
+  end
   header = CreateFrame("Frame", "DecursiveRebuildLiveList", UIParent)
   header:SetSize(ROW_W, HANDLE_H)
   header:SetClampedToScreen(true)
@@ -586,12 +593,20 @@ local function EnsureHeader()
   handle.label:SetTextColor(TEAL[1], TEAL[2], TEAL[3])
   handle.isMoving = false
   handle:SetScript("OnMouseDown", function(self, button)
-    if button == "LeftButton" then
+    if button == "LeftButton" and not LockedDown() then
       self.isMoving = true
       header:StartMoving()
     end
   end)
   handle:SetScript("OnMouseUp", function(self, button)
+    if LockedDown() then
+      if self.isMoving then
+        self.stopMovingPending = true
+        pending = true
+      end
+      self.isMoving = false
+      return
+    end
     if self.isMoving then
       header:StopMovingOrSizing()
       self.isMoving = false
@@ -604,7 +619,12 @@ local function EnsureHeader()
   end)
   handle:SetScript("OnHide", function(self)
     if self.isMoving then
-      header:StopMovingOrSizing()
+      if LockedDown() then
+        self.stopMovingPending = true
+        pending = true
+      else
+        header:StopMovingOrSizing()
+      end
     end
     self.isMoving = false
   end)
@@ -631,6 +651,15 @@ end
 
 function ns.LayoutLiveList()
   local pack = GetPack()
+  if LockedDown() then
+    pending = true
+    return false, "DEFERRED_COMBAT", 0
+  end
+  if handle and handle.stopMovingPending and header then
+    header:StopMovingOrSizing()
+    handle.stopMovingPending = nil
+    SavePoint()
+  end
   if not pack.alerts or not pack.alerts.liveList then
     if header then
       local hidden = HideAll() == true
@@ -638,10 +667,6 @@ function ns.LayoutLiveList()
     end
     pending = false
     return true, "SUCCESS", 0
-  end
-  if LockedDown() then
-    pending = true
-    return
   end
   if not EnsureHeader() then
     pending = true

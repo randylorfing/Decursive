@@ -94,6 +94,7 @@ local Engine = {
   pendingReasons = {},
   dirtyGeneration = 0,
   committedGeneration = 0,
+  itemActionRefreshScheduled = false,
 }
 
 local function LockedDown()
@@ -1187,6 +1188,31 @@ function Engine:OnEvent(event, arg1, arg2)
     end
     return
   end
+  if event == "BAG_UPDATE_DELAYED" or event == "ITEM_COUNT_CHANGED"
+    or event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_DATA_LOAD_RESULT" then
+    if (event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_DATA_LOAD_RESULT") and arg2 == false then
+      return
+    end
+    if self.itemActionRefreshScheduled then
+      return
+    end
+    self.itemActionRefreshScheduled = true
+    local function refreshItemActions()
+      Engine.itemActionRefreshScheduled = false
+      if ns.InvalidateDetection then
+        ns.InvalidateDetection()
+      elseif ns.InvalidateClickModel then
+        ns.InvalidateClickModel("ITEM_ACTIONS_CHANGED")
+      end
+      Engine:Refresh("ITEM_ACTIONS_CHANGED")
+    end
+    if C_Timer and type(C_Timer.After) == "function" then
+      C_Timer.After(0, refreshItemActions)
+    else
+      refreshItemActions()
+    end
+    return
+  end
   if event == "SPELLS_CHANGED" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED" or event == "PLAYER_TALENT_UPDATE" then
     if ns.InvalidateDetection then
       ns.InvalidateDetection()
@@ -1227,6 +1253,10 @@ function Engine:RegisterEvents()
     "PLAYER_ROLES_ASSIGNED",
     "PLAYER_TALENT_UPDATE",
     "ADDON_RESTRICTION_STATE_CHANGED",
+    "BAG_UPDATE_DELAYED",
+    "ITEM_COUNT_CHANGED",
+    "GET_ITEM_INFO_RECEIVED",
+    "ITEM_DATA_LOAD_RESULT",
   }
   for i = 1, #events do
     local event = events[i]

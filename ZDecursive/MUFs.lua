@@ -66,7 +66,11 @@ local AUTO_CURE_GESTURES = {
   "*%s1",
   "*%s2",
   "ctrl-%s1",
+  -- Keep three cures reachable when configured actions reserve left/right.
+  "ctrl-%s2",
+  "shift-%s1",
 }
+local AUTO_CURE_LIMIT = 3
 
 local TARGET_GESTURE = "*%s3"
 local FOCUS_GESTURE = "ctrl-%s3"
@@ -783,6 +787,14 @@ local function BindAuraSlot(slot, pack, cover, slotInfo)
   end
 end
 
+local function CureActionKey(action)
+  if type(action.spellId) == "number" and action.spellId > 0 then
+    return "spell:" .. tostring(action.spellId)
+  elseif type(action.itemId) == "number" and action.itemId > 0 then
+    return "item:" .. tostring(action.itemId)
+  end
+end
+
 local function DistinctFriendlyCures(pack)
   local actions = ns.GetKnownCures and ns.GetKnownCures(pack) or {}
   local out = {}
@@ -816,6 +828,15 @@ local function DistinctFriendlyCures(pack)
     end
   end
   return out
+end
+
+function ns.GetManualClickActions(pack)
+  local actions = DistinctFriendlyCures(pack)
+  local choices = {}
+  for i = 1, #actions do
+    choices[i] = {key = CureActionKey(actions[i]), name = actions[i].name}
+  end
+  return choices
 end
 
 local function BuildSmartRezMacroText(cureCommand, cureName, cureUsesPet)
@@ -1038,6 +1059,15 @@ local function ClickSignature(pack)
     bits[#bits + 1] = tostring(advanced.allowMacroEdit)
     bits[#bits + 1] = tostring(advanced.customMacro)
   end
+  local mufs = pack.mufs
+  bits[#bits + 1] = tostring(type(mufs) == "table" and mufs.soulLinkFallback ~= false)
+  if ns.GetSmartRezActions then
+    local battleRez, outOfCombatRez, combatSoulLink, outOfCombatSoulLink = ns.GetSmartRezActions(pack)
+    bits[#bits + 1] = tostring(battleRez)
+    bits[#bits + 1] = tostring(outOfCombatRez)
+    bits[#bits + 1] = tostring(combatSoulLink == true)
+    bits[#bits + 1] = tostring(outOfCombatSoulLink == true)
+  end
   return table.concat(bits, "|")
 end
 
@@ -1064,6 +1094,48 @@ local function BandageRow(bandage)
   }
 end
 
+local SECURE_MOUSE_ACTIONS = {
+  TARGET = {secureType = "target", action = "Target", kind = "TARGET"},
+  FOCUS = {secureType = "focus", action = "Focus", kind = "FOCUS"},
+  ASSIST = {secureType = "assist", action = "Assist", kind = "ASSIST"},
+}
+
+local function AddBandageRow(rows, used, bandage)
+  if used[PVP_BANDAGE_GESTURE] then
+    return
+  end
+  local row = BandageRow(bandage)
+  if row then
+    rows[#rows + 1] = row
+    used[PVP_BANDAGE_GESTURE] = true
+  end
+end
+
+local function AddConfiguredMouseActions(rows, used, pack)
+  local mouse = pack.mouse or {}
+  for i = 1, #MOUSE_BUTTONS do
+    local spec = MOUSE_BUTTONS[i]
+    local binding = spec.binding
+    local action = SECURE_MOUSE_ACTIONS[mouse[spec.key]]
+    if action and not ReservedGesture(binding) and not used[binding] then
+      rows[#rows + 1] = {
+        binding = binding,
+        secureType = action.secureType,
+        action = action.action,
+        actionKind = action.kind,
+      }
+      used[binding] = true
+    end
+  end
+end
+
+function ns.InvalidateClickModel(_reason)
+  clickModelSig = nil
+  if LockedDown() then
+    pending = true
+  end
+end
+
 function ns.RebuildClickModel(pack)
   if LockedDown() then
     pending = true
@@ -1088,19 +1160,23 @@ function ns.RebuildClickModel(pack)
     [TARGET_GESTURE] = true,
     [FOCUS_GESTURE] = true,
   }
-  if bandage then
-    used[PVP_BANDAGE_GESTURE] = true
-  end
+  AddConfiguredMouseActions(rows, used, pack)
 
   if mode == "AUTO" then
-    for i = 1, #AUTO_CURE_GESTURES do
-      local action = cures[i]
-      if action then
-        local row = MakeCureRow(action, AUTO_CURE_GESTURES[i], i)
-        if row then
-          rows[#rows + 1] = row
-          used[row.binding] = true
-        end
+    local gestureIndex = 1
+    for priority = 1, math.min(#cures, AUTO_CURE_LIMIT) do
+      while gestureIndex <= #AUTO_CURE_GESTURES and used[AUTO_CURE_GESTURES[gestureIndex]] do
+        gestureIndex = gestureIndex + 1
+      end
+      local binding = AUTO_CURE_GESTURES[gestureIndex]
+      if not binding then
+        break
+      end
+      local row = MakeCureRow(cures[priority], binding, priority)
+      if row then
+        rows[#rows + 1] = row
+        used[binding] = true
+        gestureIndex = gestureIndex + 1
       end
     end
   else
@@ -1126,24 +1202,24 @@ function ns.RebuildClickModel(pack)
           binding = keyToBinding[manual[itemKey]]
         end
         if binding and not ReservedGesture(binding) and not used[binding] then
-          if not (bandage and binding == PVP_BANDAGE_GESTURE) then
-            local row = MakeCureRow(action, binding, i)
-            if row then
-              rows[#rows + 1] = row
-              used[binding] = true
-              assigned[action.spellId] = true
-            end
+          local row = MakeCureRow(action, binding, i)
+          if row then
+            rows[#rows + 1] = row
+            used[binding] = true
+            assigned[CureActionKey(action)] = true
           end
         end
       end
     end
+    -- Explicit spell assignments take precedence over the automatic bandage.
+    AddBandageRow(rows, used, bandage)
     local cureIndex = 1
     for i = 1, #MOUSE_BUTTONS do
       local spec = MOUSE_BUTTONS[i]
       local binding = spec.binding
       if not ReservedGesture(binding) and not used[binding] and mouse[spec.key] == "CURE" then
         if not (bandage and binding == PVP_BANDAGE_GESTURE) then
-          while cureIndex <= #cures and assigned[cures[cureIndex].spellId] do
+          while cureIndex <= #cures and assigned[CureActionKey(cures[cureIndex])] do
             cureIndex = cureIndex + 1
           end
           local action = cures[cureIndex]
@@ -1152,7 +1228,7 @@ function ns.RebuildClickModel(pack)
             if row then
               rows[#rows + 1] = row
               used[binding] = true
-              assigned[action.spellId] = true
+              assigned[CureActionKey(action)] = true
               cureIndex = cureIndex + 1
             end
           end
@@ -1161,10 +1237,7 @@ function ns.RebuildClickModel(pack)
     end
   end
 
-  local bandageRow = BandageRow(bandage)
-  if bandageRow then
-    rows[#rows + 1] = bandageRow
-  end
+  AddBandageRow(rows, used, bandage)
 
   local custom = CustomMacroText()
   if custom then
@@ -1174,6 +1247,9 @@ function ns.RebuildClickModel(pack)
         rows[i].macroText = custom
         rows[i].cureOnlyMacroText = custom
         rows[i].customMacro = true
+        rows[i].secureType = nil
+        rows[i].action = nil
+        rows[i].actionKind = nil
         rows[i].priority = nil
         rows[i].smartRezAvailable = false
         replaced = true
@@ -1245,7 +1321,10 @@ function ns.GetResolvedClickStatus()
         :gsub("5", "Button 5")
       local action = row.spellName
       local kind = "CURE"
-      if row.customMacro then
+      if row.secureType then
+        action = row.action
+        kind = row.actionKind
+      elseif row.customMacro then
         action = "Custom macro"
         kind = "CUSTOM_MACRO"
       elseif row.pvpBandage then
@@ -1329,7 +1408,15 @@ local function ApplyClickAttributes(btn, pack, unit)
   for i = 1, #model.rows do
     local row = model.rows[i]
     local binding = row.binding
-    if binding then
+    if binding and row.secureType and not installed[binding] then
+      SetSecure(btn, binding:format("type"), row.secureType)
+      SetSecure(btn, binding:format("unit"), unit)
+      installed[binding] = true
+      if binding == PHYSICAL_LEFT then
+        leftAssigned = true
+        leftReserved = true
+      end
+    elseif binding then
       if binding == PHYSICAL_LEFT and row.customMacro then
         leftReserved = true
       end
@@ -1356,8 +1443,9 @@ local function ApplyClickAttributes(btn, pack, unit)
   if rezOk and not leftReserved and not leftAssigned then
     local leftover
     for i = 1, #model.rows do
-      if type(model.rows[i].rezOnlyMacroText) == "string" then
-        leftover = model.rows[i].rezOnlyMacroText
+      local rezOnly = model.rows[i].rezOnlyMacroText
+      if type(rezOnly) == "string" and rezOnly ~= "" and #rezOnly <= MACRO_BYTE_LIMIT then
+        leftover = rezOnly
         break
       end
     end
@@ -3176,8 +3264,7 @@ local function RegisterExtraEvents()
         pending = true
         return
       end
-      clickModel = nil
-      clickModelSig = nil
+      ns.InvalidateClickModel("SPELLS_CHANGED")
       ns.RefreshMUFs()
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
       OnPlayerSpellResult(event, arg1, arg3)

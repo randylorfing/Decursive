@@ -626,6 +626,17 @@ engine:OnEvent("PLAYER_SPECIALIZATION_CHANGED")
 Check((ns.invalidations or 0) == invalidations + 1, "specialization invalidates capability model")
 Check((ns.followerGuards or 0) > 0, "specialization schedules follower convergence")
 
+local itemInvalidations = ns.invalidations or 0
+local itemRefreshGeneration = engine.refreshGeneration
+local itemTimerBaseline = #timerQueue
+engine:OnEvent("BAG_UPDATE_DELAYED")
+engine:OnEvent("ITEM_COUNT_CHANGED", 269586, 1)
+Equal(#timerQueue, itemTimerBaseline + 1, "inventory events coalesce into one click action refresh")
+Equal(ns.invalidations or 0, itemInvalidations, "inventory refresh waits for the coalesced callback")
+timerQueue[#timerQueue]()
+Equal(ns.invalidations or 0, itemInvalidations + 1, "inventory refresh invalidates detection and click actions")
+Check(engine.refreshGeneration > itemRefreshGeneration, "inventory refresh reconciles every required consumer")
+
 Check(engine:Reset(), "reset succeeds")
 Equal(engine.state, "COLD", "reset returns cold")
 Equal(engine:GetDiagnostics().assignedCarrierCount, 0, "reset clears assignments")

@@ -520,6 +520,102 @@ local function SetMouseAction(key)
   end
 end
 
+local function ManualClickActions()
+  return ns.GetManualClickActions and ns.GetManualClickActions(Pack()) or {}
+end
+
+local function GetMouseBinding(button)
+  return function()
+    local pack = Pack()
+    local mouse = pack.mouse or {}
+    if RESERVED_MOUSE[button] then
+      return RESERVED_MOUSE[button]
+    end
+    if pack.cure.mode == "MANUAL" and mouse[button] == "CURE" then
+      local manual = pack.cure.manual or {}
+      -- Prefer an available assignment if an older profile contains conflicts.
+      for _, action in ipairs(ManualClickActions()) do
+        if manual[action.key] == button then
+          return action.key
+        end
+      end
+      local saved = {}
+      for key, assigned in pairs(manual) do
+        if assigned == button and type(key) == "string" then
+          saved[#saved + 1] = key
+        end
+      end
+      table.sort(saved)
+      if saved[1] then
+        return saved[1]
+      end
+    end
+    return mouse[button] or "CURE"
+  end
+end
+
+local function MouseBindingChoices(button)
+  return function()
+    if RESERVED_MOUSE[button] then
+      return {TARGET = "Target (fixed)"}
+    end
+    local values = {CURE = "Cure", TARGET = "Target", FOCUS = "Focus", ASSIST = "Assist"}
+    if Pack().cure.mode == "MANUAL" then
+      local actions = ManualClickActions()
+      values.CURE = #actions == 0 and "No known cure spells" or "Automatic cure"
+      if button == "button5" then
+        values.CURE = "Automatic cure / bandage"
+      end
+      for _, action in ipairs(actions) do
+        values[action.key] = action.name
+      end
+      local selected = GetMouseBinding(button)()
+      if not values[selected] then
+        values[selected] = "Unavailable (" .. tostring(selected) .. ")"
+      end
+    end
+    return values
+  end
+end
+
+local function SetMouseBinding(button)
+  return function(value)
+    if not OptionsAccessAllowed("MOUSE_BINDING") or RESERVED_MOUSE[button] then
+      return
+    end
+    local pack = Pack()
+    local actionChoice = MOUSE_ACTIONS[value] ~= nil
+    if not actionChoice then
+      if pack.cure.mode ~= "MANUAL" then
+        return
+      end
+      local available = false
+      for _, action in ipairs(ManualClickActions()) do
+        if action.key == value then
+          available = true
+          break
+        end
+      end
+      if not available then
+        return
+      end
+    end
+    pack.cure.manual = pack.cure.manual or {}
+    local manual = pack.cure.manual
+    for key, assigned in pairs(manual) do
+      if assigned == button then
+        manual[key] = nil
+      end
+    end
+    pack.mouse[button] = actionChoice and value or "CURE"
+    if not actionChoice then
+      -- Moving a spell updates its single binding and replaces the button's old spell.
+      manual[value] = button
+    end
+    NotifyPack()
+  end
+end
+
 local function AfterPackChange()
   if ns.RefreshMUFs then
     ns.RefreshMUFs()
@@ -864,11 +960,11 @@ local CATALOG = {
   end},
   {page = "cure", label = "Add custom dispel spell", kind = "text", get = function() return "" end, set = AddCustomSpellFromUI},
   {page = "cure", label = "Remove custom dispel spell", kind = "text", get = CustomSpellSummary, set = RemoveCustomSpellFromUI},
-  {page = "cure", label = "Left click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "left"), set = SetMouseAction("left")},
-  {page = "cure", label = "Right click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "right"), set = SetMouseAction("right")},
-  {page = "cure", label = "Middle click", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "middle"), set = SetMouseAction("middle")},
-  {page = "cure", label = "Button 4", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "button4"), set = SetMouseAction("button4")},
-  {page = "cure", label = "Button 5", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "button5"), set = SetMouseAction("button5")},
+  {page = "cure", label = "Left click", kind = "choice", values = MouseBindingChoices("left"), get = GetMouseBinding("left"), set = SetMouseBinding("left"), manualBinding = true},
+  {page = "cure", label = "Right click", kind = "choice", values = MouseBindingChoices("right"), get = GetMouseBinding("right"), set = SetMouseBinding("right"), manualBinding = true},
+  {page = "cure", label = "Middle click", kind = "choice", values = MouseBindingChoices("middle"), get = GetMouseBinding("middle"), set = SetMouseBinding("middle"), manualBinding = true},
+  {page = "cure", label = "Button 4", kind = "choice", values = MouseBindingChoices("button4"), get = GetMouseBinding("button4"), set = SetMouseBinding("button4"), manualBinding = true},
+  {page = "cure", label = "Button 5", kind = "choice", values = MouseBindingChoices("button5"), get = GetMouseBinding("button5"), set = SetMouseBinding("button5"), manualBinding = true},
 
   {page = "color", label = "Dead / ghost / offline", kind = "color", get = PathGet("colors", "dead"), set = PathSet("colors", "dead")},
   {page = "color", label = "Out of range", description = "RGB color only. Out-of-range dim controls brightness exactly once.", kind = "color", hasOpacity = false, get = PathGet("colors", "range"), set = PathSet("colors", "range")},
@@ -1098,13 +1194,15 @@ local function OpenChoiceMenu(anchor, values, get, set)
   if not MenuUtil or not MenuUtil.CreateContextMenu then
     return false
   end
+  local editingPack = Pack()
+  values = type(values) == "function" and values() or values
   MenuUtil.CreateContextMenu(anchor, function(_, root)
     local current = get()
     for key, label in pairs(values) do
       root:CreateRadio(label, function()
         return current == key
       end, function()
-        if OptionsAccessAllowed("CHOICE_MENU_SELECT") then
+        if OptionsAccessAllowed("CHOICE_MENU_SELECT") and Pack() == editingPack then
           set(key)
           ns.RefreshOptions()
         end
@@ -1185,6 +1283,9 @@ local function RowVisible(spec)
   local env = Addon():GetEditingEnvironment()
   if spec.hideEnv and spec.hideEnv[env] then
     return false
+  end
+  if spec.manualBinding and Pack().cure.mode == "MANUAL" then
+    return true
   end
   local searching = ui.search and ui.search ~= ""
   if searching then
@@ -1837,7 +1938,8 @@ local function Refresh()
       end
     elseif bind.kind == "choice" then
       local v = bind.get()
-      bind.widget:SetText(bind.values[v] or tostring(v))
+      local values = type(bind.values) == "function" and bind.values() or bind.values
+      bind.widget:SetText(values[v] or tostring(v))
     elseif bind.kind == "color" then
       bind.widget:SetColor(bind.get())
     elseif bind.kind == "text" then

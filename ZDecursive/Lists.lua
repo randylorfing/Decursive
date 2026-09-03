@@ -379,8 +379,8 @@ local function SameId(a, b)
   if a.player and b.player then
     return true
   end
-  if type(a.guid) == "string" and a.guid ~= "" and a.guid == b.guid then
-    return true
+  if type(a.guid) == "string" and a.guid ~= "" and type(b.guid) == "string" and b.guid ~= "" then
+    return a.guid == b.guid
   end
   if type(a.name) == "string" and type(b.name) == "string" and Fold(a.name) == Fold(b.name) then
     return true
@@ -504,18 +504,22 @@ local function EntryMatches(entry, unit)
     end
     if type(entry.guid) == "string" and entry.guid ~= "" then
       local guid = CaptureGUID(unit)
-      if guid and guid == entry.guid then
-        return true
+      if guid then
+        return guid == entry.guid
       end
     end
     if type(entry.name) == "string" and entry.name ~= "" then
       local name = CaptureFullName(unit)
-      if name and Fold(name) == Fold(entry.name) then
-        return true
+      if name then
+        if Fold(name) == Fold(entry.name) then
+          return true
+        end
+        if entry.name:find("-", 1, true) then
+          return false
+        end
       end
       local short = PublicString(UnitName and UnitName(unit))
-      local storedShort = entry.name:match("^([^%-]+)")
-      if short and storedShort and Fold(short) == Fold(storedShort) then
+      if short and not entry.name:find("-", 1, true) and Fold(short) == Fold(entry.name) then
         return true
       end
     end

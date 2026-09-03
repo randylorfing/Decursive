@@ -7,7 +7,7 @@ on:
     branches:
       - zdecursive
     tags:
-      - 'v13.1.0-alpha'
+      - 'v13.1.1-Alpha'
   pull_request:
     branches:
       - zdecursive
