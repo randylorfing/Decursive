@@ -101,3 +101,11 @@ jobs:
             args+=(--allow-development-version)
           fi
           python3 .github/scripts/validate-zdecursive-package.py "${args[@]}"
+
+      - name: Retain verified package ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ZDecursive-${{ github.sha }}
+          path: ${{ runner.temp }}/zdecursive-release/ZDecursive-*.zip
+          if-no-files-found: error
+          retention-days: 7

@@ -23,6 +23,7 @@ import zipfile
 
 ADDON = "ZDecursive"
 RELEASE_TAG = "v13.1.0-alpha"
+UPLOAD_ARTIFACT_PIN = "ea165f8d65b6e75b540449e92b4886f43607fa02"
 TOC_LOAD_ORDER = [
     "embeds.xml",
     "Diagnostics.lua",
@@ -516,6 +517,11 @@ def validate_workflow(check: Validation, repo_root: Path) -> None:
         "tests/run-fengari.cjs",
         "tests/export-diagnostics-contract.ps1",
         "shell: pwsh",
+        f"actions/upload-artifact@{UPLOAD_ARTIFACT_PIN}",
+        "name: ZDecursive-${{ github.sha }}",
+        "path: ${{ runner.temp }}/zdecursive-release/ZDecursive-*.zip",
+        "if-no-files-found: error",
+        "retention-days: 7",
         "-d \\",
     ]
     for marker in required:
@@ -524,6 +530,24 @@ def validate_workflow(check: Validation, repo_root: Path) -> None:
     for forbidden in ("secrets.", "CF_API", "CURSEFORGE", "curseforge", "softprops/action-gh-release"):
         if forbidden in text:
             check.fail(f"credential-free workflow contains publishing capability: {forbidden}")
+    upload_marker = f"actions/upload-artifact@{UPLOAD_ARTIFACT_PIN}"
+    validation_marker = "- name: Validate expanded package and ZIP"
+    if text.count("actions/upload-artifact@") != 1:
+        check.fail("verification workflow must contain exactly one pinned upload-artifact step")
+    elif validation_marker not in text or text.index(upload_marker) < text.index(validation_marker):
+        check.fail("verified package upload must run after expanded package and ZIP validation")
+    else:
+        upload_start = text.rfind("      - name:", 0, text.index(upload_marker))
+        upload_end = text.find("\n      - name:", text.index(upload_marker))
+        if upload_end < 0:
+            upload_end = len(text)
+        upload_step = text[upload_start:upload_end]
+        expected_path = "path: ${{ runner.temp }}/zdecursive-release/ZDecursive-*.zip"
+        path_lines = [line.strip() for line in upload_step.splitlines() if line.strip().startswith("path:")]
+        if path_lines != [expected_path]:
+            check.fail(f"upload-artifact path must be the single narrow ZIP glob {expected_path!r}")
+        if "if-no-files-found: error" not in upload_step:
+            check.fail("upload-artifact must fail when the verified ZIP is absent")
     exporter_contract = repo_root / "tests" / "export-diagnostics-contract.ps1"
     if not exporter_contract.is_file():
         check.fail("functional diagnostics exporter contract is missing")
