@@ -24,7 +24,25 @@ function Assert-Contract {
     }
 }
 
-$temporaryRoot = Join-Path $env:TEMP ("ZDecursive-export-contract-" + [guid]::NewGuid().ToString('N'))
+$temporaryBase = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+    $env:RUNNER_TEMP
+} else {
+    [System.IO.Path]::GetTempPath()
+}
+$temporaryBase = [System.IO.Path]::GetFullPath($temporaryBase)
+if (-not (Test-Path -LiteralPath $temporaryBase -PathType Container)) {
+    throw 'The diagnostics exporter contract temporary root is unavailable.'
+}
+$temporaryPrefix = $temporaryBase.TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+) + [System.IO.Path]::DirectorySeparatorChar
+$temporaryRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $temporaryBase ("ZDecursive-export-contract-" + [guid]::NewGuid().ToString('N')))
+)
+if (-not $temporaryRoot.StartsWith($temporaryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The diagnostics exporter contract generated an unsafe temporary path.'
+}
 $retailRoot = Join-Path $temporaryRoot 'Retail'
 $savedVariables = Join-Path $retailRoot 'WTF\Account\Contract\SavedVariables'
 $outputRoot = Join-Path $temporaryRoot 'Output'
@@ -45,7 +63,10 @@ try {
     Assert-Contract ($json.records[0].fields.private -eq '<redacted>') 'unsafe scalar was not redacted'
     Write-Output 'export-diagnostics-contract: ok'
 } finally {
-    if (Test-Path -LiteralPath $temporaryRoot) {
+    if (
+        (Test-Path -LiteralPath $temporaryRoot) -and
+        $temporaryRoot.StartsWith($temporaryPrefix, [StringComparison]::OrdinalIgnoreCase)
+    ) {
         Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
     }
 }
