@@ -2,7 +2,14 @@
 Thumbs.db
 *.zip
 .release/
+.release-zdecursive-*/
 .pkgmeta.bak
+_*.js
+_*.py
+_*.b64
+paint_partials.py
+clickmap-contract-*.md
+tmp-*.lua
 OVERNIGHT-DETECTION-REVIEW.md
 rebuild-audit-8am.md
 rebuild-vs-alpha-8am.md

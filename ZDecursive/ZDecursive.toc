@@ -1,18 +1,36 @@
+# This file is part of ZDecursive, an independently maintained rebuild of Decursive.
+#
+# Based on Decursive, Copyright (C) 2006-2026 John Wellesz
+# (Decursive AT 2072productions.com) (https://www.2072productions.com/to/decursive.php)
+# ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
+#
+# ZDecursive is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. ZDecursive is distributed without any warranty. See LICENSE.txt.
+
 ## Interface: 120100
-## Title: Zhaohu's Decursive
-## Notes: Detect Dispel Protect
-## Author: Zhaohu
-## Version: 13.0.0-detect.19
-## SavedVariables: DecursiveRebuildDB
+## Title: Zhaohu's Decursive |cff55ffff- v13 -|r
+## Notes: Retail 12.1 dispel assistant with native aura detection, secure Micro Unit Frames, profiles, alerts, and copyable diagnostics.
+## Author: John Wellesz, Randy Lorfing
+## Version: @project-version@
+## SavedVariables: DecursiveRebuildDB, ZDecursiveDiagnosticsDB
+## OptionalDeps: DandersFrames
 ## DefaultState: enabled
-## X-License: GPLv3
-## X-Website: https://github.com/randylorfing/Decursive-Rebuild
+## X-License: GNU GPL V3
+## X-Website: https://github.com/randylorfing/Decursive
+## X-Zhaohu-Source-Commit: @project-hash@
 
 embeds.xml
+Diagnostics.lua
+PersistentDiagnostics.lua
 Defaults.lua
+DispelData.lua
 Core.lua
 Lists.lua
 Detection.lua
+DetectionEngine.lua
+MUFPresentation.lua
 MUFs.lua
 LiveList.lua
 Alerts.lua

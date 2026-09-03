@@ -1,4 +1,29 @@
+--[[
+    This file is part of ZDecursive, an independently maintained rebuild of Decursive.
+
+    Based on Decursive, Copyright (C) 2006-2026 John Wellesz
+    (Decursive AT 2072productions.com) (https://www.2072productions.com/to/decursive.php)
+    ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
+
+    ZDecursive is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    ZDecursive is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with ZDecursive. If not, see <https://www.gnu.org/licenses/>.
+--]]
+
 local ADDON_NAME, ns = ...
+
+if ns.DiagnosticCheckpoint then
+  ns.DiagnosticCheckpoint("module", "Alerts file start")
+end
 
 local MAX_LEARNED = 40
 local TEAL = {0.32, 0.86, 0.82}
@@ -9,6 +34,14 @@ local PRESET_FILES = {
   FEMALE_DISPEL_ME = SOUND_DIR .. "FemaleDispelMe.ogg",
   FEMALE_CLEANSE = SOUND_DIR .. "FemaleCleanse.ogg",
   FEMALE_CLEANSE_ME = SOUND_DIR .. "FemaleCleanseMe.ogg",
+  VOICE_DISPEL = SOUND_DIR .. "VoiceDispel.ogg",
+  VOICE_CLEANSE = SOUND_DIR .. "VoiceCleanse.ogg",
+  VOICE_CURE = SOUND_DIR .. "VoiceCure.ogg",
+  VOICE_HELP = SOUND_DIR .. "VoiceHelp.ogg",
+  VOICE_CLEANSE_ME = SOUND_DIR .. "VoiceCleanseMe.ogg",
+  VOICE_CURE_ME = SOUND_DIR .. "VoiceCureMe.ogg",
+  VOICE_HELP_CLEANSE_ME = SOUND_DIR .. "VoiceHelpCleanseMe.ogg",
+  VOICE_HELP_CURE_ME = SOUND_DIR .. "VoiceHelpCureMe.ogg",
   AFFLICTION = SOUND_DIR .. "AfflictionAlert.ogg",
   QUICK = SOUND_DIR .. "G_NecropolisWound-fast.ogg",
   BRIGHT_PING = SOUND_DIR .. "BrightPing.ogg",
@@ -21,17 +54,47 @@ local PRESET_FILES = {
   FAILURE = SOUND_DIR .. "FailedSpell.ogg",
 }
 
+local STATUS_SUCCESS = "SUCCESS"
+local STATUS_DEFERRED_COMBAT = "DEFERRED_COMBAT"
+local STATUS_DEFERRED_RESTRICTED = "DEFERRED_RESTRICTED"
+local STATUS_FAILURE = "FAILURE"
+local MAX_REMOVE_RETRIES = 3
+local MAX_REPLAY_RETRIES = 6
+local REPLAY_DELAYS = {0.25, 0.5, 1, 2, 4, 8}
+
 local registered = {}
+local registeredPairs = {}
 local learned = {}
 local eventsOn = false
 local eventFrame
 local pendingSync = false
+local pendingMode
+local pendingReason = "NONE"
+local replayScheduled = false
+local replayAttempts = 0
+local replayToken = 0
+local replayExhausted = false
+local removeRetryScheduled = false
+local removeRetryAttempts = 0
+local removeRetryToken = 0
+local removeRetryExhausted = false
 local lastSoundAt = 0
 local lastTextAt = 0
 local textFrame
 local textFont
 local hideAt = 0
 local printFrame
+local alertLayers = setmetatable({}, {__mode = "k"})
+local soulLinkAttempt
+local lastCuratedCount = 0
+local lastDesiredCount = 0
+local lastExactCount = 0
+local lastStaleCount = 0
+local lastAddFailed = 0
+local lastRemoveFailed = 0
+local lastReplacementFallbacks = 0
+local lastSoundResult = "NEVER"
+local lastSoundError = "NONE"
 
 local function Addon()
   return ns.addon
@@ -39,8 +102,8 @@ end
 
 local function GetPack()
   local addon = Addon()
-  if addon and addon.GetEditingPack then
-    return addon:GetEditingPack()
+  if addon and addon.GetAppliedEnvironmentPack then
+    return addon:GetAppliedEnvironmentPack()
   end
   return ns.PACK
 end
@@ -54,18 +117,37 @@ local function Public(value)
 end
 
 local function SoundMessagingLocked()
-  if InChatMessagingLockdown and InChatMessagingLockdown() then
-    return true
+  local chatAPI = C_ChatInfo and C_ChatInfo.InChatMessagingLockdown
+  if type(chatAPI) == "function" then
+    local ok, blocked = pcall(chatAPI)
+    if not ok or not Accessible(blocked) or type(blocked) ~= "boolean" then
+      return true, "CHAT_GATE_UNKNOWN"
+    end
+    return blocked == true, blocked and "CHAT_LOCKDOWN" or "OPEN"
   end
-  return false
+  if type(InChatMessagingLockdown) == "function" then
+    local ok, blocked = pcall(InChatMessagingLockdown)
+    if not ok or not Accessible(blocked) or type(blocked) ~= "boolean" then
+      return true, "CHAT_GATE_UNKNOWN"
+    end
+    return blocked == true, blocked and "CHAT_LOCKDOWN" or "OPEN"
+  end
+  if type(InCombatLockdown) == "function" then
+    local ok, blocked = pcall(InCombatLockdown)
+    if not ok or not Accessible(blocked) then
+      return true, "COMBAT_GATE_UNKNOWN"
+    end
+    return blocked == true, blocked and "COMBAT_LOCKDOWN" or "OPEN"
+  end
+  return false, "OPEN"
 end
 
 local function TriggerAdded()
   local e = Enum and Enum.UnitAuraSoundTrigger
-  if e and e.Added then
+  if e and Accessible(e.Added) and type(e.Added) == "number" then
     return e.Added
   end
-  return 0
+  return nil
 end
 
 local function PackSoundFile(pack)
@@ -119,91 +201,625 @@ local function LearnSpellId(spellId)
   return true
 end
 
-local function ClearRegistrations()
-  if not C_UnitAuras or not C_UnitAuras.RemoveAuraSound then
-    registered = {}
+local SyncNativeSounds
+
+local function SafeReason(reason)
+  if type(reason) ~= "string" or reason == "" then
+    return "UNSPECIFIED"
+  end
+  return reason:gsub("[^%w_:%-]", "_"):sub(1, 64)
+end
+
+local function RegistrationCount()
+  local count = 0
+  for _key in pairs(registered) do
+    count = count + 1
+  end
+  return count
+end
+
+local function ForgetRegistration(key)
+  local record = registered[key]
+  if not record then
     return
   end
-  for i = 1, #registered do
-    local id = registered[i]
-    if type(id) == "number" then
-      C_UnitAuras.RemoveAuraSound(id)
+  registered[key] = nil
+  local pairKey = record.pairKey
+  if pairKey and registeredPairs[pairKey] then
+    local remaining = registeredPairs[pairKey] - 1
+    registeredPairs[pairKey] = remaining > 0 and remaining or nil
+  end
+end
+
+local function RememberRegistration(key, record)
+  if registered[key] then
+    return false
+  end
+  registered[key] = record
+  registeredPairs[record.pairKey] = (registeredPairs[record.pairKey] or 0) + 1
+  return true
+end
+
+local function ResetReplayRetry()
+  replayToken = replayToken + 1
+  replayScheduled = false
+  replayAttempts = 0
+  replayExhausted = false
+end
+
+local function ResetRemoveRetry()
+  removeRetryToken = removeRetryToken + 1
+  removeRetryScheduled = false
+  removeRetryAttempts = 0
+  removeRetryExhausted = false
+end
+
+local function ScheduleReplay(reason)
+  if replayScheduled then
+    return true
+  end
+  if replayAttempts >= MAX_REPLAY_RETRIES then
+    replayExhausted = true
+    if ns.DiagnosticRecord then
+      ns.DiagnosticRecord("AURA_SOUND_REPLAY", {
+        attempt = replayAttempts,
+        reason = SafeReason(reason),
+        result = "EXHAUSTED",
+      }, false)
+    end
+    return false
+  end
+  if not C_Timer or type(C_Timer.After) ~= "function" then
+    replayExhausted = true
+    return false
+  end
+  replayAttempts = replayAttempts + 1
+  replayScheduled = true
+  replayToken = replayToken + 1
+  local token = replayToken
+  local attempt = replayAttempts
+  C_Timer.After(REPLAY_DELAYS[attempt] or REPLAY_DELAYS[#REPLAY_DELAYS], function()
+    if token ~= replayToken then
+      return
+    end
+    replayScheduled = false
+    if not pendingSync then
+      return
+    end
+    SyncNativeSounds("BOUNDED_REPLAY_" .. tostring(attempt), true, false)
+  end)
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("AURA_SOUND_REPLAY", {
+      attempt = attempt,
+      reason = SafeReason(reason),
+      result = "SCHEDULED",
+    }, true)
+  end
+  return true
+end
+
+local function ScheduleRemoveRetry(reason)
+  if removeRetryScheduled then
+    return true
+  end
+  if removeRetryAttempts >= MAX_REMOVE_RETRIES then
+    removeRetryExhausted = true
+    if ns.DiagnosticRecord then
+      ns.DiagnosticRecord("AURA_SOUND_REMOVE_RETRY", {
+        attempt = removeRetryAttempts,
+        reason = SafeReason(reason),
+        result = "EXHAUSTED",
+      }, false)
+    end
+    return false
+  end
+  if not C_Timer or type(C_Timer.After) ~= "function" then
+    removeRetryExhausted = true
+    return false
+  end
+  removeRetryAttempts = removeRetryAttempts + 1
+  removeRetryScheduled = true
+  removeRetryToken = removeRetryToken + 1
+  local token = removeRetryToken
+  local attempt = removeRetryAttempts
+  C_Timer.After(0.5 * attempt, function()
+    if token ~= removeRetryToken then
+      return
+    end
+    removeRetryScheduled = false
+    if not pendingSync then
+      return
+    end
+    SyncNativeSounds("REMOVE_RETRY_" .. tostring(attempt), false, true)
+  end)
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("AURA_SOUND_REMOVE_RETRY", {
+      attempt = attempt,
+      reason = SafeReason(reason),
+      result = "SCHEDULED",
+    }, true)
+  end
+  return true
+end
+
+local function CanonicalRosterToken(value)
+  if not Accessible(value) or type(value) ~= "string" then
+    return nil
+  end
+  if value == "player" or value == "pet" then
+    return value
+  end
+  local prefix, index = value:match("^(party)(%d+)$")
+  if not prefix then
+    prefix, index = value:match("^(partypet)(%d+)$")
+  end
+  if prefix then
+    index = tonumber(index)
+    if index and index >= 1 and index <= 4 then
+      return prefix .. tostring(index)
+    end
+    return nil
+  end
+  prefix, index = value:match("^(raid)(%d+)$")
+  if not prefix then
+    prefix, index = value:match("^(raidpet)(%d+)$")
+  end
+  if prefix then
+    index = tonumber(index)
+    if index and index >= 1 and index <= 40 then
+      return prefix .. tostring(index)
     end
   end
-  registered = {}
+  return nil
 end
 
-local function RosterUnits(pack)
-  if ns.BuildRoster then
-    return ns.BuildRoster(pack)
+local function CommittedRosterUnits()
+  local addon = Addon()
+  if not addon then
+    return nil, "ADDON_UNAVAILABLE"
   end
-  return {"player"}
-end
-
-local function SyncNativeSounds()
-  ClearRegistrations()
-  local pack = GetPack()
-  if not pack.alerts or not pack.alerts.sound or not pack.alerts.nativeAuraSound then
-    pendingSync = false
-    return
+  local signature = addon.rosterOrderSignature
+  if not Accessible(signature) or type(signature) ~= "string" then
+    return nil, "ROSTER_NOT_COMMITTED"
   end
-  if not C_UnitAuras or not C_UnitAuras.AddAuraSound then
-    pendingSync = false
-    return
-  end
-  if SoundMessagingLocked() then
-    pendingSync = true
-    return
-  end
-  local store = EnsureLearnedStore()
-  if #store == 0 then
-    pendingSync = false
-    return
-  end
-  local file = PackSoundFile(pack)
-  local channel = PackChannel(pack)
-  local trigger = TriggerAdded()
-  local units = RosterUnits(pack)
-  for u = 1, #units do
-    local unit = units[u]
-    for s = 1, #store do
-      local spellId = store[s]
-      local id = C_UnitAuras.AddAuraSound(trigger, {
-        unitToken = unit,
-        spellID = spellId,
-        soundFileName = file,
-        outputChannel = channel,
-      })
-      id = Public(id)
-      if type(id) == "number" then
-        registered[#registered + 1] = id
+  local units = {}
+  local seen = {}
+  local counts = {player = 0, party = 0, raid = 0, pets = 0}
+  for value in signature:gmatch("[^|]+") do
+    local unit = CanonicalRosterToken(value)
+    if unit and not seen[unit] then
+      seen[unit] = true
+      units[#units + 1] = unit
+      if unit == "pet" or unit:find("pet", 1, true) then
+        counts.pets = counts.pets + 1
+      elseif unit == "player" then
+        counts.player = counts.player + 1
+      elseif unit:match("^raid%d+$") then
+        counts.raid = counts.raid + 1
+      else
+        counts.party = counts.party + 1
       end
     end
   end
+  counts.total = #units
+  return units, counts
+end
+
+function ns.LearnPublicDispelAuraSpellId(spellId)
+  local learnedNow = LearnSpellId(Public(spellId))
+  if learnedNow then
+    pendingSync = true
+  end
+  return learnedNow
+end
+
+local TYPE_KEY = {MAGIC = "magic", CURSE = "curse", DISEASE = "disease", POISON = "poison"}
+
+local function CuratedSpellIds(pack)
+  local capabilities = {}
+  local actions = ns.GetKnownCures and ns.GetKnownCures(pack) or {}
+  for i = 1, #actions do
+    local types = actions[i] and actions[i].types
+    for j = 1, type(types) == "table" and #types or 0 do
+      capabilities[types[j]] = true
+    end
+  end
+  local ids = {}
+  local seen = {}
+  local rows = ns.CURATED_DISPEL_ALERTS or {}
+  for i = 1, #rows do
+    local row = rows[i]
+    local spellId = row and Public(row.id)
+    if capabilities[TYPE_KEY[row and row.cureType]]
+      and Accessible(spellId)
+      and type(spellId) == "number"
+      and spellId > 0
+      and not seen[spellId]
+    then
+      ids[#ids + 1] = spellId
+      seen[spellId] = true
+    end
+  end
+  return ids
+end
+
+local function PairKey(unit, spellId)
+  return unit .. "\31" .. tostring(spellId)
+end
+
+local function RegistrationKey(unit, spellId, trigger, soundFile, channel)
+  return table.concat({PairKey(unit, spellId), tostring(trigger), soundFile, channel}, "\30")
+end
+
+local function CountExact(desired)
+  local exact = 0
+  for key in pairs(desired) do
+    if registered[key] then
+      exact = exact + 1
+    end
+  end
+  return exact
+end
+
+local function RecordSoundResult(reason, result, rosterCounts)
+  lastSoundResult = result
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("AURA_SOUND_RECONCILE", {
+      active = RegistrationCount(),
+      addFailed = lastAddFailed,
+      desired = lastDesiredCount,
+      exact = lastExactCount,
+      party = rosterCounts and rosterCounts.party or 0,
+      pets = rosterCounts and rosterCounts.pets or 0,
+      player = rosterCounts and rosterCounts.player or 0,
+      raid = rosterCounts and rosterCounts.raid or 0,
+      reason = SafeReason(reason),
+      removeFailed = lastRemoveFailed,
+      result = result,
+      stale = lastStaleCount,
+    }, result == STATUS_SUCCESS)
+  end
+end
+
+local function ClearRegistrations(reason, isRemovalRetry)
+  local removeAPI = C_UnitAuras and C_UnitAuras.RemoveAuraSound
+  local keys = {}
+  for key in pairs(registered) do
+    keys[#keys + 1] = key
+  end
+  table.sort(keys)
+  local removeFailed = 0
+  lastSoundError = "NONE"
+  if #keys > 0 and type(removeAPI) ~= "function" then
+    removeFailed = #keys
+    lastSoundError = "REMOVE_API_UNAVAILABLE"
+  else
+    for i = 1, #keys do
+      local key = keys[i]
+      local record = registered[key]
+      local handle = record and Public(record.handle)
+      if not Accessible(handle) or type(handle) ~= "number" then
+        ForgetRegistration(key)
+      else
+        local ok = pcall(removeAPI, handle)
+        if ok then
+          ForgetRegistration(key)
+        else
+          removeFailed = removeFailed + 1
+          lastSoundError = "REMOVE_EXCEPTION"
+        end
+      end
+    end
+  end
+  lastDesiredCount = 0
+  lastExactCount = 0
+  lastStaleCount = RegistrationCount()
+  lastAddFailed = 0
+  lastRemoveFailed = removeFailed
+  lastReplacementFallbacks = 0
+  if removeFailed > 0 then
+    pendingSync = true
+    pendingMode = "clear"
+    pendingReason = SafeReason(reason)
+    ScheduleRemoveRetry(reason)
+    RecordSoundResult(reason, STATUS_FAILURE)
+    return false, STATUS_FAILURE, 0
+  end
   pendingSync = false
+  pendingMode = nil
+  pendingReason = "NONE"
+  if isRemovalRetry then
+    ResetRemoveRetry()
+  end
+  ResetReplayRetry()
+  RecordSoundResult(reason, STATUS_SUCCESS)
+  return true, STATUS_SUCCESS, 0
+end
+
+local function ReconcileRegistrations(pack, units, rosterCounts, spellIds, trigger, reason)
+  local soundFile = PackSoundFile(pack)
+  local channel = PackChannel(pack)
+  local desired = {}
+  local desiredOrder = {}
+  local desiredPairs = {}
+
+  -- Spell-first ordering gives each committed unit one registration before the
+  -- next spell is attempted if Blizzard imposes a transient capacity limit.
+  for s = 1, #spellIds do
+    local spellId = spellIds[s]
+    for u = 1, #units do
+      local unit = units[u]
+      local pairKey = PairKey(unit, spellId)
+      local key = RegistrationKey(unit, spellId, trigger, soundFile, channel)
+      if not desired[key] then
+        local record = {
+          key = key,
+          pairKey = pairKey,
+          unitToken = unit,
+          spellId = spellId,
+          trigger = trigger,
+          soundFile = soundFile,
+          channel = channel,
+        }
+        desired[key] = record
+        desiredPairs[pairKey] = true
+        desiredOrder[#desiredOrder + 1] = record
+      end
+    end
+  end
+
+  local addFailed = 0
+  local removeFailed = 0
+  local replacementFallbacks = 0
+  lastSoundError = "NONE"
+  for i = 1, #desiredOrder do
+    local record = desiredOrder[i]
+    if not registered[record.key] then
+      local ok, handle = pcall(C_UnitAuras.AddAuraSound, record.trigger, {
+        unitToken = record.unitToken,
+        spellID = record.spellId,
+        soundFileName = record.soundFile,
+        outputChannel = record.channel,
+      })
+      handle = ok and Public(handle) or nil
+      if ok and Accessible(handle) and type(handle) == "number" then
+        record.handle = handle
+        RememberRegistration(record.key, record)
+      else
+        addFailed = addFailed + 1
+        lastSoundError = ok and "ADD_NO_HANDLE" or "ADD_EXCEPTION"
+      end
+    end
+  end
+
+  if addFailed == 0 then
+    local staleKeys = {}
+    for key in pairs(registered) do
+      if not desired[key] then
+        staleKeys[#staleKeys + 1] = key
+      end
+    end
+    table.sort(staleKeys)
+    for i = 1, #staleKeys do
+      local key = staleKeys[i]
+      local record = registered[key]
+      local handle = record and Public(record.handle)
+      if not Accessible(handle) or type(handle) ~= "number" then
+        ForgetRegistration(key)
+      else
+        local ok = pcall(C_UnitAuras.RemoveAuraSound, handle)
+        if ok then
+          ForgetRegistration(key)
+        else
+          removeFailed = removeFailed + 1
+          lastSoundError = "REMOVE_EXCEPTION"
+        end
+      end
+    end
+  else
+    for key, record in pairs(registered) do
+      if not desired[key] and record and desiredPairs[record.pairKey] then
+        replacementFallbacks = replacementFallbacks + 1
+      end
+    end
+  end
+
+  lastDesiredCount = #desiredOrder
+  lastExactCount = CountExact(desired)
+  lastStaleCount = math.max(0, RegistrationCount() - lastExactCount)
+  lastAddFailed = addFailed
+  lastRemoveFailed = removeFailed
+  lastReplacementFallbacks = replacementFallbacks
+
+  if addFailed > 0 then
+    pendingSync = true
+    pendingMode = "refresh"
+    pendingReason = SafeReason(reason)
+    ScheduleReplay("ADD_FAILED")
+    RecordSoundResult(reason, STATUS_FAILURE, rosterCounts)
+    return false, STATUS_FAILURE, 0
+  end
+  if removeFailed > 0 then
+    pendingSync = true
+    pendingMode = "refresh"
+    pendingReason = SafeReason(reason)
+    ScheduleRemoveRetry(reason)
+    RecordSoundResult(reason, STATUS_FAILURE, rosterCounts)
+    return false, STATUS_FAILURE, 0
+  end
+  if lastExactCount ~= lastDesiredCount or lastStaleCount ~= 0 then
+    pendingSync = true
+    pendingMode = "refresh"
+    pendingReason = SafeReason(reason)
+    ScheduleReplay("COVERAGE_MISMATCH")
+    lastSoundError = "COVERAGE_MISMATCH"
+    RecordSoundResult(reason, STATUS_FAILURE, rosterCounts)
+    return false, STATUS_FAILURE, 0
+  end
+
+  pendingSync = false
+  pendingMode = nil
+  pendingReason = "NONE"
+  ResetReplayRetry()
+  ResetRemoveRetry()
+  RecordSoundResult(reason, STATUS_SUCCESS, rosterCounts)
+  return true, STATUS_SUCCESS, 0
+end
+
+local function CombatLockedPublic()
+  if type(InCombatLockdown) ~= "function" then
+    return false
+  end
+  local ok, locked = pcall(InCombatLockdown)
+  return ok and Accessible(locked) and locked == true
+end
+
+SyncNativeSounds = function(reason, isReplay, isRemovalRetry)
+  reason = SafeReason(reason or "REFRESH")
+  local pack = GetPack()
+  local alerts = type(pack) == "table" and type(pack.alerts) == "table" and pack.alerts or nil
+  local enabled = alerts and alerts.sound == true and alerts.nativeAuraSound == true
+  local landingTextEnabled = alerts and alerts.text ~= false and alerts.dispelEnabled ~= false
+  local inactiveWithoutNativeState = not enabled
+    and not landingTextEnabled
+    and RegistrationCount() == 0
+    and lastAddFailed == 0
+    and lastRemoveFailed == 0
+    and removeRetryScheduled ~= true
+
+  -- A fully quiet Alerts consumer with no owned native state has nothing to
+  -- mutate.  In particular, PvP chat lockdown must not prevent an unrelated
+  -- roster transaction from committing its MUF bank.
+  if inactiveWithoutNativeState then
+    pendingSync = false
+    pendingMode = nil
+    pendingReason = "NONE"
+    lastDesiredCount = 0
+    lastExactCount = 0
+    lastStaleCount = 0
+    lastSoundError = "NONE"
+    ResetReplayRetry()
+    ResetRemoveRetry()
+    RecordSoundResult(reason, STATUS_SUCCESS)
+    return true, STATUS_SUCCESS, 0
+  end
+
+  pendingSync = true
+  pendingMode = enabled and "refresh" or "clear"
+  pendingReason = reason
+  if not isReplay and not isRemovalRetry then
+    ResetReplayRetry()
+    ResetRemoveRetry()
+  end
+
+  local blocked, blockReason = SoundMessagingLocked()
+  if blocked then
+    lastSoundResult = CombatLockedPublic() and STATUS_DEFERRED_COMBAT or STATUS_DEFERRED_RESTRICTED
+    lastSoundError = blockReason or "MUTATION_BLOCKED"
+    ScheduleReplay(lastSoundError)
+    RecordSoundResult(reason, lastSoundResult)
+    return false, lastSoundResult, 0
+  end
+
+  if not enabled then
+    return ClearRegistrations(reason, isRemovalRetry)
+  end
+  if not C_UnitAuras or type(C_UnitAuras.AddAuraSound) ~= "function" or type(C_UnitAuras.RemoveAuraSound) ~= "function" then
+    lastSoundError = "NATIVE_API_UNAVAILABLE"
+    lastSoundResult = STATUS_FAILURE
+    lastDesiredCount = 0
+    lastExactCount = 0
+    lastStaleCount = RegistrationCount()
+    lastAddFailed = 0
+    lastRemoveFailed = 0
+    RecordSoundResult(reason, STATUS_FAILURE)
+    return false, STATUS_FAILURE, 0
+  end
+
+  local units, rosterState = CommittedRosterUnits()
+  if not units then
+    lastSoundError = rosterState or "ROSTER_NOT_COMMITTED"
+    lastSoundResult = STATUS_DEFERRED_RESTRICTED
+    ScheduleReplay(lastSoundError)
+    RecordSoundResult(reason, STATUS_DEFERRED_RESTRICTED)
+    return false, STATUS_DEFERRED_RESTRICTED, 0
+  end
+  local spellIds = CuratedSpellIds(pack)
+  lastCuratedCount = #spellIds
+  if #units == 0 or #spellIds == 0 then
+    return ClearRegistrations(reason, isRemovalRetry)
+  end
+  local trigger = TriggerAdded()
+  if type(trigger) ~= "number" then
+    lastSoundError = "ADDED_TRIGGER_UNAVAILABLE"
+    lastSoundResult = STATUS_FAILURE
+    lastDesiredCount = #units * #spellIds
+    lastExactCount = 0
+    lastStaleCount = RegistrationCount()
+    RecordSoundResult(reason, STATUS_FAILURE, rosterState)
+    return false, STATUS_FAILURE, 0
+  end
+  return ReconcileRegistrations(pack, units, rosterState, spellIds, trigger, reason)
 end
 
 local moveMode = false
+
+local function DispelColor(pack)
+  local alerts = type(pack) == "table" and type(pack.alerts) == "table" and pack.alerts or nil
+  local color = alerts and alerts.dispelColor
+  if type(color) ~= "table" then
+    return 1, 0.15, 0.15, 1
+  end
+  return tonumber(color[1]) or 1,
+    tonumber(color[2]) or 0.15,
+    tonumber(color[3]) or 0.15,
+    tonumber(color[4]) or 1
+end
+
+local function AlertFont(pack)
+  local alerts = type(pack) == "table" and type(pack.alerts) == "table" and pack.alerts or nil
+  local size = math.max(12, math.min(96, tonumber(alerts and alerts.dispelFontSize) or 48))
+  local fontPath = GameFontNormalHuge and select(1, GameFontNormalHuge:GetFont()) or STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
+  return fontPath, size
+end
+
+local function ApplyFontStyle(fontString, pack, outline)
+  if not fontString then
+    return
+  end
+  local fontPath, size = AlertFont(pack)
+  local r, g, b, a = DispelColor(pack)
+  fontString:SetFont(fontPath, size, outline or "THICKOUTLINE")
+  fontString:SetTextColor(r, g, b, a)
+end
 
 local function SaveTextPoint()
   if not textFrame then
     return
   end
-  local addon = Addon()
-  if not addon or not addon.db or not addon.db.char then
+  local pack = GetPack()
+  if not pack or not pack.alerts then
     return
   end
   local point, _, relPoint, x, y = textFrame:GetPoint(1)
-  addon.db.char.alertTextPoint = {point, relPoint, x, y}
+  pack.alerts.alertPoint = {
+    point = point or "TOP",
+    relPoint = relPoint or point or "TOP",
+    x = x or 0,
+    y = y or -160,
+  }
 end
 
 local function RestoreTextPoint()
-  local addon = Addon()
-  local saved = addon and addon.db and addon.db.char and addon.db.char.alertTextPoint
+  local pack = GetPack()
+  local saved = pack and pack.alerts and pack.alerts.alertPoint
   if type(saved) ~= "table" or not textFrame then
     return
   end
-  local point, relPoint, x, y = saved[1], saved[2], saved[3], saved[4]
+  local point = saved.point or saved[1]
+  local relPoint = saved.relPoint or saved[2] or point
+  local x = saved.x or saved[3]
+  local y = saved.y or saved[4]
   if type(point) == "string" and type(relPoint) == "string" then
     textFrame:ClearAllPoints()
     textFrame:SetPoint(point, UIParent, relPoint, x or 0, y or 0)
@@ -234,15 +850,15 @@ local function EnsureTextFrame()
     return
   end
   textFrame = CreateFrame("Frame", "DecursiveRebuildDispelText", UIParent)
-  textFrame:SetSize(800, 80)
-  textFrame:SetPoint("CENTER", 0, 120)
+  textFrame:SetSize(340, 80)
+  textFrame:SetPoint("TOP", UIParent, "TOP", 0, -160)
   textFrame:SetFrameStrata("HIGH")
   textFrame:Hide()
   RestoreTextPoint()
   textFont = textFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
   textFont:SetAllPoints()
   textFont:SetJustifyH("CENTER")
-  textFont:SetTextColor(TEAL[1], TEAL[2], TEAL[3])
+  ApplyFontStyle(textFont, GetPack(), "THICKOUTLINE")
   textFrame:SetScript("OnDragStart", function(self)
     if moveMode then
       self:StartMoving()
@@ -271,9 +887,7 @@ local function ShowDispelText(message, pack)
     return
   end
   EnsureTextFrame()
-  local size = pack.alerts.dispelFontSize or 48
-  local fontPath = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
-  textFont:SetFont(fontPath, size, "OUTLINE")
+  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
   textFont:SetText(message)
   textFrame:Show()
   if pack.alerts.dispelMode == "UNTIL_CLEARED" then
@@ -300,6 +914,16 @@ local function EnsurePrintFrame()
   return printFrame
 end
 
+local function ShowCopyableAlertText(text)
+  if type(text) ~= "string" then
+    return false
+  end
+  if ns.Diagnostics and type(ns.Diagnostics.ShowText) == "function" then
+    return ns.Diagnostics.ShowText(text) == true
+  end
+  return false
+end
+
 local function PrintLine(message, isError, pack)
   if not pack.alerts then
     return
@@ -312,9 +936,7 @@ local function PrintLine(message, isError, pack)
   end
   local line = "|cff51dbd1Decursive|r: " .. message
   if pack.alerts.printChat ~= false then
-    if DEFAULT_CHAT_FRAME then
-      DEFAULT_CHAT_FRAME:AddMessage(line)
-    end
+    ShowCopyableAlertText(line)
   end
   if pack.alerts.printCustom then
     local f = EnsurePrintFrame()
@@ -345,6 +967,61 @@ local function PlayPreset(pack, kind)
   end
 end
 
+local DISPEL_TEXT_MAP = {Magic = "DISPEL", Curse = "DISPEL", Disease = "DISPEL", Poison = "DISPEL"}
+
+function ns.ConfigureDispelAlertSlot(slot)
+  if not slot or alertLayers[slot] then
+    return
+  end
+  EnsureTextFrame()
+  local pack = GetPack()
+  local r, g, b, a = DispelColor(pack)
+  local fontPath, size = AlertFont(pack)
+  local layer = {}
+  if slot.SetDurationText and C_DurationUtil and C_DurationUtil.CreateDurationTextBinding and C_CurveUtil and C_CurveUtil.CreateColorCurve and CreateColor then
+    local text = slot:CreateFontString(nil, "OVERLAY")
+    text:SetPoint("CENTER", textFrame, "CENTER")
+    text:SetFont(fontPath, size, "THICKOUTLINE")
+    if text.SetIgnoreParentScale then
+      text:SetIgnoreParentScale(true)
+    end
+    local curve = C_CurveUtil.CreateColorCurve()
+    curve:SetType(Enum.LuaCurveType.Step)
+    local enabled = pack.alerts.text ~= false and pack.alerts.dispelEnabled ~= false and pack.alerts.dispelMode ~= "UNTIL_CLEARED"
+    local duration = pack.alerts.dispelDuration or 2
+    curve:AddPoint(0, CreateColor(r, g, b, enabled and a or 0))
+    curve:AddPoint(duration, CreateColor(r, g, b, 0))
+    local binding = C_DurationUtil.CreateDurationTextBinding()
+    binding:SetToDefaults()
+    binding:SetTextFormat("DISPEL", {})
+    binding:SetTextColorCurve(curve, Enum.DurationTextBindingProperty.ElapsedDuration)
+    binding:SetZeroDurationText("")
+    binding:SetExpiredText("")
+    binding:SetUpdateInterval(0.05)
+    slot:SetDurationText(text, {binding = binding})
+    layer.timed = text
+    layer.curve = curve
+  end
+  if slot.SetDispelTypeText then
+    local text = slot:CreateFontString(nil, "OVERLAY")
+    text:SetPoint("CENTER", textFrame, "CENTER")
+    text:SetFont(fontPath, size, "THICKOUTLINE")
+    text:SetTextColor(r, g, b, a)
+    text:SetAlpha(pack.alerts.text ~= false and pack.alerts.dispelEnabled ~= false and pack.alerts.dispelMode == "UNTIL_CLEARED" and 1 or 0)
+    slot:SetDispelTypeText(text, {showWhenHarmful = true, showWhenHelpful = false, showWithoutDispelType = false, customDispelTextMap = DISPEL_TEXT_MAP})
+    layer.persistent = text
+  end
+  alertLayers[slot] = layer
+end
+
+function ns.PlayCureFailureSound()
+  local pack = GetPack()
+  if not pack.alerts or not pack.alerts.errorSound then
+    return
+  end
+  PlayPreset(pack, "failure")
+end
+
 local function UnitLabel(unit, destName)
   local publicName = Public(destName)
   if type(publicName) == "string" and publicName ~= "" then
@@ -359,33 +1036,27 @@ local function UnitLabel(unit, destName)
   return "unit"
 end
 
-local function OnSuccessfulDispel(destGUID, destName, extraSpellId, extraSpellName)
+local function ShowSuccessfulDispelText(pack)
+  EnsureTextFrame()
+  local duration = math.max(0.5, math.min(30, tonumber(pack.alerts.dispelDuration) or 2))
+  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
+  textFont:SetText("Dispelled")
+  textFrame:Show()
+  hideAt = (GetTime and GetTime() or 0) + duration
+end
+
+function ns.NotifyCureSucceeded(_unit)
   local pack = GetPack()
-  extraSpellId = Public(extraSpellId)
-  extraSpellName = Public(extraSpellName)
-  destName = Public(destName)
-  destGUID = Public(destGUID)
-  local who = UnitLabel(nil, destName)
-  local what = extraSpellName
+  if not pack.alerts or pack.alerts.successfulDispelText ~= true then
+    return false
+  end
   local now = GetTime and GetTime() or 0
-  if pack.alerts and pack.alerts.learnSpellIds and type(extraSpellId) == "number" then
-    if LearnSpellId(extraSpellId) then
-      pendingSync = true
-      if not SoundMessagingLocked() then
-        SyncNativeSounds()
-      end
-    end
+  if now - lastTextAt < 0.2 then
+    return false
   end
-  if now - lastTextAt >= 0.2 then
-    lastTextAt = now
-    if type(what) == "string" and what ~= "" then
-      ShowDispelText("Dispelled " .. what, pack)
-      PrintLine("Dispelled " .. what .. " from " .. who, false, pack)
-    else
-      ShowDispelText("Dispelled", pack)
-      PrintLine("Dispelled on " .. who, false, pack)
-    end
-  end
+  lastTextAt = now
+  ShowSuccessfulDispelText(pack)
+  return true
 end
 
 local function SoulLinkSpellId()
@@ -405,51 +1076,40 @@ local function ShowSoulLinkWarning(destName)
   if who == "unit" then
     who = "your target"
   end
-  ShowDispelText("Battle rez: move within range of " .. who .. "!", pack)
+  EnsureTextFrame()
+  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
+  textFont:SetText("Battle rez: move within range of " .. who .. "!")
+  textFrame:Show()
+  hideAt = (GetTime and GetTime() or 0) + 2.5
   PrintLine("Battle rez: move within range of " .. who, false, pack)
 end
 
-local function OnCLEU()
-  if not CombatLogGetCurrentEventInfo then
-    return
+function ns.BeginSoulLinkAttempt(unit)
+  unit = Public(unit)
+  if type(unit) ~= "string" then
+    soulLinkAttempt = nil
+    return false
   end
-  local _ts, subevent, _hide, sourceGUID, _sourceName, _sf, _srf, destGUID, destName, _df, _drf, spellId, spellName, _school, extraSpellId, extraSpellName = CombatLogGetCurrentEventInfo()
-  subevent = Public(subevent)
-  sourceGUID = Public(sourceGUID)
-  local playerGUID = UnitGUID and Public(UnitGUID("player"))
-  if not sourceGUID or not playerGUID or sourceGUID ~= playerGUID then
-    return
-  end
-  if subevent == "SPELL_DISPEL" or subevent == "SPELL_STOLEN" then
-    OnSuccessfulDispel(destGUID, destName, extraSpellId, extraSpellName)
-    return
-  end
-  if subevent == "SPELL_CAST_FAILED" then
-    spellId = Public(spellId)
-    if type(spellId) == "number" and spellId == SoulLinkSpellId() then
-      ShowSoulLinkWarning(destName)
-    end
-  end
+  soulLinkAttempt = {unit = unit, startedAt = GetTime and GetTime() or 0}
+  return true
 end
 
-local function OnCastFailed(unit, _castGUID, spellId)
-  unit = Public(unit)
-  if unit ~= "player" then
+local function OnUIError(errorType, message)
+  local attempt = soulLinkAttempt
+  local now = GetTime and GetTime() or 0
+  if not attempt or now - attempt.startedAt > 0.80 then
     return
   end
-  local pack = GetPack()
-  spellId = Public(spellId)
-  if type(spellId) == "number" and spellId == SoulLinkSpellId() then
-    local dest
-    if UnitName then
-      dest = Public(UnitName("target"))
-    end
-    ShowSoulLinkWarning(dest)
-  end
-  if not pack.alerts or not pack.alerts.errorSound then
+  errorType = Public(errorType)
+  message = Public(message)
+  if not Accessible(errorType) or not Accessible(message) then
     return
   end
-  PlayPreset(pack, "failure")
+  if message == SPELL_FAILED_OUT_OF_RANGE or message == ERR_OUT_OF_RANGE then
+    soulLinkAttempt = nil
+    local name = UnitName and Public(UnitName(attempt.unit)) or nil
+    ShowSoulLinkWarning(type(name) == "string" and name or "your target")
+  end
 end
 
 local function RegisterEvents()
@@ -459,91 +1119,123 @@ local function RegisterEvents()
   eventsOn = true
   eventFrame = CreateFrame("Frame")
   eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3)
-    if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-      OnCLEU()
-    elseif event == "GROUP_ROSTER_UPDATE" then
+    if event == "GROUP_ROSTER_UPDATE" then
       pendingSync = true
       if not SoundMessagingLocked() then
-        SyncNativeSounds()
+        ns.RefreshAlerts("GROUP_ROSTER_UPDATE")
       end
     elseif event == "PLAYER_REGEN_ENABLED" then
       if pendingSync then
-        SyncNativeSounds()
+        ns.RefreshAlerts("PLAYER_REGEN_ENABLED")
       end
     elseif event == "PLAYER_ENTERING_WORLD" then
       pendingSync = true
-      SyncNativeSounds()
+      ns.RefreshAlerts("PLAYER_ENTERING_WORLD")
+    elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
+      if pendingSync and not SoundMessagingLocked() then
+        ns.RefreshAlerts("RESTRICTION_STATE_CHANGED")
+      end
     elseif event == "LOADING_SCREEN_ENABLED" then
-      ClearRegistrations()
       pendingSync = true
-    elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
-      OnCastFailed(arg1, arg2, arg3)
+    elseif event == "UI_ERROR_MESSAGE" then
+      OnUIError(arg1, arg2)
     end
   end)
-  eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
-  eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-  eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-  eventFrame:RegisterEvent("LOADING_SCREEN_ENABLED")
-  eventFrame:RegisterEvent("UNIT_SPELLCAST_FAILED")
-  eventFrame:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
-  local valid = true
-  if C_EventUtils and C_EventUtils.IsEventValid then
-    valid = C_EventUtils.IsEventValid("COMBAT_LOG_EVENT_UNFILTERED")
-  end
-  if valid then
-    eventFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-  end
-end
-
-function ns.RefreshAlerts()
-  pendingSync = true
-  if SoundMessagingLocked() then
-    return
-  end
-  SyncNativeSounds()
-end
-
-
-function ns.PrintAuraSoundDiagnostics(spellId, unitToken)
-  local pack = GetPack()
-  local store = EnsureLearnedStore()
-  local lines = {
-    "Decursive Aura Sound Diagnostic",
-    "native AddAuraSound: " .. ((C_UnitAuras and C_UnitAuras.AddAuraSound) and "yes" or "no"),
-    "sound enabled: " .. tostring(pack.alerts and pack.alerts.sound == true),
-    "nativeAuraSound: " .. tostring(pack.alerts and pack.alerts.nativeAuraSound == true),
-    "learned ids: " .. tostring(#store),
-    "active registrations: " .. tostring(#registered),
-    "chat-messaging lockdown: " .. tostring(SoundMessagingLocked()),
-  }
-  if #store > 0 then
-    local shown = {}
-    local n = math.min(#store, 12)
-    for i = 1, n do
-      shown[i] = tostring(store[i])
+  if not ns.DetectionEngine then
+    eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+    eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    if not C_EventUtils or not C_EventUtils.IsEventValid or C_EventUtils.IsEventValid("ADDON_RESTRICTION_STATE_CHANGED") then
+      eventFrame:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
     end
-    lines[#lines + 1] = "ids: " .. table.concat(shown, ", ")
   end
-  spellId = tonumber(spellId)
-  if type(spellId) == "number" and spellId > 0 then
-    local unit = type(unitToken) == "string" and unitToken ~= "" and unitToken or "player"
-    local found = false
-    for i = 1, #store do
-      if store[i] == spellId then
-        found = true
-        break
+  eventFrame:RegisterEvent("LOADING_SCREEN_ENABLED")
+  eventFrame:RegisterEvent("UI_ERROR_MESSAGE")
+end
+
+function ns.RefreshAlerts(reason)
+  if ns.DiagnosticModuleRefresh then
+    ns.DiagnosticModuleRefresh("Alerts")
+  end
+  local soundOK, soundStatus, expectedCount = SyncNativeSounds(reason or "REFRESH_ALERTS", false, false)
+  if not ns.AuraDisplayMutationBlocked or not ns.AuraDisplayMutationBlocked() then
+    local pack = GetPack()
+    RestoreTextPoint()
+    if textFont then
+      ApplyFontStyle(textFont, pack, "THICKOUTLINE")
+    end
+    local r, g, b, a = DispelColor(pack)
+    local fontPath, size = AlertFont(pack)
+    local enabled = pack.alerts.text ~= false and pack.alerts.dispelEnabled ~= false
+    local timed = enabled and pack.alerts.dispelMode ~= "UNTIL_CLEARED"
+    local duration = math.max(0.5, math.min(30, tonumber(pack.alerts.dispelDuration) or 2))
+    for _slot, layer in pairs(alertLayers) do
+      if layer.curve then
+        layer.curve:ClearPoints()
+        layer.curve:AddPoint(0, CreateColor(r, g, b, timed and a or 0))
+        layer.curve:AddPoint(duration, CreateColor(r, g, b, 0))
+      end
+      if layer.timed then
+        layer.timed:SetFont(fontPath, size, "THICKOUTLINE")
+        layer.timed:SetTextColor(r, g, b, a)
+      end
+      if layer.persistent then
+        layer.persistent:SetFont(fontPath, size, "THICKOUTLINE")
+        layer.persistent:SetTextColor(r, g, b, a)
+        layer.persistent:SetAlpha(enabled and not timed and 1 or 0)
       end
     end
-    lines[#lines + 1] = "query " .. unit .. ":" .. tostring(spellId) .. " learned=" .. (found and "yes" or "no")
-  else
-    lines[#lines + 1] = "Pair query: /zdsound <spellID> [unitToken]"
   end
+  return soundOK == true, soundStatus or STATUS_FAILURE, expectedCount or 0
+end
+
+
+function ns.GetAuraSoundRegistryStatus()
+  return {
+    active = RegistrationCount(),
+    desired = lastDesiredCount,
+    exact = lastExactCount,
+    stale = lastStaleCount,
+    addFailed = lastAddFailed,
+    removeFailed = lastRemoveFailed,
+    replacementFallbacks = lastReplacementFallbacks,
+    pending = pendingSync == true,
+    pendingMode = pendingMode or "NONE",
+    pendingReason = pendingReason,
+    replayPending = replayScheduled == true,
+    replayAttempts = replayAttempts,
+    replayExhausted = replayExhausted == true,
+    removeRetryPending = removeRetryScheduled == true,
+    removeRetryAttempts = removeRetryAttempts,
+    removeRetryExhausted = removeRetryExhausted == true,
+    result = lastSoundResult,
+    errorCode = lastSoundError,
+  }
+end
+
+function ns.PrintAuraSoundDiagnostics(_spellId, _unitToken)
+  local pack = GetPack()
+  local store = EnsureLearnedStore()
+  local status = ns.GetAuraSoundRegistryStatus()
+  local locked = SoundMessagingLocked()
+  local lines = {
+    "Decursive Aura Sound Diagnostic",
+    "native AddAuraSound: " .. ((C_UnitAuras and type(C_UnitAuras.AddAuraSound) == "function") and "yes" or "no"),
+    "native RemoveAuraSound: " .. ((C_UnitAuras and type(C_UnitAuras.RemoveAuraSound) == "function") and "yes" or "no"),
+    "sound enabled: " .. tostring(pack.alerts and pack.alerts.sound == true),
+    "nativeAuraSound: " .. tostring(pack.alerts and pack.alerts.nativeAuraSound == true),
+    "stored learned ids (inactive): " .. tostring(#store),
+    "coverage: " .. tostring(status.exact) .. "/" .. tostring(status.desired) .. " exact; " .. tostring(status.active) .. " active; " .. tostring(status.stale) .. " stale",
+    "last reconcile: " .. tostring(status.result) .. " error=" .. tostring(status.errorCode),
+    "last failures: add=" .. tostring(status.addFailed) .. " remove=" .. tostring(status.removeFailed) .. " replacement fallbacks=" .. tostring(status.replacementFallbacks),
+    "pending: " .. tostring(status.pending) .. " mode=" .. tostring(status.pendingMode) .. " reason=" .. tostring(status.pendingReason),
+    "bounded replay: pending=" .. tostring(status.replayPending) .. " attempts=" .. tostring(status.replayAttempts) .. "/" .. tostring(MAX_REPLAY_RETRIES) .. " exhausted=" .. tostring(status.replayExhausted),
+    "removal retry: pending=" .. tostring(status.removeRetryPending) .. " attempts=" .. tostring(status.removeRetryAttempts) .. "/" .. tostring(MAX_REMOVE_RETRIES) .. " exhausted=" .. tostring(status.removeRetryExhausted),
+    "chat-messaging lockdown: " .. tostring(locked),
+  }
+  lines[#lines + 1] = "identity details: redacted"
   local text = table.concat(lines, "\n")
-  if DEFAULT_CHAT_FRAME then
-    for i = 1, #lines do
-      DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r " .. lines[i])
-    end
-  end
+  ShowCopyableAlertText(text)
   return text
 end
 
@@ -566,23 +1258,17 @@ function ns.HandleAlertsSlash(msg)
       "chat: " .. tostring(pack.alerts.chat ~= false),
       "errorSound: " .. tostring(pack.alerts.errorSound == true),
     }
-    if DEFAULT_CHAT_FRAME then
-      for i = 1, #lines do
-        DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r " .. lines[i])
-      end
-    end
+    ShowCopyableAlertText(table.concat(lines, "\n"))
   end
   if msg == "move" then
     moveMode = not moveMode
     EnsureTextFrame()
     local applied = ApplyMoveMode()
-    if DEFAULT_CHAT_FRAME then
-      if applied then
-        local state = moveMode and "unlocked" or "locked"
-        DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text " .. state .. ". Drag to move, /dcralerts move to lock.")
-      else
-        DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r alert text move deferred until combat ends.")
-      end
+    if applied then
+      local state = moveMode and "unlocked" or "locked"
+      ShowCopyableAlertText("Decursive alert text " .. state .. ". Drag to move, /dcralerts move to lock.")
+    else
+      ShowCopyableAlertText("Decursive alert text move deferred until combat ends.")
     end
     return
   end
@@ -607,9 +1293,7 @@ function ns.HandleAlertsSlash(msg)
     return
   end
   if msg ~= "" and msg ~= "status" then
-    if DEFAULT_CHAT_FRAME then
-      DEFAULT_CHAT_FRAME:AddMessage("|cff51dbd1Decursive|r /dcralerts [on|off|status|move]")
-    end
+    ShowCopyableAlertText("Decursive Alerts Help\n/dcralerts [on|off|status|move]")
     return
   end
   Status()
@@ -642,9 +1326,87 @@ function ns.PlayTestSound(kind)
   end
 end
 
+function ns.PlayTestText(packOverride)
+  if type(InCombatLockdown) == "function" then
+    local ok, locked = pcall(InCombatLockdown)
+    if not ok or not Accessible(locked) or locked == true then
+      return false, "COMBAT"
+    end
+  end
+  local pack = type(packOverride) == "table" and packOverride or GetPack()
+  if type(pack) ~= "table" or type(pack.alerts) ~= "table" then
+    return false, "PACK_UNAVAILABLE"
+  end
+  EnsureTextFrame()
+  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
+  textFont:SetText("DISPEL")
+  textFrame:Show()
+  hideAt = (GetTime and GetTime() or 0) + math.max(0.5, math.min(30, tonumber(pack.alerts.dispelDuration) or 2))
+  return true, "PREVIEW"
+end
+
 function ns.EnableAlerts(_addon)
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("Alerts", false)
+  end
+  if ns.DetectionEngine and type(ns.DetectionEngine.RegisterConsumer) == "function" then
+    ns.DetectionEngine:RegisterConsumer("Alerts", function(reason)
+      return ns.RefreshAlerts(reason or "ENGINE_CONSUMER")
+    end)
+  end
   EnsureLearnedStore()
   RegisterEvents()
   ns.RefreshAlerts()
   EnsureTextFrame()
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("Alerts", true)
+  end
+end
+
+if ns.RegisterDiagnosticProvider then
+  ns.RegisterDiagnosticProvider("Alerts", function()
+    local frameShown = false
+    if textFrame and type(textFrame.IsShown) == "function" then
+      local ok, shown = pcall(textFrame.IsShown, textFrame)
+      local public = ns.Diagnostics and ns.Diagnostics.SafePublicBoolean(shown) or nil
+      frameShown = ok and public == true
+    end
+    local pack = GetPack()
+    local alerts = type(pack) == "table" and type(pack.alerts) == "table" and pack.alerts or {}
+    return {
+      eventsRegistered = eventsOn,
+      pendingRefresh = pendingSync,
+      nativeRegistrations = RegistrationCount(),
+      nativeDesiredRegistrations = lastDesiredCount,
+      nativeExactRegistrations = lastExactCount,
+      nativeStaleRegistrations = lastStaleCount,
+      nativeAddFailures = lastAddFailed,
+      nativeRemoveFailures = lastRemoveFailed,
+      nativeReplacementFallbacks = lastReplacementFallbacks,
+      nativeLastResult = lastSoundResult,
+      nativeLastError = lastSoundError,
+      nativePendingMode = pendingMode or "NONE",
+      nativeReplayAttempts = replayAttempts,
+      nativeReplayExhausted = replayExhausted,
+      nativeRemoveRetryAttempts = removeRetryAttempts,
+      nativeRemoveRetryExhausted = removeRetryExhausted,
+      learnedStoredIgnoredCount = #EnsureLearnedStore(),
+      actionableCuratedCount = lastCuratedCount,
+      actionableTypeCount = 4,
+      textFrameCreated = textFrame ~= nil,
+      textFrameShown = frameShown,
+      soundConfigured = alerts.sound == true,
+      soundMode = alerts.sound == true and alerts.nativeAuraSound == true and "NATIVE_ADDED" or "OFF",
+      textConfigured = alerts.dispelEnabled ~= false,
+      textMode = alerts.dispelEnabled ~= false and (alerts.dispelMode == "UNTIL_CLEARED" and "PROVIDER_UNTIL_CLEARED" or "PROVIDER_TIMED") or "OFF",
+      successTextMode = alerts.successfulDispelText == true and "AFTER_CONFIRMED_CURE" or "OFF",
+      soulLinkMode = alerts.soulLinkAlert ~= false and "RANGE_FAILURE" or "OFF",
+      providerPayloadRead = false,
+      chatLockdown = SoundMessagingLocked(),
+    }
+  end)
+end
+
+if ns.DiagnosticModuleLoaded then
+  ns.DiagnosticModuleLoaded("Alerts")
 end

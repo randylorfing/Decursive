@@ -1,4 +1,29 @@
+--[[
+    This file is part of ZDecursive, an independently maintained rebuild of Decursive.
+
+    Based on Decursive, Copyright (C) 2006-2026 John Wellesz
+    (Decursive AT 2072productions.com) (https://www.2072productions.com/to/decursive.php)
+    ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
+
+    ZDecursive is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    ZDecursive is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with ZDecursive. If not, see <https://www.gnu.org/licenses/>.
+--]]
+
 local ADDON_NAME, ns = ...
+
+if ns.DiagnosticCheckpoint then
+  ns.DiagnosticCheckpoint("module", "Lists file start")
+end
 
 local MAX_ENTRIES = 99
 
@@ -90,6 +115,60 @@ local function PublicNumber(value)
     return nil
   end
   return value
+end
+
+local function PublicBoolean(value)
+  value = Public(value)
+  if type(value) ~= "boolean" then
+    return nil
+  end
+  return value
+end
+
+local function PublicTable(value)
+  if type(value) ~= "table" then
+    return nil
+  end
+  if type(issecrettable) == "function" and issecrettable(value) then
+    if type(canaccesstable) ~= "function" or canaccesstable(value) ~= true then
+      return nil
+    end
+  end
+  return value
+end
+
+local function CallGlobal(name, ...)
+  local fn = rawget(_G, name)
+  if type(fn) ~= "function" then
+    return nil
+  end
+  local ok, value = pcall(fn, ...)
+  if not ok then
+    return nil
+  end
+  return value
+end
+
+local function ReadField(value, key)
+  local ok, field = pcall(function()
+    return value and value[key]
+  end)
+  if not ok then
+    return nil
+  end
+  return field
+end
+
+local function CallFrameNumber(frame, method)
+  local fn = ReadField(frame, method)
+  if type(fn) ~= "function" then
+    return nil
+  end
+  local ok, value = pcall(fn, frame)
+  if not ok then
+    return nil
+  end
+  return PublicNumber(value)
 end
 
 local function Fold(text)
@@ -239,10 +318,15 @@ local function OtherList(which)
 end
 
 local function NotifyLists()
+  if ns.MarkUnitPriorityRevision then
+    ns.MarkUnitPriorityRevision()
+  end
   if ns.Notify then
     ns.Notify()
   else
-    if ns.RefreshMUFs then
+    if ns.RequestUnitSortRefresh then
+      ns.RequestUnitSortRefresh("priority-list")
+    elseif ns.RefreshMUFs then
       ns.RefreshMUFs()
     end
     if ns.RefreshAlerts then
@@ -459,6 +543,389 @@ function ns.UnitPrioRank(unit)
   return 1000
 end
 
+local dandersCallbackOwner = {}
+local dandersCallbackProvider
+local dandersLoadFrame
+local sortState = {
+  revision = 0,
+  priorityRevision = 0,
+  signatureGeneration = 0,
+  refreshGeneration = 0,
+  pending = false,
+  configuredMode = "GROUP",
+  effectiveMode = "GROUP",
+  environmentPackID = "unknown",
+  dandersApplied = nil,
+  pendingControlMode = nil,
+  pendingControlPack = nil,
+  signature = nil,
+}
+
+local function SortLockedDown()
+  return InCombatLockdown and InCombatLockdown()
+end
+
+function ns.InvalidateUnitSort(_reason)
+  sortState.revision = sortState.revision + 1
+  sortState.dandersApplied = nil
+end
+
+function ns.MarkUnitPriorityRevision()
+  sortState.priorityRevision = sortState.priorityRevision + 1
+end
+
+function ns.MarkUnitSortRefreshPending(reason)
+  ns.InvalidateUnitSort(reason)
+  sortState.pending = true
+end
+
+function ns.GetUnitSortRefreshGeneration()
+  return sortState.refreshGeneration
+end
+
+local function ApplyPendingOrderControl()
+  local pack = sortState.pendingControlPack
+  local mode = sortState.pendingControlMode
+  if not mode then
+    return false
+  end
+  if type(pack) == "table" and type(pack.mufs) == "table" then
+    pack.mufs.order = mode
+  end
+  sortState.pendingControlMode = nil
+  sortState.pendingControlPack = nil
+  return true
+end
+
+function ns.RequestUnitSortRefresh(reason)
+  ns.InvalidateUnitSort(reason)
+  if SortLockedDown() then
+    sortState.pending = true
+    return false
+  end
+  ApplyPendingOrderControl()
+  sortState.pending = false
+  sortState.refreshGeneration = sortState.refreshGeneration + 1
+  if ns.RefreshMUFs then
+    ns.RefreshMUFs()
+  end
+  return true
+end
+
+function ns.FlushUnitSortRefresh(_reason)
+  if not sortState.pending or SortLockedDown() then
+    return false
+  end
+  ApplyPendingOrderControl()
+  sortState.pending = false
+  sortState.refreshGeneration = sortState.refreshGeneration + 1
+  if ns.RefreshMUFs then
+    ns.RefreshMUFs()
+  end
+  return true
+end
+
+local function CurrentPackUsesDandersFrames()
+  local addon = Addon()
+  if not addon or not addon.GetAppliedEnvironmentPack then
+    return false
+  end
+  local pack = addon:GetAppliedEnvironmentPack()
+  return type(pack) == "table" and type(pack.mufs) == "table" and pack.mufs.order == "DANDERSFRAMES"
+end
+
+local function OnDandersFramesSorted(_event, sortType)
+  sortType = PublicString(sortType)
+  if sortType ~= "party" and sortType ~= "raid" then
+    return
+  end
+  if not CurrentPackUsesDandersFrames() then
+    return
+  end
+  ns.RequestUnitSortRefresh("danders-callback")
+end
+
+function ns.EnsureDandersFramesOrderCallback()
+  local provider = rawget(_G, "DandersFrames")
+  if provider == dandersCallbackProvider then
+    return provider ~= nil
+  end
+  local unregister = type(dandersCallbackProvider) == "table" and rawget(dandersCallbackProvider, "UnregisterCallback")
+  if type(unregister) == "function" then
+    pcall(unregister, dandersCallbackOwner, "OnFramesSorted")
+  end
+  dandersCallbackProvider = nil
+  local register = type(provider) == "table" and rawget(provider, "RegisterCallback")
+  if type(register) ~= "function" then
+    return false
+  end
+  local ok, registered = pcall(register, dandersCallbackOwner, "OnFramesSorted", OnDandersFramesSorted)
+  if not ok or registered == false then
+    return false
+  end
+  dandersCallbackProvider = provider
+  return true
+end
+
+local function DandersFramesReady()
+  local readyFn = rawget(_G, "DandersFrames_IsReady")
+  if type(readyFn) == "function" then
+    local ok, ready = pcall(readyFn)
+    if not ok or PublicBoolean(ready) ~= true then
+      return false
+    end
+  end
+  return type(rawget(_G, "DandersFrames_GetFrameForUnit")) == "function"
+end
+
+local function ConfiguredOrder(pack)
+  local order = type(pack) == "table" and type(pack.mufs) == "table" and pack.mufs.order or nil
+  if order == "PRIORITY" or order == "DANDERSFRAMES" then
+    return order
+  end
+  return "GROUP"
+end
+
+local function EffectiveOrder(pack)
+  local configured = ConfiguredOrder(pack)
+  if configured == "DANDERSFRAMES" then
+    if not DandersFramesReady() or sortState.dandersApplied == false then
+      return "GROUP"
+    end
+  end
+  return configured
+end
+
+local function UpdateSortState(pack)
+  local addon = Addon()
+  local environment = "unknown"
+  local value = addon and addon.GetAppliedEnvironment and addon:GetAppliedEnvironment() or nil
+  if type(value) == "string" and ns.ENV_SET and ns.ENV_SET[value] then
+    environment = value
+  end
+  local profileGeneration = addon and type(addon.profileChangeGeneration) == "number" and addon.profileChangeGeneration or 0
+  local configured = ConfiguredOrder(pack)
+  local effective = EffectiveOrder(pack)
+  local signature = table.concat({configured, effective, environment, tostring(profileGeneration), tostring(sortState.revision), tostring(sortState.priorityRevision)}, "|")
+  if signature ~= sortState.signature then
+    sortState.signature = signature
+    sortState.signatureGeneration = sortState.signatureGeneration + 1
+  end
+  sortState.configuredMode = configured
+  sortState.effectiveMode = effective
+  sortState.environmentPackID = environment
+  return effective
+end
+
+function ns.GetConfiguredMUFOrder(pack)
+  return ConfiguredOrder(pack)
+end
+
+function ns.GetEffectiveMUFOrder(pack)
+  local addon = Addon()
+  pack = pack or (addon and addon.GetAppliedEnvironmentPack and addon:GetAppliedEnvironmentPack())
+  return UpdateSortState(pack)
+end
+
+function ns.SetConfiguredMUFOrder(pack, value)
+  if type(pack) ~= "table" or type(pack.mufs) ~= "table" then
+    return false, "pack"
+  end
+  if value ~= "GROUP" and value ~= "PRIORITY" and value ~= "DANDERSFRAMES" then
+    value = "GROUP"
+  end
+  if SortLockedDown() then
+    sortState.pendingControlMode = value
+    sortState.pendingControlPack = pack
+    ns.MarkUnitSortRefreshPending("order-control")
+    return true, value
+  end
+  pack.mufs.order = value
+  ns.RequestUnitSortRefresh("order-control")
+  return true, value
+end
+
+function ns.GetPendingMUFOrder()
+  return sortState.pendingControlMode
+end
+
+function ns.GetUnitSortDiagnostics(pack)
+  local addon = Addon()
+  if not pack then
+    local db = addon and addon.db
+    local profile = type(db) == "table" and db.profile or nil
+    local environments = type(profile) == "table" and profile.environments or nil
+    local char = type(db) == "table" and db.char or nil
+    local environment = type(char) == "table" and rawget(char, "editingEnvironment") or nil
+    if type(environments) == "table" and type(environment) == "string" and ns.ENV_SET and ns.ENV_SET[environment] then
+      pack = environments[environment]
+    end
+  end
+  UpdateSortState(pack)
+  return {
+    configuredMode = sortState.configuredMode,
+    effectiveMode = sortState.effectiveMode,
+    environmentPackID = sortState.environmentPackID,
+    profileChangeGeneration = addon and addon.profileChangeGeneration or 0,
+    sortRevision = sortState.revision,
+    priorityRevision = sortState.priorityRevision,
+    sortSignatureGeneration = sortState.signatureGeneration,
+    sortCacheGeneration = sortState.signatureGeneration,
+    sortRefreshGeneration = sortState.refreshGeneration,
+    pendingSortRefresh = sortState.pending,
+    pendingConfiguredMode = sortState.pendingControlMode or "unknown",
+  }
+end
+
+local function AddHeaderSlots(slots, header, maximum, nextSlot)
+  local getAttribute = ReadField(header, "GetAttribute")
+  if type(getAttribute) ~= "function" then
+    return nextSlot
+  end
+  for i = 1, maximum do
+    local ok, child = pcall(getAttribute, header, "child" .. tostring(i))
+    if ok then
+      child = Public(child)
+    end
+    if ok and child and slots[child] == nil then
+      slots[child] = nextSlot
+      nextSlot = nextSlot + 1
+    end
+  end
+  return nextSlot
+end
+
+local function DandersFrameSlots()
+  local slots = {}
+  local nextSlot = 1
+  local inRaid = PublicBoolean(CallGlobal("IsInRaid")) == true
+  if inRaid then
+    local grouped = PublicBoolean(CallGlobal("DandersFrames_IsRaidGrouped"))
+    if grouped then
+      local headers = PublicTable(CallGlobal("DandersFrames_GetRaidGroupHeaders"))
+      if headers then
+        for group = 1, 8 do
+          nextSlot = AddHeaderSlots(slots, ReadField(headers, group), 5, nextSlot)
+        end
+      end
+    else
+      nextSlot = AddHeaderSlots(slots, CallGlobal("DandersFrames_GetFlatRaidHeader"), 40, nextSlot)
+    end
+  else
+    nextSlot = AddHeaderSlots(slots, CallGlobal("DandersFrames_GetPartyHeader"), 5, nextSlot)
+  end
+  return slots
+end
+
+local function DandersHorizontalLayout()
+  local inRaid = PublicBoolean(CallGlobal("IsInRaid")) == true
+  local configName = inRaid and "DandersFrames_GetRaidConfig" or "DandersFrames_GetPartyConfig"
+  local config = PublicTable(CallGlobal(configName))
+  if not config then
+    return false
+  end
+  local growDirection = PublicString(ReadField(config, "growDirection"))
+  return growDirection == "HORIZONTAL"
+end
+
+local function DandersOrder(units)
+  if not DandersFramesReady() then
+    return nil
+  end
+  ns.EnsureDandersFramesOrderCallback()
+  local slots = DandersFrameSlots()
+  local horizontal = DandersHorizontalLayout()
+  local positioned = {}
+  local ownerCount = 0
+  local getFrame = rawget(_G, "DandersFrames_GetFrameForUnit")
+  for i = 1, #units do
+    local unit = units[i]
+    local isPet = unit == "pet" or (type(unit) == "string" and (
+      unit:match("^partypet%d+$") ~= nil or unit:match("^raidpet%d+$") ~= nil
+    ))
+    if type(unit) == "string" and not isPet then
+      ownerCount = ownerCount + 1
+      local ok, frame = pcall(getFrame, unit)
+      if ok then
+        frame = Public(frame)
+      end
+      if ok and frame then
+        local entry = {
+          unit = unit,
+          source = i,
+          left = CallFrameNumber(frame, "GetLeft"),
+          top = CallFrameNumber(frame, "GetTop"),
+          width = CallFrameNumber(frame, "GetWidth") or 1,
+          height = CallFrameNumber(frame, "GetHeight") or 1,
+          slot = slots[frame],
+        }
+        if (entry.left ~= nil and entry.top ~= nil) or entry.slot ~= nil then
+          positioned[#positioned + 1] = entry
+        end
+      end
+    end
+  end
+  if #positioned < 2 or #positioned ~= ownerCount then
+    return nil
+  end
+  table.sort(positioned, function(a, b)
+    local aPositioned = a.left ~= nil and a.top ~= nil
+    local bPositioned = b.left ~= nil and b.top ~= nil
+    if aPositioned ~= bPositioned then
+      return aPositioned
+    end
+    if aPositioned then
+      if horizontal then
+        local rowTolerance = math.max(1, math.min(a.height, b.height) * 0.5)
+        if math.abs(a.top - b.top) > rowTolerance then
+          return a.top > b.top
+        end
+        if a.left ~= b.left then
+          return a.left < b.left
+        end
+      else
+        local columnTolerance = math.max(1, math.min(a.width, b.width) * 0.5)
+        if math.abs(a.left - b.left) > columnTolerance then
+          return a.left < b.left
+        end
+        if a.top ~= b.top then
+          return a.top > b.top
+        end
+      end
+    end
+    if a.slot ~= b.slot then
+      if a.slot == nil then
+        return false
+      end
+      if b.slot == nil then
+        return true
+      end
+      return a.slot < b.slot
+    end
+    return a.source < b.source
+  end)
+  local ranks = {}
+  for rank = 1, #positioned do
+    ranks[positioned[rank].unit] = rank
+  end
+  return ranks
+end
+
+local function OwnerToken(unit)
+  if unit == "pet" then
+    return "player"
+  end
+  local partyIndex = type(unit) == "string" and unit:match("^partypet(%d+)$")
+  if partyIndex then
+    return "party" .. partyIndex
+  end
+  local raidIndex = type(unit) == "string" and unit:match("^raidpet(%d+)$")
+  if raidIndex then
+    return "raid" .. raidIndex
+  end
+  return unit
+end
+
 function ns.WrapRosterLists(units, pack)
   if type(units) ~= "table" then
     return units
@@ -503,23 +970,49 @@ function ns.ApplyUnitLists(units, pack)
   if type(units) ~= "table" then
     return units
   end
+  if ns.DiagnosticModuleRefresh then
+    ns.DiagnosticModuleRefresh("Lists")
+  end
+  local skippedOwners = {}
+  for i = 1, #units do
+    local unit = units[i]
+    if type(unit) == "string" and OwnerToken(unit) == unit and ns.IsUnitSkipped(unit) then
+      skippedOwners[unit] = true
+    end
+  end
   local kept = {}
   for i = 1, #units do
     local unit = units[i]
-    if type(unit) == "string" and not ns.IsUnitSkipped(unit) then
+    local owner = OwnerToken(unit)
+    if type(unit) == "string" and not skippedOwners[owner] and not ns.IsUnitSkipped(unit) then
       kept[#kept + 1] = unit
     end
   end
-  local order = pack and pack.mufs and pack.mufs.order
-  if order ~= "PRIORITY" then
+  local order = UpdateSortState(pack)
+  local ranks
+  if order == "PRIORITY" then
+    ranks = {}
+    for i = 1, #kept do
+      local owner = OwnerToken(kept[i])
+      if ranks[owner] == nil then
+        ranks[owner] = ns.UnitPrioRank(owner)
+      end
+    end
+  elseif order == "DANDERSFRAMES" then
+    ranks = DandersOrder(kept)
+    sortState.dandersApplied = type(ranks) == "table"
+    UpdateSortState(pack)
+  end
+  if type(ranks) ~= "table" then
     return kept
   end
   local ranked = {}
   for i = 1, #kept do
+    local owner = OwnerToken(kept[i])
     ranked[i] = {
       unit = kept[i],
       i = i,
-      rank = ns.UnitPrioRank(kept[i]),
+      rank = ranks[owner] or 1000,
     }
   end
   table.sort(ranked, function(a, b)
@@ -716,6 +1209,9 @@ function ns.HandleListSlash(which, msg)
 end
 
 function ns.RegisterLists(addon)
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("Lists", false)
+  end
   if not addon or not addon.RegisterChatCommand then
     return
   end
@@ -749,4 +1245,61 @@ function ns.RegisterLists(addon)
   addon:RegisterChatCommand("dcrskremove", function()
     ns.HandleListSlash("skip", "remove")
   end)
+  ns.EnsureDandersFramesOrderCallback()
+  if not dandersLoadFrame and CreateFrame then
+    dandersLoadFrame = CreateFrame("Frame")
+    dandersLoadFrame:RegisterEvent("ADDON_LOADED")
+    dandersLoadFrame:SetScript("OnEvent", function(_, _event, loadedName)
+      if PublicString(loadedName) == "DandersFrames" then
+        ns.EnsureDandersFramesOrderCallback()
+        if CurrentPackUsesDandersFrames() then
+          ns.RequestUnitSortRefresh("danders-loaded")
+        end
+      end
+    end)
+  end
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("Lists", true)
+  end
+end
+
+if ns.RegisterDiagnosticProvider then
+  ns.RegisterDiagnosticProvider("Lists", function()
+    local dandersLoaded = false
+    local loadedAPI = C_AddOns and C_AddOns.IsAddOnLoaded
+    if type(loadedAPI) == "function" then
+      local ok, loaded = pcall(loadedAPI, "DandersFrames")
+      local public = ns.Diagnostics and ns.Diagnostics.SafePublicBoolean(loaded) or nil
+      dandersLoaded = ok and public == true
+    end
+    local sort = ns.GetUnitSortDiagnostics()
+    local addon = Addon()
+    local profile = addon and addon.db and addon.db.profile
+    local lists = type(profile) == "table" and profile.lists or nil
+    local priority = type(lists) == "table" and lists.priority or nil
+    local skip = type(lists) == "table" and lists.skip or nil
+    return {
+      priorityCount = type(priority) == "table" and #priority or 0,
+      skipCount = type(skip) == "table" and #skip or 0,
+      dandersFramesLoaded = dandersLoaded,
+      dandersFramesReady = DandersFramesReady(),
+      dandersAdapterRegistered = dandersCallbackProvider ~= nil,
+      dandersOrderSelected = sort.configuredMode == "DANDERSFRAMES",
+      effectiveSortMode = sort.effectiveMode,
+      configuredSortMode = sort.configuredMode,
+      environmentPackID = sort.environmentPackID,
+      profileChangeGeneration = sort.profileChangeGeneration,
+      sortRevision = sort.sortRevision,
+      priorityRevision = sort.priorityRevision,
+      sortSignatureGeneration = sort.sortSignatureGeneration,
+      sortCacheGeneration = sort.sortCacheGeneration,
+      sortRefreshGeneration = sort.sortRefreshGeneration,
+      pendingSortRefresh = sort.pendingSortRefresh,
+      pendingConfiguredMode = sort.pendingConfiguredMode,
+    }
+  end)
+end
+
+if ns.DiagnosticModuleLoaded then
+  ns.DiagnosticModuleLoaded("Lists")
 end

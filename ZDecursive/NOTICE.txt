@@ -1,0 +1,23 @@
+ZDecursive attribution and bundled-code notices
+================================================
+
+ZDecursive is an independently maintained rebuild based on Decursive.
+
+Decursive:
+  Copyright (C) 2006-2026 John Wellesz
+  Decursive AT 2072productions.com
+  https://www.2072productions.com/to/decursive.php
+
+ZDecursive rebuild and ongoing maintenance:
+  Copyright (C) 2026 Randy Lorfing
+
+Decursive was inspired by the original Decursive v1.9.4 by Patrick Bohnet
+(Quu), which was placed in the public domain.
+
+The ZDecursive first-party code is distributed under the GNU General Public
+License, version 3 or (at your option) any later version. See LICENSE.txt.
+
+Bundled components keep their own terms and notices:
+
+  * Ace3 and CallbackHandler-1.0: see Libs/Ace3-LICENSE.txt.
+  * LibStub: public-domain notice retained in Libs/LibStub/LibStub.lua.

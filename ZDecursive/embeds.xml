@@ -1,3 +1,15 @@
+<!--
+    This file is part of ZDecursive, an independently maintained rebuild of Decursive.
+
+    Based on Decursive, Copyright (C) 2006-2026 John Wellesz
+    (Decursive AT 2072productions.com) (https://www.2072productions.com/to/decursive.php)
+    ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
+
+    ZDecursive is free software: you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free Software
+    Foundation, either version 3 of the License, or (at your option) any later
+    version. ZDecursive is distributed without any warranty. See LICENSE.txt.
+-->
 <Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/
 ..\FrameXML\UI.xsd">
 	<Script file="Libs\LibStub\LibStub.lua"/>

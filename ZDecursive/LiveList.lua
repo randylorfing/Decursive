@@ -1,4 +1,29 @@
+--[[
+    This file is part of ZDecursive, an independently maintained rebuild of Decursive.
+
+    Based on Decursive, Copyright (C) 2006-2026 John Wellesz
+    (Decursive AT 2072productions.com) (https://www.2072productions.com/to/decursive.php)
+    ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
+
+    ZDecursive is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    ZDecursive is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with ZDecursive. If not, see <https://www.gnu.org/licenses/>.
+--]]
+
 local ADDON_NAME, ns = ...
+
+if ns.DiagnosticCheckpoint then
+  ns.DiagnosticCheckpoint("module", "LiveList file start")
+end
 
 local MAX_ROWS = 20
 local ROW_W = 180
@@ -14,9 +39,6 @@ local TYPE_LABELS = {
   Curse = "Curse",
   Poison = "Poison",
   Disease = "Disease",
-  Enrage = "Enrage",
-  Charm = "Charm",
-  Bleed = "Bleed",
   None = "Afflicted",
 }
 
@@ -35,8 +57,8 @@ end
 
 local function GetPack()
   local addon = Addon()
-  if addon and addon.GetEditingPack then
-    return addon:GetEditingPack()
+  if addon and addon.GetAppliedEnvironmentPack then
+    return addon:GetAppliedEnvironmentPack()
   end
   return ns.PACK
 end
@@ -122,6 +144,10 @@ local function BindLiveSlot(slot)
   if not slot then
     return
   end
+  if slot._decursiveLiveBound then
+    return
+  end
+  slot._decursiveLiveBound = true
   slot:ClearAllPoints()
   slot:SetSize(ICON, ICON)
   slot:SetPoint("TOPLEFT", 0, 0)
@@ -176,19 +202,32 @@ end
 
 local function AttachAuraContainer(row)
   if row.auraSkipped then
-    return
+    return false
   end
   local unit = row.unit
   if type(unit) ~= "string" or unit == "" then
-    return
+    return false
   end
   local function initSlot(frame)
     BindLiveSlot(frame)
   end
+  local engine = ns.DetectionEngine
+  if engine and type(engine.BindCarrier) == "function" then
+    local container, assigned, status = engine:BindCarrier("LiveList", row, unit, initSlot, row)
+    row.auraContainer = container or row.auraContainer
+    if assigned and row.auraContainer then
+      row._dcrDetectUnit = unit
+    end
+    return assigned == true, status or (assigned and "SUCCESS" or "FAILURE")
+  end
   if row.auraContainer then
     local container = row.auraContainer
     if container.SetUnit and row._dcrDetectUnit ~= unit then
-      container:SetUnit(unit)
+      local assigned, status = ns.SafeNativeSetUnit(container, unit)
+      if not assigned then
+        pending = true
+        return false, status == "DEFERRED_RESTRICTION" and "DEFERRED_RESTRICTED" or status
+      end
       row._dcrDetectUnit = unit
     end
     if ns.ApplyDetectionSlots then
@@ -197,11 +236,11 @@ local function AttachAuraContainer(row)
     if container.SetEnabled then
       container:SetEnabled(true)
     end
-    return
+    return true
   end
   if LockedDown() then
     pending = true
-    return
+    return false
   end
   if ns.AttachDetector then
     local container = ns.AttachDetector(row, unit, GetPack(), initSlot)
@@ -211,19 +250,23 @@ local function AttachAuraContainer(row)
     else
       row.auraSkipped = true
     end
-    return
+    return row.auraContainer ~= nil
   end
   local container = MakeAuraContainer(row)
   if not container then
     row.auraSkipped = true
-    return
+    return false
   end
   container:SetAllPoints(row)
   if container.EnableMouse then
     container:EnableMouse(false)
   end
   if container.SetUnit then
-    container:SetUnit(unit)
+    local assigned, status = ns.SafeNativeSetUnit(container, unit)
+    if not assigned then
+      pending = true
+      return false, status == "DEFERRED_RESTRICTION" and "DEFERRED_RESTRICTED" or status
+    end
   end
   if ns.ApplyDetectionSlots then
     ns.ApplyDetectionSlots(container, GetPack(), initSlot, unit)
@@ -237,6 +280,7 @@ local function AttachAuraContainer(row)
   end
   row.auraContainer = container
   row._dcrDetectUnit = unit
+  return true
 end
 
 local function ClassColor(unit)
@@ -366,6 +410,10 @@ local function CreateRow(parent)
   row.rangeFS:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
 
   WireRow(row)
+  local engine = ns.DetectionEngine
+  if engine and type(engine.CreateCarrier) == "function" then
+    row.auraContainer = engine:CreateCarrier("LiveList", row, BindLiveSlot, row)
+  end
   row:Hide()
   return row
 end
@@ -386,27 +434,36 @@ end
 
 local function HideUnused(fromIndex)
   if not poolReady then
-    return
+    return true
   end
+  local cleared = true
   for i = fromIndex, MAX_ROWS do
     local row = pool[i]
+    if ns.DetectionEngine and type(ns.DetectionEngine.UnassignCarrier) == "function" then
+      if not ns.DetectionEngine:UnassignCarrier(row) then
+        cleared = false
+      end
+    end
     row.assigned = false
     row.unit = nil
     row:Hide()
   end
+  return cleared
 end
 
 local function HideAll()
   if header then
     header:Hide()
   end
-  HideUnused(1)
+  return HideUnused(1)
 end
 
 local function LayoutRows(units, pack)
   local reverse = pack.alerts.liveListReverse
   local n = #units
   local height = HANDLE_H + math.max(n, 0) * (ROW_H + 1)
+  local layoutOK = true
+  local layoutStatus = "SUCCESS"
   header:SetSize(ROW_W, math.max(height, HANDLE_H))
   handle:ClearAllPoints()
   if reverse then
@@ -429,14 +486,24 @@ local function LayoutRows(units, pack)
         row:SetPoint("TOPLEFT", header, "TOPLEFT", 0, -offset)
       end
       PaintRow(row, pack, unit)
-      AttachAuraContainer(row)
+      local attached, status = AttachAuraContainer(row)
+      if not attached then
+        layoutOK = false
+        layoutStatus = status or "FAILURE"
+      end
       row:Show()
     else
+      if ns.DetectionEngine and type(ns.DetectionEngine.UnassignCarrier) == "function" then
+        if not ns.DetectionEngine:UnassignCarrier(row) then
+          layoutOK = false
+        end
+      end
       row.assigned = false
       row.unit = nil
       row:Hide()
     end
   end
+  return layoutOK, layoutStatus
 end
 
 local function OnHeaderUpdate(_self, elapsed)
@@ -566,10 +633,11 @@ function ns.LayoutLiveList()
   local pack = GetPack()
   if not pack.alerts or not pack.alerts.liveList then
     if header then
-      HideAll()
+      local hidden = HideAll() == true
+      return hidden, hidden and "SUCCESS" or "FAILURE", 0
     end
     pending = false
-    return
+    return true, "SUCCESS", 0
   end
   if LockedDown() then
     pending = true
@@ -601,13 +669,17 @@ function ns.LayoutLiveList()
   header:SetScale(pack.alerts.liveListScale or 1)
   header:SetAlpha(pack.alerts.liveListAlpha or 1)
   header:Show()
-  LayoutRows(units, pack)
+  local layoutOK, layoutStatus = LayoutRows(units, pack)
   pending = false
+  return layoutOK, layoutStatus, #units
 end
 
 function ns.RefreshLiveList()
+  if ns.DiagnosticModuleRefresh then
+    ns.DiagnosticModuleRefresh("LiveList")
+  end
   pending = false
-  ns.LayoutLiveList()
+  return ns.LayoutLiveList()
 end
 
 local function RegisterEvents()
@@ -615,6 +687,9 @@ local function RegisterEvents()
     return
   end
   eventsOn = true
+  if ns.DetectionEngine then
+    return
+  end
   eventFrame = CreateFrame("Frame")
   eventFrame:SetScript("OnEvent", function(_, event)
     if event == "SPELLS_CHANGED" then
@@ -636,6 +711,53 @@ local function RegisterEvents()
 end
 
 function ns.EnableLiveList(_addon)
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("LiveList", false)
+  end
+  if ns.DetectionEngine and type(ns.DetectionEngine.RegisterConsumer) == "function" then
+    ns.DetectionEngine:RegisterConsumer("LiveList", function()
+      return ns.RefreshLiveList()
+    end)
+  end
   RegisterEvents()
   ns.RefreshLiveList()
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("LiveList", true)
+  end
+end
+
+if ns.RegisterDiagnosticProvider then
+  ns.RegisterDiagnosticProvider("LiveList", function()
+    local visibleRows = 0
+    for i = 1, #pool do
+      local row = pool[i]
+      if row and type(row.IsShown) == "function" then
+        local ok, shown = pcall(row.IsShown, row)
+        local public = ns.Diagnostics and ns.Diagnostics.SafePublicBoolean(shown) or nil
+        if ok and public == true then
+          visibleRows = visibleRows + 1
+        end
+      end
+    end
+    local headerShown = false
+    if header and type(header.IsShown) == "function" then
+      local ok, shown = pcall(header.IsShown, header)
+      local public = ns.Diagnostics and ns.Diagnostics.SafePublicBoolean(shown) or nil
+      headerShown = ok and public == true
+    end
+    local pack = GetPack()
+    return {
+      eventsRegistered = eventsOn,
+      poolReady = poolReady,
+      poolCount = #pool,
+      visibleRows = visibleRows,
+      headerShown = headerShown,
+      pendingRefresh = pending,
+      configuredEnabled = type(pack) == "table" and type(pack.alerts) == "table" and pack.alerts.liveList == true,
+    }
+  end)
+end
+
+if ns.DiagnosticModuleLoaded then
+  ns.DiagnosticModuleLoaded("LiveList")
 end

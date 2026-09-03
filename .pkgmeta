@@ -16,10 +16,18 @@ ignore:
     - "*.md"
     - LICENSE
     - .gitignore
+    - .pkgmeta
     - .gitattributes
     - .editorconfig
     - .cursor
+    - .github
+    - ".release-zdecursive-*"
     - docs
+    - tests
+    - "*.js"
+    - "*.py"
+    - "*.b64"
+    - "tmp-*"
     # Still ignore these under ZDecursive/; root *.md does not match nested paths.
     - CHANGELOG.md
     - OldChangeLog.md

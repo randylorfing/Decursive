@@ -1,15 +1,43 @@
+--[[
+    This file is part of ZDecursive, an independently maintained rebuild of Decursive.
+
+    Based on Decursive, Copyright (C) 2006-2026 John Wellesz
+    (Decursive AT 2072productions.com) (https://www.2072productions.com/to/decursive.php)
+    ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
+
+    ZDecursive is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    ZDecursive is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with ZDecursive. If not, see <https://www.gnu.org/licenses/>.
+--]]
+
 local ADDON_NAME, ns = ...
 
-local TYPE_KEYS = {"magic", "curse", "poison", "disease", "enrage", "charm", "bleed"}
+if ns.DiagnosticCheckpoint then
+  ns.DiagnosticCheckpoint("module", "Detection file start")
+end
+
+local TYPE_KEYS = ns.ACTIONABLE_CURE_TYPES or {"magic", "curse", "poison", "disease"}
+local ACTIONABLE_TYPES = ns.ACTIONABLE_CURE_TYPE_SET or {
+  magic = true,
+  curse = true,
+  poison = true,
+  disease = true,
+}
 
 local TYPE_BLIZZ = {
   magic = "Magic",
   curse = "Curse",
   poison = "Poison",
   disease = "Disease",
-  enrage = "Enrage",
-  charm = "Magic",
-  bleed = "Bleed",
 }
 
 local FRIENDLY_NATIVE = {
@@ -22,13 +50,12 @@ local FRIENDLY_NATIVE = {
 local CLASS_SPELLS = {
   PALADIN = {4987, 213644},
   PRIEST = {527, 213634},
-  DRUID = {88423, 2782, 2908},
+  DRUID = {88423, 2782},
   SHAMAN = {77130, 51886},
   MONK = {115450, 218164},
   EVOKER = {360823, 365585, 374251},
   MAGE = {475},
   WARLOCK = {89808},
-  HUNTER = {19801},
 }
 
 local SPELL_TYPES = {
@@ -44,11 +71,9 @@ local SPELL_TYPES = {
   [218164] = {"poison", "disease"},
   [360823] = {"magic", "poison"},
   [365585] = {"poison"},
-  [374251] = {"bleed", "poison", "curse", "disease"},
+  [374251] = {"poison", "curse", "disease"},
   [475] = {"curse"},
   [89808] = {"magic"},
-  [2908] = {"enrage"},
-  [19801] = {"enrage"},
 }
 
 local BATTLE_REZ = {20484, 61999, 391054}
@@ -77,11 +102,23 @@ local follower = {
   units = nil,
 }
 
+local rosterContext = {
+  kind = "UNKNOWN",
+  ready = false,
+  instanceClass = "UNKNOWN",
+  realPartyCount = 0,
+  reason = "INITIAL",
+  transitionReason = "NONE",
+}
+
 local eventsOn = false
 local eventFrame
 local pendingCombatSlots = false
 local pendingRestrictionSlots = false
 local restrictionState = {}
+local diagnosticAttachAttempts = 0
+local diagnosticAttachments = 0
+local diagnosticAttachFailures = 0
 
 local function Accessible(value)
   if value == nil then
@@ -103,6 +140,29 @@ local function Public(value)
   return value
 end
 
+local function ShowDiagnosticText(title, lines)
+  if not Accessible(title) or type(title) ~= "string" then
+    return false
+  end
+  if type(lines) ~= "table" then
+    return false
+  end
+  local output = {title}
+  for i = 1, #lines do
+    local line = lines[i]
+    if not Accessible(line) or type(line) ~= "string" then
+      return false
+    end
+    output[#output + 1] = line
+  end
+  local diagnostics = ns.Diagnostics
+  if type(diagnostics) ~= "table" or type(diagnostics.ShowText) ~= "function" then
+    return false
+  end
+  local ok, shown = pcall(diagnostics.ShowText, table.concat(output, "\n"))
+  return ok and shown ~= false
+end
+
 local function IsTrue(value)
   if not Accessible(value) then
     return false
@@ -120,6 +180,23 @@ end
 
 function ns.IsPublicTrue(value)
   return IsTrue(value)
+end
+
+function ns.SafeNativeSetUnit(container, unit)
+  if type(InCombatLockdown) == "function" and InCombatLockdown() == true then
+    return false, "DEFERRED_COMBAT"
+  end
+  if not Accessible(unit) or type(unit) ~= "string" or unit == "" then
+    return false, "UNIT_INVALID"
+  end
+  if not container or type(container.SetUnit) ~= "function" then
+    return false, "SET_UNIT_UNAVAILABLE"
+  end
+  local ok = pcall(container.SetUnit, container, unit)
+  if not ok then
+    return false, "UNIT_ASSIGN_FAILED"
+  end
+  return true, "ASSIGNED"
 end
 
 local function RestrictionInactive()
@@ -146,47 +223,50 @@ function ns.RememberRestrictionState(restrictionType, restrictionStateValue)
   end
 end
 
-function ns.HasActiveAddonRestriction()
+function ns.RefreshAddonRestrictionState(reason)
   local api = C_RestrictedActions
-  local types = Enum and Enum.AddOnRestrictionType
+  if type(api) ~= "table" or type(api.GetAddOnRestrictionState) ~= "function" then
+    return false
+  end
+  local refreshed = 0
+  for restrictionType in pairs(restrictionState) do
+    if type(restrictionType) == "number" then
+      local ok, latest = pcall(api.GetAddOnRestrictionState, restrictionType)
+      latest = ok and Public(latest) or nil
+      if type(latest) == "number" then
+        restrictionState[restrictionType] = latest
+        refreshed = refreshed + 1
+      end
+    end
+  end
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("RESTRICTION_REFRESH", {
+      reason = type(reason) == "string" and reason or "POLL",
+      refreshed = refreshed,
+    }, true)
+  end
+  return refreshed > 0
+end
+
+function ns.HasActiveAddonRestriction()
   local states = Enum and Enum.AddOnRestrictionState
   local inactive = RestrictionInactive()
   local activating = states and states.Activating
   local active = RestrictionActiveToken()
-  if type(api) ~= "table" then
-    return false
-  end
-  if type(types) == "table" then
-    for _name, restrictionType in pairs(types) do
-      if type(restrictionType) == "number" then
-        local state = restrictionState[restrictionType]
-        if state == activating or state == active then
-          return true
-        end
-        if state == nil and api.GetAddOnRestrictionState then
-          local latest = Public(api.GetAddOnRestrictionState(restrictionType))
-          if type(latest) == "number" then
-            restrictionState[restrictionType] = latest
-            state = latest
-          else
-            restrictionState[restrictionType] = active
-            state = active
-          end
-        end
-        if type(state) == "number" and state ~= inactive then
-          return true
-        end
+  for restrictionType, state in pairs(restrictionState) do
+    if type(restrictionType) == "number" and type(state) == "number" then
+      if state == activating or state == active or state ~= inactive then
+        return true
       end
     end
-    return false
-  end
-  if api.IsAddOnRestrictionActive then
-    return IsTrue(api.IsAddOnRestrictionActive())
   end
   return false
 end
 
 function ns.AuraDisplayMutationBlocked()
+  if InCombatLockdown and InCombatLockdown() then
+    return true
+  end
   return ns.HasActiveAddonRestriction()
 end
 
@@ -196,8 +276,8 @@ end
 
 local function GetPack()
   local addon = Addon()
-  if addon and addon.GetEditingPack then
-    return addon:GetEditingPack()
+  if addon and addon.GetAppliedEnvironmentPack then
+    return addon:GetAppliedEnvironmentPack()
   end
   return ns.PACK
 end
@@ -284,12 +364,6 @@ local function SpellInBook(spellId, includeOverrides)
       return true
     end
   end
-  if IsPlayerSpell and IsTrue(IsPlayerSpell(spellId)) then
-    return true
-  end
-  if IsSpellKnown and IsTrue(IsSpellKnown(spellId)) then
-    return true
-  end
   return false
 end
 
@@ -365,16 +439,32 @@ function ns.EnsureCustomSpells(pack)
 end
 
 local function TypeEnabled(pack, key)
+  if not ACTIONABLE_TYPES[key] then
+    return false
+  end
   if type(pack) ~= "table" or type(pack.cure) ~= "table" then
     return true
-  end
-  if key == "charm" then
-    return pack.cure.charm ~= false or pack.cure.magicCharmed ~= false
   end
   if pack.cure[key] == false then
     return false
   end
   return true
+end
+
+function ns.GetActionableCureTypes(types)
+  local out = {}
+  local seen = {}
+  if type(types) ~= "table" then
+    return out
+  end
+  for i = 1, #types do
+    local key = types[i]
+    if ACTIONABLE_TYPES[key] and not seen[key] then
+      seen[key] = true
+      out[#out + 1] = key
+    end
+  end
+  return out
 end
 
 function ns.GetEnabledTypes(pack)
@@ -524,7 +614,7 @@ local function CollectClassActions(pack, enabled)
       if type(covered) == "table" then
         for t = 1, #covered do
           local key = covered[t]
-          if TypeEnabled(pack, key) then
+          if ACTIONABLE_TYPES[key] and TypeEnabled(pack, key) then
             keep[#keep + 1] = key
           end
         end
@@ -615,10 +705,8 @@ local function PublicItemCount(itemId)
     return 0
   end
   local count
-  if C_Item and C_Item.GetItemCount then
+  if C_Item and type(C_Item.GetItemCount) == "function" then
     count = Public(C_Item.GetItemCount(itemId, false, false, false, false))
-  elseif GetItemCount then
-    count = Public(GetItemCount(itemId, false))
   end
   if type(count) == "number" and count > 0 then
     return count
@@ -675,16 +763,22 @@ local function LogPoisonProbeOnce()
     return
   end
   poisonProbeLogged = true
-  if DEFAULT_CHAT_FRAME then
-    DEFAULT_CHAT_FRAME:AddMessage("|cff52dbd1Decursive|r cannot test for Poison Cleansing Totem. No poison gap.")
-  end
+  ShowDiagnosticText("ZDecursive Detection Notice", {
+    "Poison capability probe unavailable.",
+    "Poison support remains disabled until the spellbook API reports a public result.",
+  })
 end
 
 local function KnowsPoisonCleansingTotem()
   local sb = C_SpellBook
   local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player
-  if sb and bank and sb.IsSpellInSpellBook then
-    local known = sb.IsSpellInSpellBook(POISON_CLEANSING_TOTEM, bank, true)
+  if sb and type(sb.IsSpellInSpellBook) == "function" then
+    local known
+    if bank then
+      known = sb.IsSpellInSpellBook(POISON_CLEANSING_TOTEM, bank, true)
+    else
+      known = sb.IsSpellInSpellBook(POISON_CLEANSING_TOTEM)
+    end
     if not Accessible(known) then
       return nil
     end
@@ -695,65 +789,23 @@ local function KnowsPoisonCleansingTotem()
       return false
     end
     return nil
-  end
-  if IsPlayerSpell then
-    local known = IsPlayerSpell(POISON_CLEANSING_TOTEM)
-    if not Accessible(known) then
-      return nil
-    end
-    if known == true then
-      return true
-    end
-    if known == false then
-      return false
-    end
   end
   LogPoisonProbeOnce()
   return nil
 end
 
-function ns.GetEngineDispelGaps(selfOnly)
+function ns.GetEngineDispelGaps(_selfOnly)
   local classFile = PlayerClassFile()
   local poison = false
   if classFile == "SHAMAN" then
     poison = KnowsPoisonCleansingTotem() == true
   end
-  local bleed = false
-  if selfOnly then
-    local race = PlayerRaceFile()
-    bleed = race == "Dwarf"
-  end
-  if not poison and not bleed then
+  if not poison then
     return nil
   end
   local names = {}
   if poison then
     names.Poison = true
-  end
-  if bleed then
-    names.Bleed = true
-  end
-  return names
-end
-
-local function MapSize(map)
-  if type(map) ~= "table" then
-    return 0
-  end
-  local n = 0
-  for _ in pairs(map) do
-    n = n + 1
-  end
-  return n
-end
-
-local function BlizzMap(keys)
-  local names = {}
-  for i = 1, #keys do
-    local blizz = TYPE_BLIZZ[keys[i]]
-    if type(blizz) == "string" then
-      names[blizz] = true
-    end
   end
   return names
 end
@@ -782,73 +834,59 @@ local function AuraToken(key, fallback)
   return nil
 end
 
-local function LiveMainFilter(allMode)
-  if allMode then
-    local token = AuraToken("Dispellable")
-    if token then
-      return "HARMFUL|" .. token
-    end
+local function LiveMainFilter()
+  local token = AuraToken("Dispellable")
+  if token then
+    return "HARMFUL|" .. token
   end
   local rpd = AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
   return "HARMFUL|" .. rpd
 end
 
-local function LiveGapFilter()
-  local rpd = AuraToken("RaidPlayerDispellable", "RAID_PLAYER_DISPELLABLE")
-  return "HARMFUL|!" .. rpd
+local function ActionableTypeMap(actions)
+  local capable = {}
+  for i = 1, type(actions) == "table" and #actions or 0 do
+    local types = actions[i] and actions[i].types
+    for t = 1, type(types) == "table" and #types or 0 do
+      local key = types[t]
+      if ACTIONABLE_TYPES[key] then
+        capable[key] = true
+      end
+    end
+  end
+  return capable
 end
 
-local function BuildSlots(enabled, pack, selfOnly)
+local function BuildSlots(enabled, pack, actions)
   local allMode = ns.IsAllDispellableMode(pack)
-  local mainFilter = LiveMainFilter(allMode)
-  local nativeKeys = {}
+  local mainFilter = LiveMainFilter()
+  local enabledMap = {}
   for i = 1, #enabled do
     local key = enabled[i]
     if FRIENDLY_NATIVE[key] then
-      nativeKeys[#nativeKeys + 1] = key
+      enabledMap[key] = i
     end
   end
+  local capable = ActionableTypeMap(actions)
   local slots = {}
-  local nativeMap = BlizzMap(nativeKeys)
-  local nativeCount = MapSize(nativeMap)
-  local main = {
-    key = "dispel",
-    filter = mainFilter,
-    candidateFilters = nil,
-    mode = allMode and "all" or "byme",
-  }
-  if nativeCount > 0 then
-    main.candidateFilters = {includeDispelTypes = nativeMap}
-  elseif nativeCount == 0 then
-    main = nil
-  end
-  if main then
-    slots[#slots + 1] = main
-  end
-  if not allMode then
-    local gap = ns.GetEngineDispelGaps(selfOnly)
-    if type(gap) == "table" then
-      if pack and pack.cure and pack.cure.poison == false then
-        gap.Poison = nil
-      end
-      if pack and pack.cure and pack.cure.bleed == false then
-        gap.Bleed = nil
-      end
-      if MapSize(gap) > 0 then
-        slots[#slots + 1] = {
-          key = "gap",
-          filter = LiveGapFilter(),
-          candidateFilters = {includeDispelTypes = gap},
-        }
-      end
+  for i = 1, #TYPE_KEYS do
+    local typeKey = TYPE_KEYS[i]
+    local dispelType = TYPE_BLIZZ[typeKey]
+    local priority = enabledMap[typeKey] or (#TYPE_KEYS + 1)
+    local active = enabledMap[typeKey] ~= nil and (allMode or capable[typeKey] == true)
+    local include = {}
+    if active and dispelType then
+      include[dispelType] = true
     end
-  end
-  if #slots == 0 then
-    slots[1] = {
-      key = "dispel",
+    slots[#slots + 1] = {
+      key = "dispel-" .. typeKey,
       filter = mainFilter,
-      candidateFilters = nil,
+      candidateFilters = {includeDispelTypes = include},
       mode = allMode and "all" or "byme",
+      typeKey = typeKey,
+      dispelType = dispelType,
+      priority = priority,
+      active = active,
     }
   end
   return slots
@@ -865,6 +903,8 @@ local function Signature(pack)
     local row = list[i]
     if type(row) == "table" then
       bits[#bits + 1] = tostring(row.spellId) .. ":" .. tostring(row.enabled)
+      local effectiveTypes = ns.GetActionableCureTypes(row.types)
+      bits[#bits + 1] = table.concat(effectiveTypes, ",")
     end
   end
   local classFile = PlayerClassFile() or "?"
@@ -880,6 +920,9 @@ function ns.InvalidateDetection()
   cache.signature = nil
   cache.model = nil
   smartRezCache = nil
+  if ns.DiagnosticModuleRefresh then
+    ns.DiagnosticModuleRefresh("Detection")
+  end
 end
 
 function ns.GetDetectionModel(pack)
@@ -898,7 +941,7 @@ function ns.GetDetectionModel(pack)
   for i = 1, #customActions do
     actions[#actions + 1] = customActions[i]
   end
-  local slots = BuildSlots(enabled, pack, false)
+  local slots = BuildSlots(enabled, pack, actions)
   local primary = actions[1]
   local model = {
     enabledTypes = enabled,
@@ -921,11 +964,7 @@ end
 function ns.GetDetectionSlots(pack, unit)
   pack = pack or GetPack()
   local model = ns.GetDetectionModel(pack)
-  local selfOnly = false
-  if type(unit) == "string" and unit ~= "" then
-    selfOnly = ns.IsPlayerUnit(unit) == true
-  end
-  return BuildSlots(model.enabledTypes, pack, selfOnly)
+  return BuildSlots(model.enabledTypes, pack, model.actions)
 end
 
 function ns.GetAuraFilter(pack)
@@ -1057,26 +1096,23 @@ local RANGE_REZ_CLASS = {
 }
 
 local function PlayerSpecId()
-  local index
-  if C_SpecializationInfo and C_SpecializationInfo.GetSpecialization then
-    index = Public(C_SpecializationInfo.GetSpecialization())
-  elseif GetSpecialization then
-    index = Public(GetSpecialization())
+  local specialization = C_SpecializationInfo
+  if type(specialization) ~= "table" or type(specialization.GetSpecialization) ~= "function" then
+    return nil
   end
+  local ok, index = pcall(specialization.GetSpecialization)
+  index = ok and Public(index) or nil
   if type(index) ~= "number" then
     return nil
   end
-  local specId
-  if GetSpecializationInfo then
-    specId = Public(GetSpecializationInfo(index))
-  elseif C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo then
-    local info = C_SpecializationInfo.GetSpecializationInfo(index)
-    if type(info) == "table" then
-      specId = Public(info.id or info.specID)
-    else
-      specId = Public(info)
-    end
+  if type(specialization.GetSpecializationInfo) ~= "function" then
+    return nil
   end
+  local infoOK, info = pcall(specialization.GetSpecializationInfo, index)
+  if not infoOK then
+    return nil
+  end
+  local specId = type(info) == "table" and Public(info.id or info.specID) or Public(info)
   if type(specId) == "number" then
     return specId
   end
@@ -1291,6 +1327,79 @@ function ns.GetPublicInstanceType()
   return nil
 end
 
+local function ReadRosterContext()
+  local instanceType = ns.GetPublicInstanceType()
+  local instanceClass = "UNKNOWN"
+  if instanceType == "party" or instanceType == "scenario" then
+    instanceClass = "PARTY"
+  elseif type(instanceType) == "string" then
+    instanceClass = "NONPARTY"
+  end
+
+  if IsInRaid then
+    local ok, value = pcall(IsInRaid)
+    value = ok and Public(value) or nil
+    if value == true then
+      rosterContext.kind = "RAID"
+      rosterContext.ready = true
+      rosterContext.reason = "IS_IN_RAID"
+      rosterContext.instanceClass = instanceClass
+      rosterContext.realPartyCount = 0
+      return rosterContext
+    end
+    if value ~= false and value ~= nil then
+      rosterContext.kind = "UNKNOWN"
+      rosterContext.ready = false
+      rosterContext.reason = "RAID_STATE_UNAVAILABLE"
+      rosterContext.instanceClass = instanceClass
+      rosterContext.realPartyCount = 0
+      return rosterContext
+    end
+  end
+
+  local realPartyCount
+  if type(GetNumSubgroupMembers) == "function" then
+    local ok, value = pcall(GetNumSubgroupMembers)
+    value = ok and Public(value) or nil
+    if type(value) == "number" and value >= 0 then
+      realPartyCount = math.floor(value)
+    end
+  end
+
+  rosterContext.instanceClass = instanceClass
+  rosterContext.realPartyCount = realPartyCount or 0
+  if instanceClass == "PARTY" then
+    rosterContext.kind = "PARTY_INSTANCE"
+    rosterContext.ready = true
+    rosterContext.reason = "PARTY_INSTANCE_TYPE"
+  elseif realPartyCount and realPartyCount > 0 then
+    rosterContext.kind = "REAL_PARTY"
+    rosterContext.ready = true
+    rosterContext.reason = "PUBLIC_SUBGROUP_COUNT"
+  elseif instanceClass == "NONPARTY" and realPartyCount == 0 then
+    rosterContext.kind = "NO_PARTY"
+    rosterContext.ready = true
+    rosterContext.reason = "NONPARTY_ZERO_GROUP"
+  else
+    rosterContext.kind = "UNKNOWN"
+    rosterContext.ready = false
+    rosterContext.reason = "CONTEXT_CONVERGING"
+  end
+  return rosterContext
+end
+
+function ns.GetRosterContextStatus()
+  local context = ReadRosterContext()
+  return {
+    kind = context.kind,
+    ready = context.ready,
+    instanceClass = context.instanceClass,
+    realPartyCount = context.realPartyCount,
+    reason = context.reason,
+    transitionReason = rosterContext.transitionReason,
+  }
+end
+
 local lastArenaHint
 
 function ns.IsArenaInstance()
@@ -1366,6 +1475,23 @@ local function IsPubliclyDead(unit)
   return dead == true
 end
 
+local function IsPubliclyUnavailable(unit)
+  if IsPubliclyDead(unit) then
+    return true
+  end
+  if UnitIsPlayer and UnitIsConnected then
+    local isPlayer = UnitIsPlayer(unit)
+    if not Accessible(isPlayer) or (isPlayer ~= true and isPlayer ~= 1) then
+      return false
+    end
+    local connected = UnitIsConnected(unit)
+    if Accessible(connected) and connected == false then
+      return true
+    end
+  end
+  return false
+end
+
 function ns.IsUnitDeadPublic(unit)
   return IsPubliclyDead(unit)
 end
@@ -1395,22 +1521,6 @@ local function CountCore(units)
   return count
 end
 
-local function CaptureFollowerSnapshot(units)
-  local coreCount = CountCore(units)
-  if coreCount < 2 then
-    return
-  end
-  if FollowerGuardActive() and follower.units and coreCount < follower.coreCount then
-    return
-  end
-  local copy = {}
-  for i = 1, #units do
-    copy[i] = units[i]
-  end
-  follower.coreCount = coreCount
-  follower.units = copy
-end
-
 local function GroupSize()
   local n
   if GetNumGroupMembers then
@@ -1428,12 +1538,84 @@ local function ClearFollowerSnapshot()
   follower.untilTime = 0
 end
 
-local function RestoreFollowerUnits(units, seen)
-  if GroupSize() < 2 then
+function ns.ResetRosterForWorldTransition(reason)
+  follower.generation = follower.generation + 1
+  ClearFollowerSnapshot()
+  rosterContext.transitionReason = type(reason) == "string" and reason or "WORLD_TRANSITION"
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("FOLLOWER_SNAPSHOT", {
+      action = "CLEARED",
+      generation = follower.generation,
+      reason = rosterContext.transitionReason,
+    }, false)
+  end
+  return true
+end
+
+function ns.PrepareWorldEntryRoster()
+  if InCombatLockdown and InCombatLockdown() then
+    return false, "combat"
+  end
+  local context = ReadRosterContext()
+  if context.kind == "NO_PARTY" or context.kind == "RAID" then
+    ClearFollowerSnapshot()
+    return true, string.lower(context.kind)
+  end
+  if ns.ScheduleFollowerRosterGuard then
+    ns.ScheduleFollowerRosterGuard()
+  end
+  return true, "group"
+end
+
+local function InStablePartyContext(context)
+  context = context or ReadRosterContext()
+  return context.kind == "PARTY_INSTANCE" or context.kind == "REAL_PARTY"
+end
+
+local function CaptureFollowerSnapshot(units, context)
+  context = context or ReadRosterContext()
+  if context.kind == "NO_PARTY" or context.kind == "RAID" then
+    ClearFollowerSnapshot()
+    return
+  end
+  if not InStablePartyContext(context) then
+    return
+  end
+  local coreCount = CountCore(units)
+  if coreCount < 2 then
+    return
+  end
+  if FollowerGuardActive() and follower.units and coreCount < follower.coreCount then
+    return
+  end
+  local copy = {}
+  for i = 1, #units do
+    copy[i] = units[i]
+  end
+  follower.coreCount = coreCount
+  follower.units = copy
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("FOLLOWER_SNAPSHOT", {
+      action = "CAPTURED",
+      rosterContext = context.kind,
+      coreCount = coreCount,
+    }, true)
+  end
+end
+
+local function RestoreFollowerUnits(units, seen, context)
+  context = context or ReadRosterContext()
+  if context.kind == "NO_PARTY" or context.kind == "RAID" then
     ClearFollowerSnapshot()
     return units
   end
+  if not InStablePartyContext(context) and context.kind ~= "UNKNOWN" then
+    return units
+  end
   if not FollowerGuardActive() or not follower.units then
+    if context.kind == "UNKNOWN" then
+      ClearFollowerSnapshot()
+    end
     return units
   end
   if CountCore(units) >= follower.coreCount then
@@ -1446,6 +1628,13 @@ local function RestoreFollowerUnits(units, seen)
       units[#units + 1] = unit
     end
   end
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("FOLLOWER_SNAPSHOT", {
+      action = "RESTORED",
+      rosterContext = context.kind,
+      coreCount = follower.coreCount,
+    }, false)
+  end
   return units
 end
 
@@ -1453,8 +1642,19 @@ function ns.ScheduleFollowerRosterGuard()
   follower.generation = follower.generation + 1
   local generation = follower.generation
   follower.untilTime = Now() + FOLLOWER_GUARD_SECONDS
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("FOLLOWER_GUARD", {
+      action = "SCHEDULED",
+      generation = generation,
+      duration = FOLLOWER_GUARD_SECONDS,
+      snapshotCount = follower.coreCount,
+    }, false)
+  end
   local timer = C_Timer
   if not timer or type(timer.After) ~= "function" then
+    if ns.RefreshMUFs then
+      ns.RefreshMUFs()
+    end
     if ns.RefreshLiveList then
       ns.RefreshLiveList()
     end
@@ -1465,9 +1665,24 @@ function ns.ScheduleFollowerRosterGuard()
   end
   for i = 1, #FOLLOWER_RETRY do
     local delay = FOLLOWER_RETRY[i]
+    local passIndex = i
     timer.After(delay, function()
       if generation ~= follower.generation then
+        if ns.DiagnosticRecord then
+          ns.DiagnosticRecord("FOLLOWER_GUARD", {
+            action = "CANCELLED",
+            generation = generation,
+            pass = passIndex,
+          }, true)
+        end
         return
+      end
+      if ns.RequestRosterReconcile then
+        ns.RequestRosterReconcile("FOLLOWER_GUARD")
+        return
+      end
+      if ns.RefreshMUFs then
+        ns.RefreshMUFs()
       end
       if ns.RefreshLiveList then
         ns.RefreshLiveList()
@@ -1479,24 +1694,60 @@ function ns.ScheduleFollowerRosterGuard()
   end
 end
 
+function ns.BeginRosterContextTransition(reason)
+  rosterContext.transitionReason = type(reason) == "string" and reason or "CONTEXT_EVENT"
+  ns.ScheduleFollowerRosterGuard()
+end
+
+local activeRosterAudit
+
+local function CountRosterAudit(key)
+  if activeRosterAudit then
+    activeRosterAudit[key] = (activeRosterAudit[key] or 0) + 1
+  end
+end
+
+local function RosterUnitCategory(unit)
+  if unit == "player" then
+    return "Player"
+  end
+  if unit == "pet" or type(unit) == "string" and unit:match("pet%d+$") then
+    return "Pets"
+  end
+  if type(unit) == "string" and unit:match("^party%d+$") then
+    return "Party"
+  end
+  if type(unit) == "string" and unit:match("^raid%d+$") then
+    return "Raid"
+  end
+  return "Other"
+end
+
 local function AppendUnit(units, seen, unit, pack, allowMissing)
+  CountRosterAudit("attempted")
   if type(unit) ~= "string" or seen[unit] then
+    CountRosterAudit("omittedDuplicate")
     return
   end
   if unit:find("^arena%d+$") then
+    CountRosterAudit("omittedArena")
     return
   end
   if not allowMissing and not UnitPresent(unit) then
+    CountRosterAudit("omittedMissing")
     return
   end
   if pack.sorting and pack.sorting.includePlayer == false and IsPlayerToken(unit) then
+    CountRosterAudit("omittedPlayer")
     return
   end
-  if pack.sorting and pack.sorting.skipDead and IsPubliclyDead(unit) then
+  if pack.sorting and pack.sorting.skipDead and IsPubliclyUnavailable(unit) then
+    CountRosterAudit("omittedUnavailable")
     return
   end
   seen[unit] = true
   units[#units + 1] = unit
+  CountRosterAudit("accepted" .. RosterUnitCategory(unit))
 end
 
 local function OwnerTokenForPet(unit)
@@ -1524,7 +1775,6 @@ local function PairPetsWithOwners(units, pack)
   end
   local owners = {}
   local petsByOwner = {}
-  local leftoverPets = {}
   for i = 1, #units do
     local unit = units[i]
     if type(unit) == "string" then
@@ -1533,22 +1783,24 @@ local function PairPetsWithOwners(units, pack)
         if not petsByOwner[owner] then
           petsByOwner[owner] = unit
         end
-        leftoverPets[#leftoverPets + 1] = unit
       else
         owners[#owners + 1] = unit
       end
     end
   end
-  local playerIndex
-  for i = 1, #owners do
-    if IsPlayerToken(owners[i]) then
-      playerIndex = i
-      break
+  if pack and pack.sorting and pack.sorting.centerPlayer then
+    local playerIndex
+    for i = 1, #owners do
+      if IsPlayerToken(owners[i]) then
+        playerIndex = i
+        break
+      end
     end
-  end
-  if playerIndex and playerIndex > 1 then
-    local player = table.remove(owners, playerIndex)
-    table.insert(owners, 1, player)
+    if playerIndex then
+      local player = table.remove(owners, playerIndex)
+      local centerIndex = math.floor(#owners / 2) + 1
+      table.insert(owners, centerIndex, player)
+    end
   end
   local out = {}
   local placed = {}
@@ -1572,9 +1824,9 @@ local function PairPetsWithOwners(units, pack)
       end
     end
   end
-  if includePets then
-    for i = 1, #leftoverPets do
-      place(leftoverPets[i])
+  for owner in pairs(petsByOwner) do
+    if not placed[petsByOwner[owner]] then
+      CountRosterAudit("omittedOrphanPet")
     end
   end
   return out
@@ -1604,10 +1856,12 @@ end
 
 function ns.BuildRoster(pack)
   pack = pack or GetPack()
+  activeRosterAudit = {}
   local units = {}
   local seen = {}
   local inArena = ns.IsArenaInstance()
   local size = GroupSize()
+  local context = ReadRosterContext()
   if IsInRaid and IsInRaid() then
     local maxIndex = 40
     if inArena then
@@ -1633,7 +1887,8 @@ function ns.BuildRoster(pack)
     if inArena and size > 1 then
       partyMax = math.min(4, size - 1)
     end
-    if IsInGroup and IsInGroup() then
+    local allowParty = context.kind == "PARTY_INSTANCE" or context.kind == "REAL_PARTY"
+    if allowParty then
       for i = 1, partyMax do
         local unit = "party" .. i
         AppendUnit(units, seen, unit, pack)
@@ -1641,14 +1896,33 @@ function ns.BuildRoster(pack)
       end
     end
   end
-  RestoreFollowerUnits(units, seen)
-  CaptureFollowerSnapshot(units)
-  if ns.WrapRosterLists then
-    units = ns.WrapRosterLists(units, pack)
-  elseif ns.ApplyUnitLists then
+  RestoreFollowerUnits(units, seen, context)
+  CaptureFollowerSnapshot(units, context)
+  if ns.ApplyUnitLists then
     units = ns.ApplyUnitLists(units, pack)
+  elseif ns.WrapRosterLists then
+    units = ns.WrapRosterLists(units, pack)
   end
-  return PairPetsWithOwners(units, pack)
+  local result = PairPetsWithOwners(units, pack)
+  local audit = activeRosterAudit
+  activeRosterAudit = nil
+  audit.rosterContext = context.kind
+  audit.contextReason = context.reason
+  audit.resultCount = #result
+  ns.LastRosterBuildDiagnostics = audit
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("ROSTER_BUILD", audit, true)
+  end
+  return result
+end
+
+function ns.GetLastRosterBuildDiagnostics()
+  local source = ns.LastRosterBuildDiagnostics or {}
+  local copy = {}
+  for key, value in pairs(source) do
+    copy[key] = value
+  end
+  return copy
 end
 
 function ns.DetectionSummary(pack)
@@ -1663,18 +1937,24 @@ function ns.DetectionSummary(pack)
   if #model.actions == 0 then
     lines[#lines + 1] = "No known public cure spells for this spec."
   else
+    local classCount = 0
+    local customCount = 0
     for i = 1, #model.actions do
       local action = model.actions[i]
-      local tag = action.kind == "custom" and "custom" or "class"
-      lines[#lines + 1] = tag .. "  " .. tostring(action.name) .. "  " .. table.concat(action.types, "/")
+      if action.kind == "custom" then
+        customCount = customCount + 1
+      else
+        classCount = classCount + 1
+      end
     end
+    lines[#lines + 1] = "Public cure actions: class " .. tostring(classCount) .. ", custom " .. tostring(customCount)
   end
   local sl = model.soulLink
   if sl and sl.enabled then
     if sl.hasClassBattleRez then
       lines[#lines + 1] = "Soul Link idle: class battle-rez present"
     elseif sl.available then
-      lines[#lines + 1] = "Soul Link fallback ready (item " .. tostring(sl.itemId) .. ")"
+      lines[#lines + 1] = "Soul Link fallback ready"
     else
       lines[#lines + 1] = "Soul Link fallback armed, item or spell not publicly counted"
     end
@@ -1685,8 +1965,9 @@ function ns.DetectionSummary(pack)
   local slots = model.slots
   if type(slots) == "table" and slots[1] then
     lines[#lines + 1] = "Filter: " .. tostring(slots[1].filter) .. " (" .. tostring(slots[1].mode or "byme") .. ")"
-    if slots[2] then
-      lines[#lines + 1] = "Gap: " .. tostring(slots[2].filter)
+    for i = 1, #slots do
+      local slot = slots[i]
+      lines[#lines + 1] = "Native type slot: " .. tostring(slot.dispelType or "NONE") .. " priority " .. tostring(slot.priority or 0) .. " " .. (slot.active and "active" or "inactive")
     end
   end
   lines[#lines + 1] = "Clicks: MUFs.lua type=macro + [@mouseover] macrotext. Detection paints only."
@@ -1702,29 +1983,26 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
     container._dcrSlotKeys = {}
   end
   local inCombat = InCombatLockdown and InCombatLockdown()
-  local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
   for i = 1, #slots do
     local slot = slots[i]
     if type(slot.filter) ~= "string" or slot.filter == "" or slot.filter == "HARMFUL" then
       slot.filter = LiveMainFilter(false)
     end
     local info = {
-      initializeFrame = initFn,
+      initializeFrame = function(frame)
+        if type(initFn) == "function" then
+          initFn(frame, slot.key, slot)
+        end
+      end,
       candidateFilters = slot.candidateFilters,
     }
     if container._dcrSlotKeys[slot.key] then
-      if restricted then
-        pendingRestrictionSlots = true
-      else
-        if container.SetAuraSlotFilterString then
-          container:SetAuraSlotFilterString(slot.key, slot.filter)
-        end
-        if container.SetAuraSlotCandidateFilters then
-          container:SetAuraSlotCandidateFilters(slot.key, slot.candidateFilters)
-        end
+      if container.SetAuraSlotFilterString then
+        container:SetAuraSlotFilterString(slot.key, slot.filter)
       end
-    elseif restricted then
-      pendingRestrictionSlots = true
+      if container.SetAuraSlotCandidateFilters then
+        container:SetAuraSlotCandidateFilters(slot.key, slot.candidateFilters)
+      end
     elseif container.AddAuraSlot then
       container:AddAuraSlot(slot.key, slot.filter, info)
       container._dcrSlotKeys[slot.key] = true
@@ -1736,50 +2014,64 @@ function ns.ApplyDetectionSlots(container, pack, initFn, unit)
   for i = 1, #slots do
     wanted[slots[i].key] = true
   end
-  if container._dcrSlotKeys.gap and not wanted.gap and container.SetAuraSlotCandidateFilters then
-    if not inCombat and not restricted then
-      container:SetAuraSlotCandidateFilters("gap", {includeDispelTypes = {}})
+  if container.SetAuraSlotCandidateFilters and not inCombat then
+    for key in pairs(container._dcrSlotKeys) do
+      if not wanted[key] then
+        container:SetAuraSlotCandidateFilters(key, {includeDispelTypes = {}})
+      end
     end
   end
   return true
 end
 
 function ns.AttachDetectionContainer(container, unit, pack, initFn)
+  diagnosticAttachAttempts = diagnosticAttachAttempts + 1
   if not container then
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return false
   end
   if type(unit) ~= "string" or unit == "" then
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return false
   end
   pack = pack or GetPack()
-  if ns.AuraDisplayMutationBlocked and ns.AuraDisplayMutationBlocked() then
-    pendingRestrictionSlots = true
+  local assigned, assignReason = ns.SafeNativeSetUnit(container, unit)
+  if not assigned then
+    pendingCombatSlots = assignReason == "DEFERRED_COMBAT" or pendingCombatSlots
+    pendingRestrictionSlots = assignReason == "DEFERRED_RESTRICTION" or pendingRestrictionSlots
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return false
-  end
-  if container.SetUnit then
-    container:SetUnit(unit)
   end
   if not ns.ApplyDetectionSlots(container, pack, initFn, unit) then
     if container.SetEnabled then
       container:SetEnabled(false)
     end
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return false
   end
   if container.SetEnabled then
     container:SetEnabled(true)
   end
+  if not container._dcrDiagnosticAttached then
+    container._dcrDiagnosticAttached = true
+    diagnosticAttachments = diagnosticAttachments + 1
+  end
   return true
 end
 
 function ns.AttachDetector(parent, unit, pack, initFn)
+  diagnosticAttachAttempts = diagnosticAttachAttempts + 1
   if type(unit) ~= "string" or unit == "" then
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return nil
   end
   if not parent then
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return nil
   end
   local ok, container = pcall(CreateFrame, "AuraContainer", nil, parent, "CustomAuraContainerTemplate")
   if not ok or not container then
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return nil
   end
   if container.SetAllPoints then
@@ -1794,20 +2086,24 @@ function ns.AttachDetector(parent, unit, pack, initFn)
     if container.SetEnabled then
       container:SetEnabled(false)
     end
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return nil
   end
-  container:SetUnit(unit)
-  if ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction() then
-    pendingRestrictionSlots = true
+  local assigned, assignReason = ns.SafeNativeSetUnit(container, unit)
+  if not assigned then
+    pendingCombatSlots = assignReason == "DEFERRED_COMBAT" or pendingCombatSlots
+    pendingRestrictionSlots = assignReason == "DEFERRED_RESTRICTION" or pendingRestrictionSlots
     if container.SetEnabled then
       container:SetEnabled(false)
     end
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return container
   end
   if not ns.ApplyDetectionSlots(container, pack, initFn, unit) then
     if container.SetEnabled then
       container:SetEnabled(false)
     end
+    diagnosticAttachFailures = diagnosticAttachFailures + 1
     return nil
   end
   if container.SetEnabled then
@@ -1815,6 +2111,10 @@ function ns.AttachDetector(parent, unit, pack, initFn)
   end
   if container.Show then
     container:Show()
+  end
+  if not container._dcrDiagnosticAttached then
+    container._dcrDiagnosticAttached = true
+    diagnosticAttachments = diagnosticAttachments + 1
   end
   return container
 end
@@ -1839,22 +2139,21 @@ function ns.GetDispelColorMap(pack)
     Curse = C(colors.curse),
     Poison = C(colors.poison),
     Disease = C(colors.disease),
-    Enrage = C(colors.enrage),
-    Charm = C(colors.charm),
-    Bleed = C(colors.bleed),
   }
 end
 
 ns.DETECTION_TYPES = TYPE_KEYS
+ns.ACTIONABLE_CURE_TYPE_SET = ACTIONABLE_TYPES
 ns.BY_ME_DISPEL_FILTER = BY_ME_FILTER
 ns.ALL_DISPEL_FILTER = ALL_FILTER
-ns.NATIVE_DISPEL_FILTER = BY_ME_FILTER
+ns.NATIVE_DISPEL_FILTER = ALL_FILTER
 ns.GAP_DISPEL_FILTER = GAP_FILTER
 ns.SOUL_LINK_SPELL_ID = SOUL_LINK_SPELL_ID
 ns.SOUL_LINK_ITEM_ID = SOUL_LINK_ITEM_ID
 ns.POISON_CLEANSING_TOTEM = POISON_CLEANSING_TOTEM
 
-local function SoulLinkChat(msg)
+-- USER_NOTIFICATION_SINK_BEGIN
+local function NotifyUser(msg)
   local addon = Addon()
   if addon and addon.Print then
     addon:Print(msg)
@@ -1864,15 +2163,35 @@ local function SoulLinkChat(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff52dbd1Decursive|r " .. msg)
   end
 end
+-- USER_NOTIFICATION_SINK_END
 
-function ns.PrintAddonStatus(pack)
+local function AppendTextLines(lines, text)
+  if not Accessible(text) or type(text) ~= "string" or text == "" then
+    return
+  end
+  local startAt = 1
+  while true do
+    local stopAt = string.find(text, "\n", startAt, true)
+    if not stopAt then
+      lines[#lines + 1] = string.sub(text, startAt)
+      return
+    end
+    if stopAt > startAt then
+      lines[#lines + 1] = string.sub(text, startAt, stopAt - 1)
+    end
+    startAt = stopAt + 1
+  end
+end
+
+local function BuildAddonStatusLines(pack)
   pack = pack or GetPack()
   local addon = Addon()
   local version
-  if C_AddOns and C_AddOns.GetAddOnMetadata then
-    version = C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version")
-  elseif GetAddOnMetadata then
-    version = GetAddOnMetadata(ADDON_NAME, "Version")
+  if C_AddOns and type(C_AddOns.GetAddOnMetadata) == "function" then
+    local ok, value = pcall(C_AddOns.GetAddOnMetadata, ADDON_NAME, "Version")
+    if ok then
+      version = value
+    end
   end
   version = Public(version)
   local lines = {}
@@ -1881,20 +2200,26 @@ function ns.PrintAddonStatus(pack)
   else
     lines[#lines + 1] = "Zhaohu's Decursive"
   end
-  if addon and addon.db and addon.db.GetCurrentProfile then
-    lines[#lines + 1] = "profile: " .. tostring(addon.db:GetCurrentProfile())
+  if addon and addon.db then
+    lines[#lines + 1] = "profile state: loaded"
+  else
+    lines[#lines + 1] = "profile state: unavailable"
   end
   if addon and addon.GetEditingEnvironment then
-    lines[#lines + 1] = "editing environment: " .. tostring(addon:GetEditingEnvironment())
+    local environment = Public(addon:GetEditingEnvironment())
+    if type(environment) == "string" and environment ~= "" then
+      lines[#lines + 1] = "editing environment: " .. environment
+    else
+      lines[#lines + 1] = "editing environment: unavailable"
+    end
   end
   if addon and addon.GetSpecAssignment then
     local row, spec = addon:GetSpecAssignment()
-    if spec then
-      local specName = addon.GetSpecName and addon:GetSpecName(spec) or tostring(spec)
-      if row and row.enabled then
-        lines[#lines + 1] = "spec " .. tostring(specName) .. " assignment: " .. tostring(row.profile)
+    if Accessible(spec) and spec then
+      if type(row) == "table" and row.enabled == true then
+        lines[#lines + 1] = "spec assignment: enabled"
       else
-        lines[#lines + 1] = "spec " .. tostring(specName) .. " assignment: off"
+        lines[#lines + 1] = "spec assignment: off"
       end
     else
       lines[#lines + 1] = "spec assignment: dormant this login"
@@ -1902,20 +2227,7 @@ function ns.PrintAddonStatus(pack)
   end
   if ns.DetectionSummary then
     local summary = ns.DetectionSummary(pack)
-    if type(summary) == "string" and summary ~= "" then
-      local startAt = 1
-      while true do
-        local stopAt = string.find(summary, "\n", startAt, true)
-        if not stopAt then
-          lines[#lines + 1] = string.sub(summary, startAt)
-          break
-        end
-        if stopAt > startAt then
-          lines[#lines + 1] = string.sub(summary, startAt, stopAt - 1)
-        end
-        startAt = stopAt + 1
-      end
-    end
+    AppendTextLines(lines, summary)
   end
   local mufs = type(pack) == "table" and pack.mufs or nil
   local cure = type(pack) == "table" and pack.cure or nil
@@ -1947,26 +2259,30 @@ function ns.PrintAddonStatus(pack)
   else
     lines[#lines + 1] = "customMacro: empty"
   end
-  for i = 1, #lines do
-    SoulLinkChat(lines[i])
-  end
+  return lines
+end
+
+function ns.PrintAddonStatus(pack)
+  return ShowDiagnosticText("ZDecursive Status", BuildAddonStatusLines(pack))
 end
 
 function ns.PrintSlashHelp()
-  SoulLinkChat("/zdecursive /zd /dcr  options")
-  SoulLinkChat("/dcrhelp  this list")
-  SoulLinkChat("/dcrstatus  profile, environment, spec, MUF dump")
-  SoulLinkChat("/dcrdiag  12.1 API, combat, packs, macro drop")
-  SoulLinkChat("/dcrreport  identity plus diagnostics")
-  SoulLinkChat("/dcridentity  character, current spec, dormant spec rows")
-  SoulLinkChat("/dcridentity alldebuffs  native tooltip HARMFUL vs dispellable")
-  SoulLinkChat("/dcralerts [on|off|status|move]  editing-pack alerts, drag text")
-  SoulLinkChat("/dcralertdiag  aura sound diagnostic")
-  SoulLinkChat("/dcrreset [pack|profile|all]  reset editing pack by default")
-  SoulLinkChat("/dcrpr /dcrsk  priority and skip lists")
-  SoulLinkChat("/dcrsoullink [on|off|status]  emergency Soul Link fallback")
-  SoulLinkChat("/dcrsoullinkstatus  Soul Link item/spell dump")
-  SoulLinkChat("/zdsound [spellID] [unit]  aura sound diagnostic")
+  return ShowDiagnosticText("ZDecursive Commands", {
+    "/zdecursive /zd /dcr  options",
+    "/dcrhelp  this list",
+    "/dcrstatus  sanitized profile, environment, spec, and MUF status",
+    "/dcrdiag  sanitized API, combat, pack, and macro status",
+    "/dcrreport  sanitized identity plus diagnostics",
+    "/dcridentity  sanitized identity and specialization state",
+    "/dcridentity alldebuffs  native tooltip HARMFUL vs dispellable",
+    "/dcralerts [on|off|status|move]  editing-pack alerts, drag text",
+    "/dcralertdiag  aura sound diagnostic",
+    "/dcrreset [pack|profile|all]  reset editing pack by default",
+    "/dcrpr /dcrsk  priority and skip lists",
+    "/dcrsoullink [on|off|status]  emergency Soul Link fallback",
+    "/dcrsoullinkstatus  sanitized Soul Link status",
+    "/zdsound [public spell] [unit]  aura sound diagnostic",
+  })
 end
 
 local MACRO_BYTE_LIMIT = 255
@@ -2058,6 +2374,8 @@ function ns.SetIdentityShowAllDebuffs(enabled)
   end
 end
 
+local BuildIdentityLines
+
 function ns.PrintIdentity(msg)
   local cmd = ""
   if type(msg) == "string" then
@@ -2068,17 +2386,23 @@ function ns.PrintIdentity(msg)
     local on = not ns.IdentityShowAllDebuffs()
     ns.SetIdentityShowAllDebuffs(on)
     if on then
-      SoulLinkChat("Native tooltip will show ALL harmful debuffs.")
+      NotifyUser("Native tooltip will show ALL harmful debuffs.")
     else
-      SoulLinkChat("Native tooltip will show dispellable debuffs only.")
+      NotifyUser("Native tooltip will show dispellable debuffs only.")
     end
-    SoulLinkChat("Identity alldebuffs applies on /reload.")
+    NotifyUser("Identity alldebuffs applies on /reload.")
     return
   end
+  return ShowDiagnosticText("ZDecursive Identity", BuildIdentityLines())
+end
+
+BuildIdentityLines = function()
   local addon = Addon()
-  local lines = {"identity"}
+  local lines = {"identity (sanitized)"}
   if addon and addon.GetCharacterKey then
-    lines[#lines + 1] = "character: " .. tostring(addon:GetCharacterKey() or "unknown")
+    lines[#lines + 1] = "character identity: available"
+  else
+    lines[#lines + 1] = "character identity: unavailable"
   end
   local className, classFile
   if UnitClass then
@@ -2086,62 +2410,56 @@ function ns.PrintIdentity(msg)
   end
   className = Public(className)
   classFile = Public(classFile)
-  if type(className) == "string" and className ~= "" then
-    lines[#lines + 1] = "class: " .. className .. " (" .. tostring(classFile or "") .. ")"
+  if type(className) == "string" and className ~= "" and type(classFile) == "string" and classFile ~= "" then
+    lines[#lines + 1] = "class data: public"
+  else
+    lines[#lines + 1] = "class data: unavailable"
   end
   local current
   if addon and addon.GetSpecIndex then
-    current = addon:GetSpecIndex()
+    current = Public(addon:GetSpecIndex())
   end
-  if current then
-    local name = addon.GetSpecName and addon:GetSpecName(current) or tostring(current)
-    lines[#lines + 1] = "current spec: " .. tostring(name) .. " (" .. tostring(current) .. ")"
+  if type(current) == "number" then
+    lines[#lines + 1] = "current specialization: active"
   else
-    lines[#lines + 1] = "current spec: dormant this login"
+    lines[#lines + 1] = "current specialization: dormant this login"
   end
   if addon and addon.EnsureSpecAssignments then
     local specMap = addon:EnsureSpecAssignments()
     local count = addon.SpecSlotCount and addon:SpecSlotCount() or 4
+    if not Accessible(count) or type(count) ~= "number" or count < 1 or count > 16 then
+      count = 4
+    end
+    local enabledCount = 0
+    local offCount = 0
     for spec = 1, count do
       local row = specMap and specMap[spec]
-      local label = addon.GetSpecName and addon:GetSpecName(spec) or ("Spec " .. tostring(spec))
-      local state
-      if spec == current then
-        state = "current"
-      else
-        state = "dormant"
-      end
       if type(row) == "table" and row.enabled then
-        lines[#lines + 1] = state .. " spec " .. tostring(label) .. ": " .. tostring(row.profile)
+        enabledCount = enabledCount + 1
       else
-        lines[#lines + 1] = state .. " spec " .. tostring(label) .. ": off"
+        offCount = offCount + 1
       end
     end
+    lines[#lines + 1] = "specialization assignments: enabled " .. tostring(enabledCount) .. ", off " .. tostring(offCount)
   end
-  if addon and addon.db and addon.db.GetCurrentProfile then
-    lines[#lines + 1] = "resolved profile: " .. tostring(addon.db:GetCurrentProfile())
+  if addon and addon.db then
+    lines[#lines + 1] = "resolved profile: ready"
+  else
+    lines[#lines + 1] = "resolved profile: unavailable"
   end
   if ns.IdentityShowAllDebuffs() then
     lines[#lines + 1] = "identity tooltip: ALL harmful debuffs"
   else
     lines[#lines + 1] = "identity tooltip: dispellable plus alldebuffs carrier"
   end
-  for i = 1, #lines do
-    SoulLinkChat(lines[i])
-  end
+  return lines
 end
 
 local function HasAPI(root, name)
   return type(root) == "table" and type(root[name]) == "function"
 end
 
-function ns.PrintReport()
-  ns.PrintIdentity()
-  ns.PrintDiagnostics()
-end
-
-function ns.PrintDiagnostics()
-  ns.PrintAddonStatus()
+local function BuildDiagnosticLines()
   local lines = {
     "display path: AuraContainer + AddAuraSlot",
     "C_UnitAuras.AddAuraSound: " .. (HasAPI(C_UnitAuras, "AddAuraSound") and "yes" or "no"),
@@ -2159,9 +2477,35 @@ function ns.PrintDiagnostics()
     local skip = type(lists.skip) == "table" and #lists.skip or 0
     lines[#lines + 1] = "lists: prio " .. tostring(prio) .. " skip " .. tostring(skip)
   end
-  for i = 1, #lines do
-    SoulLinkChat(lines[i])
+  return lines
+end
+
+function ns.PrintReport()
+  local lines = BuildIdentityLines()
+  lines[#lines + 1] = ""
+  AppendTextLines(lines, "status")
+  local statusLines = BuildAddonStatusLines()
+  for i = 1, #statusLines do
+    lines[#lines + 1] = statusLines[i]
   end
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "diagnostics"
+  local diagnosticLines = BuildDiagnosticLines()
+  for i = 1, #diagnosticLines do
+    lines[#lines + 1] = diagnosticLines[i]
+  end
+  return ShowDiagnosticText("ZDecursive Report", lines)
+end
+
+function ns.PrintDiagnostics()
+  local lines = BuildAddonStatusLines()
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "diagnostics"
+  local diagnosticLines = BuildDiagnosticLines()
+  for i = 1, #diagnosticLines do
+    lines[#lines + 1] = diagnosticLines[i]
+  end
+  return ShowDiagnosticText("ZDecursive Diagnostics", lines)
 end
 
 function ns.ToggleSoulLinkFallback()
@@ -2179,24 +2523,20 @@ function ns.ToggleSoulLinkFallback()
     ns.Notify()
   end
   local state = pack.mufs.soulLinkFallback == false and "disabled" or "enabled"
-  SoulLinkChat("Emergency Soul Link fallback " .. state .. ".")
+  NotifyUser("Emergency Soul Link fallback " .. state .. ".")
   return pack.mufs.soulLinkFallback ~= false
 end
 
 function ns.PrintSoulLinkStatus()
   local sl = ns.GetSoulLinkState()
   local lines = {
-    "Emergency Soul Link status",
     "toggle: " .. (sl.enabled and "on" or "off"),
-    "item " .. tostring(sl.itemId) .. " count: " .. tostring(sl.count),
-    "spell " .. tostring(sl.spellId) .. ": " .. (sl.knows and "known" or "not publicly known"),
+    "carried count: " .. tostring(sl.count),
+    "spellbook state: " .. (sl.knows and "known" or "not publicly known"),
     "class battle-rez: " .. (sl.hasClassBattleRez and "yes" or "no"),
     "available: " .. (sl.available and "yes" or "no"),
   }
-  if sl.name then
-    lines[#lines + 1] = "name: " .. sl.name
-  end
-  SoulLinkChat(table.concat(lines, " | "))
+  return ShowDiagnosticText("ZDecursive Soul Link Status", lines)
 end
 
 function ns.HandleSoulLinkSlash(msg)
@@ -2215,7 +2555,7 @@ function ns.HandleSoulLinkSlash(msg)
         ns.Notify()
       end
     end
-    SoulLinkChat("Emergency Soul Link fallback enabled.")
+    NotifyUser("Emergency Soul Link fallback enabled.")
     return
   end
   if cmd == "off" then
@@ -2227,7 +2567,7 @@ function ns.HandleSoulLinkSlash(msg)
         ns.Notify()
       end
     end
-    SoulLinkChat("Emergency Soul Link fallback disabled.")
+    NotifyUser("Emergency Soul Link fallback disabled.")
     return
   end
   ns.ToggleSoulLinkFallback()
@@ -2237,15 +2577,26 @@ function ns.EnableDetection()
   if eventsOn then
     return
   end
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("Detection", false)
+  end
   eventsOn = true
   eventFrame = CreateFrame("Frame")
   eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2)
+    if ns.DetectionEngine and ns.addon and (
+      event == "GROUP_ROSTER_UPDATE" or event == "UNIT_PET" or event == "PLAYER_ENTERING_WORLD"
+    ) then
+      -- Core owns roster and world transactions. A second direct consumer
+      -- refresh here can race the canonical signature and native carrier bank.
+      return
+    end
     local unit = arg1
     ns.InvalidateDetection()
     if event == "ADDON_RESTRICTION_STATE_CHANGED" then
       ns.RememberRestrictionState(arg1, arg2)
-      if ns.HasActiveAddonRestriction() then
-        pendingRestrictionSlots = true
+      if ns.DetectionEngine then
+        -- DetectionEngine owns restriction recovery and the required-consumer
+        -- transaction. Do not race it with a direct MUF refresh.
         return
       end
       pendingRestrictionSlots = false
@@ -2265,7 +2616,7 @@ function ns.EnableDetection()
       if ns.RefreshAlerts then
         ns.RefreshAlerts()
       end
-      if ns.RefreshMUFs then
+      if (not ns.addon or type(ns.addon.OnRegenEnabled) ~= "function") and ns.RefreshMUFs then
         ns.RefreshMUFs()
       end
       return
@@ -2295,6 +2646,9 @@ function ns.EnableDetection()
     local talentEvent = event == "SPELLS_CHANGED" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED" or event == "PLAYER_TALENT_UPDATE"
     if talentEvent and InCombatLockdown and InCombatLockdown() then
       pendingCombatSlots = true
+      if ns.RefreshOptions then
+        ns.RefreshOptions()
+      end
       return
     end
     if talentEvent then
@@ -2306,6 +2660,9 @@ function ns.EnableDetection()
       end
       if ns.RefreshCureEnginePanel then
         ns.RefreshCureEnginePanel()
+      end
+      if ns.RefreshOptions then
+        ns.RefreshOptions()
       end
     elseif event == "GROUP_ROSTER_UPDATE" or event == "UNIT_PET" or event == "PLAYER_ENTERING_WORLD" then
       if GroupSize() < 2 then
@@ -2351,6 +2708,9 @@ function ns.EnableDetection()
       ns.PrintIdentity(msg)
     end)
   end
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("Detection", true)
+  end
 end
 
 ns.Detection = {
@@ -2368,3 +2728,58 @@ ns.Detection = {
   Invalidate = ns.InvalidateDetection,
   Enable = ns.EnableDetection,
 }
+
+local function DiagnosticRosterCounts()
+  local counts = {player = 0, party = 0, raid = 0, pets = 0, total = 0}
+  local function Count(unit, category)
+    if type(UnitExists) ~= "function" then
+      return
+    end
+    local ok, exists = pcall(UnitExists, unit)
+    local public = ns.Diagnostics and ns.Diagnostics.SafePublicBoolean(exists) or nil
+    if ok and public == true then
+      counts[category] = counts[category] + 1
+      counts.total = counts.total + 1
+    end
+  end
+  Count("player", "player")
+  Count("pet", "pets")
+  for i = 1, 4 do
+    Count("party" .. tostring(i), "party")
+    Count("partypet" .. tostring(i), "pets")
+  end
+  for i = 1, 40 do
+    Count("raid" .. tostring(i), "raid")
+    Count("raidpet" .. tostring(i), "pets")
+  end
+  return counts
+end
+
+if ns.RegisterDiagnosticProvider then
+  ns.RegisterDiagnosticProvider("Detection", function()
+    local model = ns.GetDetectionModel(GetPack())
+    return {
+      eventsRegistered = eventsOn,
+      attachmentAttempts = diagnosticAttachAttempts,
+      attachments = diagnosticAttachments,
+      attachmentFailures = diagnosticAttachFailures,
+      attachmentPendingCombat = pendingCombatSlots,
+      attachmentPendingRestriction = pendingRestrictionSlots,
+      restrictionActive = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction() or false,
+      actionableTypeCount = #TYPE_KEYS,
+      enabledActionableTypeCount = #model.enabledTypes,
+      knownCureActionCount = #model.actions,
+      customCureActionCount = #model.customActions,
+      rosterTokenCounts = DiagnosticRosterCounts(),
+      rosterContext = rosterContext.kind,
+      rosterContextReady = rosterContext.ready,
+      rosterInstanceClass = rosterContext.instanceClass,
+      rosterRealPartyCount = rosterContext.realPartyCount,
+      rosterContextTransitionReason = rosterContext.transitionReason,
+    }
+  end)
+end
+
+if ns.DiagnosticModuleLoaded then
+  ns.DiagnosticModuleLoaded("Detection")
+end

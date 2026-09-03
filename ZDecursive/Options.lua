@@ -1,4 +1,29 @@
+--[[
+    This file is part of ZDecursive, an independently maintained rebuild of Decursive.
+
+    Based on Decursive, Copyright (C) 2006-2026 John Wellesz
+    (Decursive AT 2072productions.com) (https://www.2072productions.com/to/decursive.php)
+    ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
+
+    ZDecursive is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    ZDecursive is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with ZDecursive. If not, see <https://www.gnu.org/licenses/>.
+--]]
+
 local ADDON_NAME, ns = ...
+
+if ns.DiagnosticCheckpoint then
+  ns.DiagnosticCheckpoint("module", "Options file start")
+end
 
 local GOLD = {0.32, 0.86, 0.82, 1}
 local GOLD_DIM = {0.32, 0.86, 0.82, 0.32}
@@ -13,14 +38,107 @@ local DANGER = {0.75, 0.28, 0.22, 1}
 
 local ui = {
   tab = "mufs",
+  destination = "status",
   frame = nil,
   simple = true,
   collapsed = {},
 }
 
+local OPTIONS_ARCHITECTURE_VERSION = 1
+local OPTIONS_DEFAULT_DESTINATION = "STATUS"
+local ENVIRONMENT_SUBMENU_ORDER = {"OPEN_WORLD", "DUNGEON", "MYTHIC_PLUS", "RAID", "PVP", "SOLO"}
+local QUICK_BINDING_COUNT = 6
+local SHORTCUT_ONLY_COUNT = 1
+local WORKSPACE_LEFT = 204
+local WORKSPACE_RIGHT = -20
+local WORKSPACE_TOP = -116
+local WORKSPACE_BOTTOM = 20
+local WORKSPACE_GAP = 8
+local PROFILE_BODY_GAP = 12
+local SIDEBAR_HEADING_WIDTH = 146
+local PROFILE_MODE_LABEL_WIDTH = 96
+local PROFILE_MODE_GAP = 12
+local PROFILE_MODE_BUTTON_GAP = 6
+local OPTIONS_COMBAT_MESSAGE = "ZDecursive Options cannot be opened during combat."
+local OPTIONS_COMBAT_NOTICE_SECONDS = 2
+local lastOptionsCombatNotice
+
+local ReportProfileAction
+local SetDestination
+local RefreshStatusPage
+local RefreshDiagnosticsPage
+
+local function AnchorWorkspaceFrame(frame, topLeft, topRight, gap)
+  frame:ClearAllPoints()
+  frame:SetPoint("TOPLEFT", topLeft, "BOTTOMLEFT", 0, -(gap or 0))
+  frame:SetPoint("TOPRIGHT", topRight, "BOTTOMRIGHT", 0, -(gap or 0))
+end
+
+local function LayoutWorkspace(destination)
+  if not ui.body then
+    return
+  end
+  ui.body:ClearAllPoints()
+  if destination == "environment" then
+    AnchorWorkspaceFrame(ui.body, ui.tabBar, ui.tabBar, WORKSPACE_GAP)
+  elseif destination == "addon_profiles" then
+    AnchorWorkspaceFrame(ui.body, ui.profileBar, ui.profileBar, PROFILE_BODY_GAP)
+  else
+    ui.body:SetPoint("TOPLEFT", WORKSPACE_LEFT, WORKSPACE_TOP)
+    ui.body:SetPoint("TOPRIGHT", WORKSPACE_RIGHT, WORKSPACE_TOP)
+  end
+  ui.body:SetPoint("BOTTOMRIGHT", WORKSPACE_RIGHT, WORKSPACE_BOTTOM)
+end
+
 local function Addon()
   return ns.addon
 end
+
+local function OptionsCombatReadOnly()
+  if type(InCombatLockdown) ~= "function" then
+    return false
+  end
+  local ok, value = pcall(InCombatLockdown)
+  return ok and value == true
+end
+
+local function ShowOptionsCombatNotice()
+  local now
+  if type(GetTime) == "function" then
+    local ok, value = pcall(GetTime)
+    if ok and type(value) == "number" then
+      now = value
+    end
+  end
+  if lastOptionsCombatNotice ~= nil then
+    if not now or now - lastOptionsCombatNotice < OPTIONS_COMBAT_NOTICE_SECONDS then
+      return false
+    end
+  end
+  lastOptionsCombatNotice = now or 0
+  if UIErrorsFrame and type(UIErrorsFrame.AddMessage) == "function" then
+    UIErrorsFrame:AddMessage(OPTIONS_COMBAT_MESSAGE, 1, 0.15, 0.15, 1)
+  end
+  return true
+end
+
+local function OptionsAccessAllowed(source, notify)
+  if not OptionsCombatReadOnly() then
+    return true
+  end
+  if ns.CloseOptionsForCombat then
+    ns.CloseOptionsForCombat(source or "OPTIONS_ACCESS")
+  end
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("options_open_blocked", {source = source or "OPTIONS_ACCESS"}, false)
+  end
+  if notify ~= false then
+    ShowOptionsCombatNotice()
+  end
+  return false
+end
+
+ns.OptionsAccessAllowed = OptionsAccessAllowed
 
 local function ColorTex(tex, c, a)
   tex:SetColorTexture(c[1], c[2], c[3], a or c[4] or 1)
@@ -91,6 +209,14 @@ local function MakeButton(parent, label, width, kind)
   end
   function btn:GetText()
     return self.label:GetText()
+  end
+  function btn:SetInteractionEnabled(enabled)
+    self:EnableMouse(enabled == true)
+    if enabled then
+      self.label:SetTextColor(kind == "gold" and GOLD[1] or TEXT[1], kind == "gold" and GOLD[2] or TEXT[2], kind == "gold" and GOLD[3] or TEXT[3])
+    else
+      self.label:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+    end
   end
   return btn
 end
@@ -212,29 +338,30 @@ local function MakeCard(parent, title)
 end
 
 
-local function MakeColorSwatch(parent)
+local function MakeColorSwatch(parent, hasOpacity)
+  local alphaEnabled = hasOpacity ~= false
   local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
   btn:SetSize(40, 22)
   Paint(btn, {1, 1, 1, 1}, BORDER)
   function btn:SetColor(c)
-    self._c = {c[1], c[2], c[3], c[4] or 1}
-    self:SetBackdropColor(c[1], c[2], c[3], c[4] or 1)
+    local alpha = alphaEnabled and (c[4] or 1) or 1
+    self._c = {c[1], c[2], c[3], alpha}
+    self:SetBackdropColor(c[1], c[2], c[3], alpha)
   end
   btn:SetScript("OnClick", function(self)
     local c = self._c or {1, 1, 1, 1}
     if not ColorPickerFrame or not ColorPickerFrame.SetupColorPickerAndShow then
       return
     end
-    ColorPickerFrame:SetupColorPickerAndShow({
+    local picker = {
       r = c[1],
       g = c[2],
       b = c[3],
-      opacity = c[4] or 1,
-      hasOpacity = true,
+      hasOpacity = alphaEnabled,
       swatchFunc = function()
         local r, g, b = ColorPickerFrame:GetColorRGB()
         local a = 1
-        if ColorPickerFrame.GetColorAlpha then
+        if alphaEnabled and ColorPickerFrame.GetColorAlpha then
           a = ColorPickerFrame:GetColorAlpha()
         end
         self:SetColor({r, g, b, a})
@@ -242,7 +369,11 @@ local function MakeColorSwatch(parent)
           self:OnValueChanged(self._c)
         end
       end,
-    })
+    }
+    if alphaEnabled then
+      picker.opacity = c[4] or 1
+    end
+    ColorPickerFrame:SetupColorPickerAndShow(picker)
   end)
   return btn
 end
@@ -263,18 +394,71 @@ local function PathSet(section, key)
     if ns.InvalidateDetection then
       ns.InvalidateDetection()
     end
-    if ns.RefreshMUFs then
-      ns.RefreshMUFs()
-    end
-    if ns.RefreshAlerts then
-      ns.RefreshAlerts()
-    end
-    if ns.RefreshLiveList then
-      ns.RefreshLiveList()
+    local engine = ns.DetectionEngine
+    if engine and type(engine.Refresh) == "function" then
+      if ns.InvalidateUnitSort then
+        ns.InvalidateUnitSort("options")
+      end
+      engine:Refresh("OPTIONS")
+    else
+      if ns.RequestUnitSortRefresh then
+        ns.RequestUnitSortRefresh("options")
+      elseif ns.RefreshMUFs then
+        ns.RefreshMUFs()
+      end
+      if ns.RefreshAlerts then
+        ns.RefreshAlerts()
+      end
+      if ns.RefreshLiveList then
+        ns.RefreshLiveList()
+      end
     end
     if ui.RefreshPreview then
       ui.RefreshPreview()
     end
+  end
+end
+
+local function GetSharedMUFOrientation()
+  local addon = Addon()
+  return addon and addon.GetMUFVerticalLayout and addon:GetMUFVerticalLayout() or false
+end
+
+local function SetSharedMUFOrientation(value)
+  local addon = Addon()
+  if not addon or not addon.SetMUFOrientation then
+    return
+  end
+  addon:SetMUFOrientation(value == true and "VERTICAL" or "HORIZONTAL")
+  if ui.RefreshPreview then
+    ui.RefreshPreview()
+  end
+end
+
+local function GetMUFOrder()
+  if ns.GetPendingMUFOrder then
+    local pending = ns.GetPendingMUFOrder()
+    if pending then
+      return pending
+    end
+  end
+  if ns.GetConfiguredMUFOrder then
+    return ns.GetConfiguredMUFOrder(Pack())
+  end
+  return Pack().mufs.order
+end
+
+local function SetMUFOrder(value)
+  if ns.SetConfiguredMUFOrder then
+    ns.SetConfiguredMUFOrder(Pack(), value)
+  else
+    Pack().mufs.order = value
+    if ns.RefreshMUFs then
+      ns.RefreshMUFs()
+    end
+  end
+  if ui.RefreshPreview then
+    ui.RefreshPreview()
   end
 end
 
@@ -288,14 +472,19 @@ local function NotifyPack()
   if ns.RebuildClickModel then
     ns.RebuildClickModel()
   end
-  if ns.RefreshMUFs then
-    ns.RefreshMUFs()
-  end
-  if ns.RefreshAlerts then
-    ns.RefreshAlerts()
-  end
-  if ns.RefreshLiveList then
-    ns.RefreshLiveList()
+  local engine = ns.DetectionEngine
+  if engine and type(engine.Refresh) == "function" then
+    engine:Refresh("OPTIONS_PACK")
+  else
+    if ns.RefreshMUFs then
+      ns.RefreshMUFs()
+    end
+    if ns.RefreshAlerts then
+      ns.RefreshAlerts()
+    end
+    if ns.RefreshLiveList then
+      ns.RefreshLiveList()
+    end
   end
   if ui.RefreshPreview then
     ui.RefreshPreview()
@@ -353,9 +542,6 @@ local CUSTOM_TYPE_LABELS = {
   curse = "Curse",
   poison = "Poison",
   disease = "Disease",
-  enrage = "Enrage",
-  charm = "Charm",
-  bleed = "Bleed",
 }
 
 local pendingCustomType = "magic"
@@ -385,8 +571,11 @@ local function CustomSpellSummary()
     local row = list[i]
     if type(row) == "table" and row.spellId then
       local label = tostring(row.spellId)
-      if type(row.types) == "table" and #row.types > 0 then
-        label = label .. " (" .. table.concat(row.types, "/") .. ")"
+      local effectiveTypes = ns.GetActionableCureTypes and ns.GetActionableCureTypes(row.types) or {}
+      if #effectiveTypes > 0 then
+        label = label .. " (" .. table.concat(effectiveTypes, "/") .. ")"
+      else
+        label = label .. " (ignored legacy type)"
       end
       parts[#parts + 1] = label
     end
@@ -544,6 +733,7 @@ local function SetLinkedSpacing(key)
   end
 end
 
+local EDITOR_PAGES = {"mufs", "sorting", "cure", "color", "alerts", "advanced"}
 local PAGES = {"mufs", "sorting", "cure", "color", "alerts", "advanced", "assign"}
 local PAGE_LABELS = {
   mufs = "MUFs",
@@ -552,7 +742,7 @@ local PAGE_LABELS = {
   color = "Color",
   alerts = "Alerts",
   advanced = "Advanced",
-  assign = "Assign",
+  assign = "Decursive Profiles",
 }
 
 local ORDER_LABELS = {
@@ -566,6 +756,14 @@ local SOUND_LABELS = {
   FEMALE_DISPEL_ME = "Female Dispel Me",
   FEMALE_CLEANSE = "Female Cleanse",
   FEMALE_CLEANSE_ME = "Female Cleanse Me",
+  VOICE_DISPEL = "Voice Dispel",
+  VOICE_CLEANSE = "Voice Cleanse",
+  VOICE_CURE = "Voice Cure",
+  VOICE_HELP = "Voice Help",
+  VOICE_CLEANSE_ME = "Voice Cleanse Me",
+  VOICE_CURE_ME = "Voice Cure Me",
+  VOICE_HELP_CLEANSE_ME = "Voice Help, Cleanse Me",
+  VOICE_HELP_CURE_ME = "Voice Help, Cure Me",
   AFFLICTION = "Affliction",
   QUICK = "Quick",
   BRIGHT_PING = "Bright ping",
@@ -590,47 +788,52 @@ local CATALOG = {
   {page = "mufs", label = "Vertical spacing", kind = "slider", min = 0, max = 100, step = 1, get = PathGet("mufs", "verticalSpacing"), set = SetLinkedSpacing("verticalSpacing")},
   {page = "mufs", label = "Grow upward", kind = "toggle", get = PathGet("mufs", "growUp"), set = PathSet("mufs", "growUp")},
   {page = "mufs", label = "Grow from right edge", kind = "toggle", get = PathGet("mufs", "growFromRight"), set = PathSet("mufs", "growFromRight")},
-  {page = "mufs", label = "Fill columns before rows", kind = "toggle", get = PathGet("mufs", "verticalLayout"), set = PathSet("mufs", "verticalLayout")},
-  {page = "mufs", label = "Maximum MUFs", kind = "slider", min = 1, max = 80, step = 1, get = PathGet("mufs", "maxUnits"), set = PathSet("mufs", "maxUnits")},
+  {page = "mufs", label = "Vertical orientation (all environment profiles)", description = "Shared by all six environment profiles. On fills columns before rows; Off fills rows before columns.", kind = "toggle", get = GetSharedMUFOrientation, set = SetSharedMUFOrientation},
+  {page = "mufs", label = "Maximum displayed MUFs", description = "Caps non-pet MUF members after sorting. Enabled pets are additional and follow their displayed owners; detection is not limited.", kind = "slider", min = 1, max = 80, step = 1, get = PathGet("mufs", "maxUnits"), set = PathSet("mufs", "maxUnits")},
   {page = "mufs", label = "Units per line", kind = "slider", min = 1, max = 40, step = 1, get = PathGet("mufs", "unitsPerLine"), set = PathSet("mufs", "unitsPerLine")},
   {page = "mufs", label = "Show MUF border", kind = "toggle", get = PathGet("mufs", "border"), set = PathSet("mufs", "border")},
   {page = "mufs", label = "Inactive opacity", kind = "slider", min = 0, max = 1, step = 0.05, get = PathGet("mufs", "inactiveOpacity"), set = PathSet("mufs", "inactiveOpacity")},
 
-  {page = "sorting", label = "MUF order", kind = "choice", values = ORDER_LABELS, get = PathGet("mufs", "order"), set = PathSet("mufs", "order")},
-  {page = "sorting", label = "Afflicted units first", kind = "toggle", get = PathGet("sorting", "afflictedFirst"), set = PathSet("sorting", "afflictedFirst")},
+  {page = "sorting", label = "MUF order", kind = "choice", values = ORDER_LABELS, get = GetMUFOrder, set = SetMUFOrder},
   {page = "sorting", label = "Include player", kind = "toggle", get = PathGet("sorting", "includePlayer"), set = PathSet("sorting", "includePlayer")},
   {page = "sorting", label = "Include pets", kind = "toggle", get = PathGet("sorting", "includePets"), set = PathSet("sorting", "includePets")},
   {page = "sorting", label = "Center on player", kind = "toggle", get = PathGet("sorting", "centerPlayer"), set = PathSet("sorting", "centerPlayer")},
   {page = "sorting", label = "Skip dead and offline", kind = "toggle", get = PathGet("sorting", "skipDead"), set = PathSet("sorting", "skipDead")},
 
-  {page = "cure", label = "Click mode", kind = "choice", values = {AUTO = "AUTO  ·  two-button", MANUAL = "MANUAL  ·  per-button"}, get = PathGet("cure", "mode"), set = SetClickMode},
-  {page = "cure", label = "Detection filter", kind = "choice", values = {BY_ME = "By me (HARMFUL|RAID)", ALL = "All dispellable"}, get = PathGet("cure", "filterMode"), set = PathSet("cure", "filterMode")},
+  {page = "cure", label = "Click mode", kind = "choice", values = {AUTO = "AUTO - priority bindings", MANUAL = "MANUAL - per-button"}, get = PathGet("cure", "mode"), set = SetClickMode},
+  {page = "cure", label = "Detection filter", kind = "choice", values = {BY_ME = "By me - known targeted cures", ALL = "All actionable - four cure types"}, get = PathGet("cure", "filterMode"), set = PathSet("cure", "filterMode")},
   {page = "cure", label = "Magic", kind = "toggle", get = PathGet("cure", "magic"), set = PathSet("cure", "magic")},
   {page = "cure", label = "Curse", kind = "toggle", get = PathGet("cure", "curse"), set = PathSet("cure", "curse")},
   {page = "cure", label = "Poison", kind = "toggle", get = PathGet("cure", "poison"), set = PathSet("cure", "poison")},
   {page = "cure", label = "Disease", kind = "toggle", get = PathGet("cure", "disease"), set = PathSet("cure", "disease")},
-  {page = "cure", label = "Enrage", kind = "toggle", get = PathGet("cure", "enrage"), set = PathSet("cure", "enrage")},
 
   {page = "color", label = "Magic", kind = "color", get = PathGet("colors", "magic"), set = PathSet("colors", "magic")},
   {page = "color", label = "Curse", kind = "color", get = PathGet("colors", "curse"), set = PathSet("colors", "curse")},
   {page = "color", label = "Poison", kind = "color", get = PathGet("colors", "poison"), set = PathSet("colors", "poison")},
   {page = "color", label = "Disease", kind = "color", get = PathGet("colors", "disease"), set = PathSet("colors", "disease")},
-  {page = "color", label = "Enrage", kind = "color", get = PathGet("colors", "enrage"), set = PathSet("colors", "enrage")},
   {page = "color", label = "Healthy MUF", kind = "color", get = PathGet("colors", "healthy"), set = PathSet("colors", "healthy")},
   {page = "color", label = "Afflicted MUF", kind = "color", get = PathGet("colors", "afflicted"), set = PathSet("colors", "afflicted")},
-  {page = "color", label = "Border", kind = "color", get = PathGet("colors", "border"), set = PathSet("colors", "border")},
+  {page = "color", label = "Healthy center opacity", kind = "slider", min = 0, max = 1, step = 0.05, get = PathGet("mufs", "centerTransp"), set = PathSet("mufs", "centerTransp")},
+  {page = "color", label = "Class border opacity", kind = "slider", min = 0, max = 1, step = 0.05, get = PathGet("mufs", "borderTransp"), set = PathSet("mufs", "borderTransp")},
 
-  {page = "alerts", label = "Dispel text alert", kind = "toggle", get = PathGet("alerts", "dispelEnabled"), set = PathSet("alerts", "dispelEnabled")},
+  {page = "alerts", label = "Dispel text alert", description = "Shows red 'DISPEL' when Blizzard's provider reports a dispellable aura landing. This is an opportunity alert, not confirmation of a cure.", kind = "toggle", get = PathGet("alerts", "dispelEnabled"), set = PathSet("alerts", "dispelEnabled")},
+  {page = "alerts", label = "Show successful dispel text", description = "Shows 'Dispelled' on screen after ZDecursive confirms a successful cure. This is independent of the landing DISPEL and Soul Link alerts and never writes to chat.", kind = "toggle", get = PathGet("alerts", "successfulDispelText"), set = PathSet("alerts", "successfulDispelText")},
   {page = "alerts", label = "Display mode", kind = "choice", values = {TIMED = "Timed", UNTIL_CLEARED = "Until cleared"}, get = PathGet("alerts", "dispelMode"), set = PathSet("alerts", "dispelMode")},
   {page = "alerts", label = "Display duration", kind = "slider", min = 0.5, max = 30, step = 0.5, get = PathGet("alerts", "dispelDuration"), set = PathSet("alerts", "dispelDuration")},
   {page = "alerts", label = "Text size", kind = "slider", min = 12, max = 96, step = 1, get = PathGet("alerts", "dispelFontSize"), set = PathSet("alerts", "dispelFontSize")},
+  {page = "alerts", label = "Text color", kind = "color", get = PathGet("alerts", "dispelColor"), set = PathSet("alerts", "dispelColor")},
+  {page = "alerts", label = "Test Text", description = "Previews the editing environment's DISPEL text without changing settings or native sound registrations.", kind = "button", buttonLabel = "Test", run = function()
+    if OptionsAccessAllowed("ALERT_TEXT_TEST") and ns.PlayTestText then
+      ns.PlayTestText(Pack())
+    end
+  end},
   {page = "alerts", label = "PvP text", kind = "toggle", get = PathGet("alerts", "pvpText"), set = PathSet("alerts", "pvpText")},
   {page = "alerts", label = "Text alerts", kind = "toggle", get = PathGet("alerts", "text"), set = PathSet("alerts", "text")},
   {page = "alerts", label = "Chat status messages", kind = "toggle", get = PathGet("alerts", "chat"), set = PathSet("alerts", "chat")},
   {page = "alerts", label = "Dispel sound", kind = "toggle", get = PathGet("alerts", "sound"), set = PathSet("alerts", "sound")},
   {page = "alerts", label = "Sound", kind = "choice", values = SOUND_LABELS, get = PathGet("alerts", "soundPreset"), set = PathSet("alerts", "soundPreset")},
   {page = "alerts", label = "Sound channel", kind = "choice", values = {Master = "Master", SFX = "SFX", Music = "Music", Ambience = "Ambience", Dialog = "Dialog"}, get = PathGet("alerts", "soundChannel"), set = PathSet("alerts", "soundChannel")},
-  {page = "alerts", label = "Group debounce", kind = "slider", min = 0, max = 5, step = 0.25, get = PathGet("alerts", "soundDebounce"), set = PathSet("alerts", "soundDebounce")},
+  {page = "alerts", label = "Lua fallback debounce", description = "Applies only to Lua fallback and failure sounds. Blizzard-native aura landing sounds are independently provider-owned.", kind = "slider", min = 0, max = 5, step = 0.25, get = PathGet("alerts", "soundDebounce"), set = PathSet("alerts", "soundDebounce")},
   {page = "alerts", label = "Cure-failure sound", kind = "toggle", get = PathGet("alerts", "errorSound"), set = PathSet("alerts", "errorSound")},
   {page = "alerts", label = "Test Sound", kind = "button", run = function()
     if ns.PlayTestSound then
@@ -650,21 +853,12 @@ local CATALOG = {
   {page = "mufs", label = "MUF scale", kind = "slider", min = 0.5, max = 2, step = 0.05, get = PathGet("mufs", "scale"), set = PathSet("mufs", "scale")},
   {page = "mufs", label = "Dim out of range", kind = "toggle", get = PathGet("mufs", "dimOutOfRange"), set = PathSet("mufs", "dimOutOfRange")},
   {page = "mufs", label = "Out-of-range dim", kind = "slider", min = 0, max = 1, step = 0.05, get = PathGet("mufs", "dimAmount"), set = PathSet("mufs", "dimAmount")},
-  {page = "mufs", label = "Show secondary affliction", kind = "toggle", get = PathGet("mufs", "secondaryAffliction"), set = PathSet("mufs", "secondaryAffliction")},
-  {page = "mufs", label = "Pulse secondary affliction", kind = "toggle", get = PathGet("mufs", "pulseSecondary"), set = PathSet("mufs", "pulseSecondary")},
   {page = "mufs", label = "Share cooldown with same-priority MUFs", kind = "toggle", get = PathGet("mufs", "shareCooldown"), set = PathSet("mufs", "shareCooldown")},
   {page = "mufs", label = "Clear cleansed target immediately", kind = "toggle", get = PathGet("mufs", "clearCleansedImmediately"), set = PathSet("mufs", "clearCleansedImmediately")},
   {page = "mufs", label = "Soul Link fallback", kind = "toggle", get = PathGet("mufs", "soulLinkFallback"), set = PathSet("mufs", "soulLinkFallback")},
-  {page = "mufs", label = "Secondary affliction border", kind = "toggle", get = PathGet("mufs", "secondaryBorder"), set = PathSet("mufs", "secondaryBorder")},
   {page = "mufs", label = "Tie center and border opacity", kind = "toggle", get = PathGet("mufs", "tieCenterAndBorder"), set = PathSet("mufs", "tieCenterAndBorder")},
 
-  {page = "cure", label = "Charm", kind = "toggle", get = PathGet("cure", "charm"), set = PathSet("cure", "charm")},
-  {page = "cure", label = "Magic (charmed)", kind = "toggle", get = PathGet("cure", "magicCharmed"), set = PathSet("cure", "magicCharmed")},
-  {page = "cure", label = "Bleed", kind = "toggle", get = PathGet("cure", "bleed"), set = PathSet("cure", "bleed")},
-  {page = "cure", label = "Bleed-effect detection", kind = "toggle", get = PathGet("cure", "bleedDetection"), set = PathSet("cure", "bleedDetection")},
-  {page = "cure", label = "Do not skip priority-list units", kind = "toggle", get = PathGet("cure", "doNotBlacklistPrio"), set = PathSet("cure", "doNotBlacklistPrio")},
   {page = "cure", label = "Cure pets", kind = "toggle", get = PathGet("cure", "curePets"), set = PathSet("cure", "curePets")},
-  {page = "cure", label = "Skip stealthed", kind = "toggle", get = PathGet("cure", "skipStealthed"), set = PathSet("cure", "skipStealthed")},
   {page = "cure", label = "Custom spell type", kind = "choice", values = CUSTOM_TYPE_LABELS, get = function() return pendingCustomType end, set = function(value)
     pendingCustomType = KnownCustomType(value) or "magic"
   end},
@@ -676,18 +870,15 @@ local CATALOG = {
   {page = "cure", label = "Button 4", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "button4"), set = SetMouseAction("button4")},
   {page = "cure", label = "Button 5", kind = "choice", values = MOUSE_ACTIONS, get = PathGet("mouse", "button5"), set = SetMouseAction("button5")},
 
-  {page = "color", label = "Charm", kind = "color", get = PathGet("colors", "charm"), set = PathSet("colors", "charm")},
-  {page = "color", label = "Bleed", kind = "color", get = PathGet("colors", "bleed"), set = PathSet("colors", "bleed")},
-  {page = "color", label = "Dead / offline", kind = "color", get = PathGet("colors", "dead"), set = PathSet("colors", "dead")},
-  {page = "color", label = "Out of range", kind = "color", get = PathGet("colors", "range"), set = PathSet("colors", "range")},
+  {page = "color", label = "Dead / ghost / offline", kind = "color", get = PathGet("colors", "dead"), set = PathSet("colors", "dead")},
+  {page = "color", label = "Out of range", description = "RGB color only. Out-of-range dim controls brightness exactly once.", kind = "color", hasOpacity = false, get = PathGet("colors", "range"), set = PathSet("colors", "range")},
   {page = "color", label = "Stealth", kind = "color", get = PathGet("colors", "stealth"), set = PathSet("colors", "stealth")},
 
-  {page = "alerts", label = "Print to default chat", kind = "toggle", get = PathGet("alerts", "printChat"), set = PathSet("alerts", "printChat")},
+  {page = "alerts", label = "Show in copyable diagnostics", kind = "toggle", get = PathGet("alerts", "printChat"), set = PathSet("alerts", "printChat")},
   {page = "alerts", label = "Print to custom window", kind = "toggle", get = PathGet("alerts", "printCustom"), set = PathSet("alerts", "printCustom")},
   {page = "alerts", label = "Print errors", kind = "toggle", get = PathGet("alerts", "printErrors"), set = PathSet("alerts", "printErrors")},
-  {page = "alerts", label = "Soul Link battle-rez warning", kind = "toggle", get = PathGet("alerts", "soulLinkAlert"), set = PathSet("alerts", "soulLinkAlert")},
+  {page = "alerts", label = "Soul Link battle-rez warning", description = "Shows a battle-rez range warning only after an attributed Soul Link attempt fails out of range. It is not an affliction or cure-success alert.", kind = "toggle", get = PathGet("alerts", "soulLinkAlert"), set = PathSet("alerts", "soulLinkAlert")},
   {page = "alerts", label = "Native 12.1 aura sounds", kind = "toggle", get = PathGet("alerts", "nativeAuraSound"), set = PathSet("alerts", "nativeAuraSound")},
-  {page = "alerts", label = "Learn spell IDs from successful dispels", kind = "toggle", get = PathGet("alerts", "learnSpellIds"), set = PathSet("alerts", "learnSpellIds")},
   {page = "alerts", label = "Live list", kind = "toggle", get = PathGet("alerts", "liveList"), set = PathSet("alerts", "liveList")},
   {page = "alerts", label = "Live list only in range", kind = "toggle", get = PathGet("alerts", "liveListOnlyInRange"), set = PathSet("alerts", "liveListOnlyInRange")},
   {page = "alerts", label = "Live list rows", kind = "slider", min = 1, max = 20, step = 1, get = PathGet("alerts", "liveListAmount"), set = PathSet("alerts", "liveListAmount")},
@@ -696,12 +887,6 @@ local CATALOG = {
   {page = "alerts", label = "Live list scale", kind = "slider", min = 0.5, max = 2, step = 0.05, get = PathGet("alerts", "liveListScale"), set = PathSet("alerts", "liveListScale")},
   {page = "alerts", label = "Live list opacity", kind = "slider", min = 0.2, max = 1, step = 0.05, get = PathGet("alerts", "liveListAlpha"), set = PathSet("alerts", "liveListAlpha")},
 
-  {page = "advanced", label = "Debug chat", kind = "toggle", get = PathGet("advanced", "debug"), set = PathSet("advanced", "debug")},
-  {page = "advanced", label = "Check delay (seconds)", kind = "slider", min = 0.05, max = 1, step = 0.05, get = PathGet("advanced", "checkDelay"), set = PathSet("advanced", "checkDelay")},
-  {page = "advanced", label = "Hide start messages", kind = "toggle", get = PathGet("advanced", "noStartMessages"), set = PathSet("advanced", "noStartMessages")},
-  {page = "advanced", label = "Skip-list duration (seconds)", kind = "slider", min = 1, max = 30, step = 1, get = PathGet("advanced", "blacklistLength"), set = PathSet("advanced", "blacklistLength")},
-  {page = "advanced", label = "MUF refresh rate", kind = "slider", min = 0.02, max = 0.5, step = 0.01, get = PathGet("advanced", "refreshRate"), set = PathSet("advanced", "refreshRate")},
-  {page = "advanced", label = "Disable macro creation", kind = "toggle", get = PathGet("advanced", "disableMacroCreation"), set = PathSet("advanced", "disableMacroCreation")},
   {page = "advanced", label = "Allow macro editing", kind = "toggle", get = PathGet("advanced", "allowMacroEdit"), set = PathSet("advanced", "allowMacroEdit")},
   {page = "advanced", label = "Custom macro", kind = "text", get = PathGet("advanced", "customMacro"), set = SetCustomMacro},
 }
@@ -717,14 +902,14 @@ local ROW_META = {
   ["mufs|Party MUF size"] = {group = "Size", simple = true, hideEnv = {RAID = true}},
   ["mufs|Raid MUF size"] = {group = "Size", simple = true, hideEnv = {MYTHIC_PLUS = true, DUNGEON = true}},
   ["mufs|MUF scale"] = {group = "Size"},
-  ["mufs|Maximum MUFs"] = {group = "Size"},
+  ["mufs|Maximum displayed MUFs"] = {group = "Size"},
   ["mufs|Units per line"] = {group = "Size", simple = true},
   ["mufs|Link horizontal and vertical spacing"] = {group = "Spacing", simple = true},
   ["mufs|Horizontal spacing"] = {group = "Spacing", simple = true},
   ["mufs|Vertical spacing"] = {group = "Spacing", simple = true},
   ["mufs|Grow upward"] = {group = "Layout"},
   ["mufs|Grow from right edge"] = {group = "Layout"},
-  ["mufs|Fill columns before rows"] = {group = "Layout"},
+  ["mufs|Vertical orientation (all environment profiles)"] = {group = "Layout"},
   ["mufs|Show MUF border"] = {group = "Look"},
   ["mufs|Inactive opacity"] = {group = "Look"},
   ["mufs|Center unit name"] = {group = "Look"},
@@ -732,15 +917,11 @@ local ROW_META = {
   ["mufs|Status indicator light"] = {group = "Status"},
   ["mufs|Dim out of range"] = {group = "Status"},
   ["mufs|Out-of-range dim"] = {group = "Status"},
-  ["mufs|Show secondary affliction"] = {group = "Status"},
-  ["mufs|Pulse secondary affliction"] = {group = "Status"},
   ["mufs|Share cooldown with same-priority MUFs"] = {group = "Status"},
   ["mufs|Clear cleansed target immediately"] = {group = "Status"},
   ["mufs|Soul Link fallback"] = {group = "Status"},
-  ["mufs|Secondary affliction border"] = {group = "Status"},
   ["mufs|Tie center and border opacity"] = {group = "Status"},
   ["sorting|MUF order"] = {group = "Roster", simple = true},
-  ["sorting|Afflicted units first"] = {group = "Roster", simple = true},
   ["sorting|Include player"] = {group = "Roster", simple = true},
   ["sorting|Include pets"] = {group = "Roster", simple = true},
   ["sorting|Center on player"] = {group = "Roster"},
@@ -756,52 +937,45 @@ local ROW_META = {
   ["cure|Curse"] = {group = "Types", simple = true},
   ["cure|Poison"] = {group = "Types", simple = true},
   ["cure|Disease"] = {group = "Types", simple = true},
-  ["cure|Enrage"] = {group = "Types", simple = true},
-  ["cure|Charm"] = {group = "Types"},
-  ["cure|Magic (charmed)"] = {group = "Types"},
-  ["cure|Bleed"] = {group = "Types", simple = true},
-  ["cure|Bleed-effect detection"] = {group = "Rules"},
-  ["cure|Do not skip priority-list units"] = {group = "Rules"},
   ["cure|Cure pets"] = {group = "Rules"},
-  ["cure|Skip stealthed"] = {group = "Rules"},
   ["cure|Add custom dispel spell"] = {group = "Custom", simple = true},
   ["cure|Remove custom dispel spell"] = {group = "Custom", simple = true},
   ["color|Magic"] = {group = "Afflictions", simple = true},
   ["color|Curse"] = {group = "Afflictions", simple = true},
   ["color|Poison"] = {group = "Afflictions", simple = true},
   ["color|Disease"] = {group = "Afflictions", simple = true},
-  ["color|Enrage"] = {group = "Afflictions", simple = true},
-  ["color|Charm"] = {group = "Afflictions"},
-  ["color|Bleed"] = {group = "Afflictions", simple = true},
   ["color|Healthy MUF"] = {group = "Squares"},
   ["color|Afflicted MUF"] = {group = "Squares"},
-  ["color|Border"] = {group = "Squares"},
-  ["color|Dead / offline"] = {group = "Squares"},
-  ["color|Out of range"] = {group = "Squares"},
+  ["color|Healthy center opacity"] = {group = "Squares"},
+  ["color|Class border opacity"] = {group = "Squares"},
+  ["color|Dead / ghost / offline"] = {group = "Squares"},
+  ["color|Out of range"] = {group = "Squares", simple = true},
   ["color|Stealth"] = {group = "Squares"},
-  ["alerts|Dispel text alert"] = {group = "Dispel text", simple = true},
-  ["alerts|Display mode"] = {group = "Dispel text"},
-  ["alerts|Display duration"] = {group = "Dispel text"},
-  ["alerts|Text size"] = {group = "Dispel text"},
-  ["alerts|PvP text"] = {group = "Dispel text", simple = true},
-  ["alerts|Text alerts"] = {group = "Dispel text"},
+  ["alerts|Dispel text alert"] = {group = "Text Alerts", simple = true},
+  ["alerts|Soul Link battle-rez warning"] = {group = "Text Alerts", simple = true},
+  ["alerts|Show successful dispel text"] = {group = "Text Alerts", simple = true},
+  ["alerts|Display mode"] = {group = "Text Alerts"},
+  ["alerts|Display duration"] = {group = "Text Alerts"},
+  ["alerts|Text size"] = {group = "Text Alerts"},
+  ["alerts|Text color"] = {group = "Text Alerts"},
+  ["alerts|Test Text"] = {group = "Text Alerts", simple = true},
+  ["alerts|PvP text"] = {group = "Text Alerts", simple = true},
+  ["alerts|Text alerts"] = {group = "Text Alerts"},
   ["alerts|Dispel sound"] = {group = "Sound", simple = true},
   ["alerts|Sound"] = {group = "Sound"},
   ["alerts|Sound channel"] = {group = "Sound"},
-  ["alerts|Group debounce"] = {group = "Sound"},
+  ["alerts|Lua fallback debounce"] = {group = "Sound"},
   ["alerts|Cure-failure sound"] = {group = "Sound"},
   ["alerts|Test Sound"] = {group = "Sound", simple = true},
   ["alerts|Native 12.1 aura sounds"] = {group = "Sound"},
-  ["alerts|Learn spell IDs from successful dispels"] = {group = "Sound"},
   ["alerts|Cooldown overlay"] = {group = "Cooldown", simple = true},
   ["alerts|Countdown numbers"] = {group = "Cooldown"},
   ["alerts|Overlay darkness"] = {group = "Cooldown"},
   ["alerts|Out-of-range status"] = {group = "Cooldown"},
-  ["alerts|Print to default chat"] = {group = "Chat"},
+  ["alerts|Show in copyable diagnostics"] = {group = "Diagnostics"},
   ["alerts|Print to custom window"] = {group = "Chat"},
   ["alerts|Print errors"] = {group = "Chat"},
   ["alerts|Chat status messages"] = {group = "Chat"},
-  ["alerts|Soul Link battle-rez warning"] = {group = "Chat"},
   ["alerts|Live list"] = {group = "Live list", simple = true},
   ["alerts|Live list only in range"] = {group = "Live list"},
   ["alerts|Live list rows"] = {group = "Live list", simple = true},
@@ -809,12 +983,6 @@ local ROW_META = {
   ["alerts|Reverse live list"] = {group = "Live list"},
   ["alerts|Live list scale"] = {group = "Live list"},
   ["alerts|Live list opacity"] = {group = "Live list"},
-  ["advanced|Debug chat"] = {group = "Engine"},
-  ["advanced|Check delay (seconds)"] = {group = "Engine"},
-  ["advanced|Hide start messages"] = {group = "Engine"},
-  ["advanced|Skip-list duration (seconds)"] = {group = "Engine"},
-  ["advanced|MUF refresh rate"] = {group = "Engine"},
-  ["advanced|Disable macro creation"] = {group = "Engine"},
   ["advanced|Allow macro editing"] = {group = "Engine"},
   ["advanced|Custom macro"] = {group = "Engine"},
 }
@@ -824,7 +992,7 @@ local GROUP_ORDER = {
   sorting = {"Roster"},
   cure = {"Types", "Clicks", "Rules", "Custom"},
   color = {"Afflictions", "Squares"},
-  alerts = {"Dispel text", "Sound", "Cooldown", "Chat", "Live list"},
+  alerts = {"Text Alerts", "Sound", "Cooldown", "Chat", "Live list"},
   advanced = {"Engine"},
 }
 
@@ -839,6 +1007,26 @@ for _, spec in ipairs(CATALOG) do
   end
 end
 
+local function EnsureCatalogRenderReachability()
+  local known = {}
+  for page, groups in pairs(GROUP_ORDER) do
+    known[page] = {}
+    for _, group in ipairs(groups) do
+      known[page][group] = true
+    end
+  end
+  for _, spec in ipairs(CATALOG) do
+    local groups = GROUP_ORDER[spec.page]
+    local pageKnown = known[spec.page]
+    if groups and pageKnown and not pageKnown[spec.group] then
+      groups[#groups + 1] = spec.group
+      pageKnown[spec.group] = true
+    end
+  end
+end
+
+EnsureCatalogRenderReachability()
+
 local PAGE_HAS_SIMPLE = {}
 for _, spec in ipairs(CATALOG) do
   if spec.simple then
@@ -848,6 +1036,9 @@ end
 
 
 local function ShowModal(title, defaultText, onAccept)
+  if not OptionsAccessAllowed("PROFILE_MODAL") then
+    return false
+  end
   local f = ui.modal
   f.title:SetText(title)
   f.edit:SetText(defaultText or "")
@@ -860,13 +1051,21 @@ local function ShowModal(title, defaultText, onAccept)
   if f.ok then
     f.ok:SetText("Save")
   end
-  f.onAccept = onAccept
+  f.onAccept = function(value)
+    if OptionsAccessAllowed("PROFILE_MODAL_ACCEPT") then
+      onAccept(value)
+    end
+  end
   f.confirmOnly = false
   f:Show()
   f.edit:SetFocus()
+  return true
 end
 
 local function ShowConfirm(title, hint, onAccept)
+  if not OptionsAccessAllowed("PROFILE_CONFIRM") then
+    return false
+  end
   local f = ui.modal
   f.title:SetText(title)
   f.edit:SetText("")
@@ -879,10 +1078,13 @@ local function ShowConfirm(title, hint, onAccept)
     f.ok:SetText("Reset")
   end
   f.onAccept = function()
-    onAccept()
+    if OptionsAccessAllowed("PROFILE_CONFIRM_ACCEPT") then
+      onAccept()
+    end
   end
   f.confirmOnly = true
   f:Show()
+  return true
 end
 
 local function HideModal()
@@ -890,8 +1092,11 @@ local function HideModal()
 end
 
 local function OpenChoiceMenu(anchor, values, get, set)
+  if not OptionsAccessAllowed("CHOICE_MENU") then
+    return false
+  end
   if not MenuUtil or not MenuUtil.CreateContextMenu then
-    return
+    return false
   end
   MenuUtil.CreateContextMenu(anchor, function(_, root)
     local current = get()
@@ -899,49 +1104,72 @@ local function OpenChoiceMenu(anchor, values, get, set)
       root:CreateRadio(label, function()
         return current == key
       end, function()
-        set(key)
-        ns.RefreshOptions()
+        if OptionsAccessAllowed("CHOICE_MENU_SELECT") then
+          set(key)
+          ns.RefreshOptions()
+        end
       end)
     end
   end)
+  return true
 end
 
 local function OpenProfileMenu(anchor, onPick, includeInherit)
+  if not OptionsAccessAllowed("PROFILE_MENU") then
+    return false
+  end
   if not MenuUtil or not MenuUtil.CreateContextMenu then
-    return
+    return false
   end
   MenuUtil.CreateContextMenu(anchor, function(_, root)
+    local status = Addon():GetUIProfileStatus()
+    local actual = status and status.available and status.actualProfile or nil
     if includeInherit then
       root:CreateButton("Use account / Default", function()
-        onPick(nil)
+        if OptionsAccessAllowed("PROFILE_NAVIGATION") then
+          onPick(nil)
+        end
       end)
       root:CreateDivider()
     end
-    for _, name in ipairs(Addon().db:GetProfiles()) do
+    for _, name in ipairs(Addon():GetProfileNames()) do
       root:CreateRadio(name, function()
-        return Addon().db:GetCurrentProfile() == name
+        return actual == name
       end, function()
-        onPick(name)
+        if OptionsAccessAllowed("PROFILE_NAVIGATION") then
+          onPick(name)
+        end
       end)
     end
   end)
+  return true
 end
 
 local function OpenEnvCopyMenu(anchor)
+  if not OptionsAccessAllowed("ENVIRONMENT_COPY_MENU") then
+    return false
+  end
   if not MenuUtil or not MenuUtil.CreateContextMenu then
-    return
+    return false
+  end
+  if Addon():GetEnvironmentMode() ~= "multiple" then
+    return false
   end
   local src = Addon():GetEditingEnvironment()
   MenuUtil.CreateContextMenu(anchor, function(_, root)
     root:CreateTitle("Copy " .. (ns.ENV_LABELS[src] or src) .. " to")
-    for _, row in ipairs(ns.ENVIRONMENTS) do
+    for _, row in ipairs(ns.MULTIPLE_ENVIRONMENTS) do
       if row.key ~= src then
         root:CreateButton(row.label, function()
-          Addon():CopyEditingPackTo(row.key)
+          if OptionsAccessAllowed("ENVIRONMENT_COPY_SELECT") then
+            local ok, state = Addon():CopyEditingPackTo(row.key)
+            ReportProfileAction(ok, state, "Environment copied.")
+          end
         end)
       end
     end
   end)
+  return true
 end
 
 local function MatchesSearch(label)
@@ -974,16 +1202,31 @@ local function IsCollapsed(page, group)
   end
   local pageMap = ui.collapsed[page]
   if not pageMap then
-    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Dispel text" and group ~= "Clicks" and group ~= "Live list"
+    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Text Alerts" and group ~= "Clicks" and group ~= "Live list"
   end
   if pageMap[group] == nil then
-    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Dispel text" and group ~= "Clicks" and group ~= "Live list"
+    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Text Alerts" and group ~= "Clicks" and group ~= "Live list"
   end
   return pageMap[group]
 end
 
 
-local PREVIEW_COLORS = {"magic", "curse", "poison", "disease", "healthy"}
+local PREVIEW_MAX_UNITS = 40
+local PREVIEW_CAPTION_HEIGHT = 22
+local PREVIEW_PADDING = 12
+local PREVIEW_PARTY_MIN_CONTENT_HEIGHT = 64
+local PREVIEW_PARTY_MAX_CONTENT_HEIGHT = 86
+local PREVIEW_RAID_MIN_CONTENT_HEIGHT = 88
+local PREVIEW_RAID_MAX_CONTENT_HEIGHT = 152
+local PREVIEW_SEPARATOR = string.char(194, 183)
+local PREVIEW_STATES = {
+  {key = "magic"},
+  {key = "curse"},
+  {key = "poison"},
+  {key = "disease"},
+  {key = "healthy"},
+}
+local LayoutCatalog
 
 local function PreviewSize(pack, env)
   if env == "RAID" then
@@ -995,8 +1238,99 @@ local function PreviewSize(pack, env)
   return pack.mufs.partySize or 20
 end
 
+local function PreviewCount(pack, env)
+  local configured = tonumber(pack and pack.mufs and pack.mufs.maxUnits)
+  local defaultCount = ns.DEFAULT_MUF_DISPLAY_CAP or 5
+  local largeGroup = env == "RAID" or env == "PVP"
+  if largeGroup and (configured == nil or configured == defaultCount) then
+    return PREVIEW_MAX_UNITS
+  end
+  configured = math.floor(configured or defaultCount)
+  if largeGroup then
+    return math.max(1, math.min(PREVIEW_MAX_UNITS, configured))
+  end
+  return math.max(1, math.min(defaultCount, configured))
+end
+
+ns.GetMUFPreviewCount = PreviewCount
+
+function ns.CalculateMUFPreviewGeometry(layout, configuredScale, hostWidth, minContentHeight, maxContentHeight, handleHeight, handleBelow)
+  if type(layout) ~= "table" or type(layout.positions) ~= "table" then
+    return nil
+  end
+  minContentHeight = math.max(1, tonumber(minContentHeight) or PREVIEW_PARTY_MIN_CONTENT_HEIGHT)
+  maxContentHeight = math.max(minContentHeight, tonumber(maxContentHeight) or PREVIEW_PARTY_MAX_CONTENT_HEIGHT)
+  local availableWidth = math.max(1, (tonumber(hostWidth) or 960) - PREVIEW_PADDING * 2)
+  configuredScale = math.max(0.05, tonumber(configuredScale) or 1)
+  handleHeight = math.max(0, tonumber(handleHeight) or 0)
+  local scaledWidth = math.max(1, (tonumber(layout.width) or 1) * configuredScale)
+  local scaledHeight = math.max(1, ((tonumber(layout.height) or 1) + handleHeight) * configuredScale)
+  local fit = math.min(1, availableWidth / scaledWidth, maxContentHeight / scaledHeight)
+  local previewScale = configuredScale * fit
+  local minX
+  local minY
+  for i = 1, #layout.positions do
+    local position = layout.positions[i]
+    minX = minX and math.min(minX, position.x) or position.x
+    minY = minY and math.min(minY, position.y) or position.y
+  end
+  minX = minX or 0
+  minY = minY or 0
+  local drawnWidth = (tonumber(layout.width) or 1) * previewScale
+  local layoutDrawnHeight = (tonumber(layout.height) or 1) * previewScale
+  local handleDrawnHeight = handleHeight * previewScale
+  local drawnHeight = layoutDrawnHeight + handleDrawnHeight
+  local contentHeight = math.max(minContentHeight, math.min(maxContentHeight, drawnHeight))
+  local verticalCenter = (contentHeight - drawnHeight) * 0.5
+  return {
+    scale = previewScale,
+    drawSize = (tonumber(layout.size) or 20) * previewScale,
+    drawnWidth = drawnWidth,
+    drawnHeight = drawnHeight,
+    layoutDrawnHeight = layoutDrawnHeight,
+    handleDrawnHeight = handleDrawnHeight,
+    availableWidth = availableWidth,
+    availableHeight = contentHeight,
+    contentHeight = contentHeight,
+    hostHeight = PREVIEW_CAPTION_HEIGHT + PREVIEW_PADDING * 2 + contentHeight,
+    originX = PREVIEW_PADDING + (availableWidth - drawnWidth) * 0.5 - minX * previewScale,
+    originY = PREVIEW_PADDING + verticalCenter + (handleBelow and handleDrawnHeight or 0) - minY * previewScale,
+  }
+end
+
+local function TeardownMUFPreview()
+  if type(ui.previewSquares) == "table" then
+    for i = 1, #ui.previewSquares do
+      ui.previewSquares[i]:Hide()
+    end
+  end
+  if ui.previewHandle then
+    ui.previewHandle:Hide()
+  end
+  ui.previewVisibleCount = 0
+end
+
+local function PreviewStateColor(pack, state)
+  local colors = pack.colors or {}
+  local mufs = pack.mufs or {}
+  local color = colors[state.key] or GOLD
+  local alpha = color[4] or 1
+  if state.key == "healthy" then
+    alpha = mufs.inactiveOpacity or alpha
+  end
+  return color[1] or 0.3, color[2] or 0.8, color[3] or 0.8, alpha
+end
+
+local function MUFPreviewActive()
+  return ui.destination == "environment" and ui.tab == "mufs" and (not ui.search or ui.search == "")
+end
+
 local function RefreshPreview()
   if not ui.previewHost or not ui.previewSquares then
+    return
+  end
+  if not MUFPreviewActive() then
+    TeardownMUFPreview()
     return
   end
   local addon = Addon()
@@ -1015,58 +1349,82 @@ local function RefreshPreview()
   if not hostW or hostW < 100 then
     hostW = 960
   end
-  local n = 5
-  local pad = 16
-  local need = n * size + (n - 1) * hSpace
-  local avail = hostW - pad * 2
-  local scale = 1
-  if need > avail and need > 0 then
-    scale = avail / need
+  local n = PreviewCount(pack, env)
+  local perLine = math.max(1, math.min(PREVIEW_MAX_UNITS, math.floor(tonumber(pack.mufs.unitsPerLine) or 10)))
+  local verticalLayout = addon.GetMUFVerticalLayout and addon:GetMUFVerticalLayout() or false
+  local layout = ns.CalculateMUFLayout and ns.CalculateMUFLayout(
+    n,
+    size,
+    hSpace,
+    vSpace,
+    pack.mufs.statusLight,
+    perLine,
+    verticalLayout,
+    pack.mufs.growUp,
+    pack.mufs.growFromRight
+  )
+  if type(layout) ~= "table" then
+    TeardownMUFPreview()
+    return
   end
-  if size * scale > 48 then
-    scale = 48 / size
+  local minContentHeight = env == "RAID" and PREVIEW_RAID_MIN_CONTENT_HEIGHT or PREVIEW_PARTY_MIN_CONTENT_HEIGHT
+  local maxContentHeight = env == "RAID" and PREVIEW_RAID_MAX_CONTENT_HEIGHT or PREVIEW_PARTY_MAX_CONTENT_HEIGHT
+  local handleHeight = pack.mufs.hideHandle ~= true and size or 0
+  local geometry = ns.CalculateMUFPreviewGeometry(layout, pack.mufs.scale, hostW, minContentHeight, maxContentHeight, handleHeight, pack.mufs.growUp == true)
+  if not geometry then
+    TeardownMUFPreview()
+    return
   end
-  local draw = math.max(8, size * scale)
-  local gap = hSpace * scale
-  local growRight = pack.mufs.growFromRight
+  local oldHeight = ui.previewHeight
+  ui.previewHeight = geometry.hostHeight
+  ui.previewHost:SetHeight(geometry.hostHeight)
+  if oldHeight and math.abs(oldHeight - geometry.hostHeight) > 0.01 and not ui.layoutCatalogActive and LayoutCatalog then
+    LayoutCatalog()
+    return
+  end
+  local previewScale = geometry.scale
+  local draw = geometry.drawSize
   local shown = pack.mufs.show ~= false
   local colors = pack.colors or {}
-  local captionKind = "party"
-  if env == "RAID" then
-    captionKind = "raid"
-  end
   if ui.previewCaption then
-    ui.previewCaption:SetText(string.format("Size preview - %s %dpx - gap %dpx", captionKind, size, hSpace))
+    if env == "RAID" then
+      ui.previewCaption:SetText(string.format("Raid preview " .. PREVIEW_SEPARATOR .. " %d units " .. PREVIEW_SEPARATOR .. " %d per line", n, perLine))
+    else
+      ui.previewCaption:SetText(string.format("Party preview " .. PREVIEW_SEPARATOR .. " %d units", n))
+    end
   end
-  local rowWidth = n * draw + (n - 1) * gap
-  local startX
-  if growRight then
-    startX = hostW - pad - draw
-  else
-    startX = pad
-  end
+  local borderColor = colors.border or {0.05, 0.08, 0.10, 1}
   for i = 1, n do
     local sq = ui.previewSquares[i]
-    local key = PREVIEW_COLORS[i]
-    local c = colors[key] or GOLD
-    sq.fill:SetColorTexture(c[1] or 0.3, c[2] or 0.8, c[3] or 0.8, shown and (c[4] or 1) or 0.22)
-    local br = colors.border or {0.05, 0.08, 0.10, 1}
-    sq.border:SetColorTexture(br[1], br[2], br[3], shown and 1 or 0.22)
+    local state = PREVIEW_STATES[(i - 1) % #PREVIEW_STATES + 1]
+    local red, green, blue, alpha = PreviewStateColor(pack, state)
+    sq.fill:SetColorTexture(red, green, blue, shown and alpha or 0.22)
+    sq.border:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], shown and 1 or 0.22)
     sq:SetSize(draw, draw)
     sq.fill:ClearAllPoints()
     sq.fill:SetPoint("CENTER")
-    sq.fill:SetSize(math.max(4, draw - 4), math.max(4, draw - 4))
+    local inset = math.max(1, math.min(2, draw * 0.12))
+    sq.fill:SetSize(math.max(1, draw - inset * 2), math.max(1, draw - inset * 2))
     sq:ClearAllPoints()
-    local x
-    if growRight then
-      x = startX - (i - 1) * (draw + gap)
+    local position = layout.positions[i]
+    sq:SetPoint("BOTTOMLEFT", ui.previewHost, "BOTTOMLEFT", geometry.originX + position.x * previewScale, geometry.originY + position.y * previewScale)
+    local lightSize, lightGap = ns.GetMUFStatusLightMetrics(size, pack.mufs.statusLight)
+    if lightSize > 0 then
+      sq.light:SetSize(math.max(1, lightSize * previewScale), math.max(1, lightSize * previewScale))
+      sq.light:ClearAllPoints()
+      sq.light:SetPoint("BOTTOM", sq, "TOP", 0, lightGap * previewScale)
+      sq.light:Show()
     else
-      x = startX + (i - 1) * (draw + gap)
+      sq.light:Hide()
     end
-    sq:SetPoint("BOTTOMLEFT", ui.previewHost, "BOTTOMLEFT", x, 12)
+    sq:Show()
   end
+  for i = n + 1, #ui.previewSquares do
+    ui.previewSquares[i]:Hide()
+  end
+  ui.previewVisibleCount = n
   if ui.previewHandle then
-    local hw = math.max(8, draw)
+    local hw = math.max(4, draw)
     ui.previewHandle:SetSize(hw, hw)
     ui.previewHandle.fill:SetSize(math.max(4, hw - 4), math.max(4, hw - 4))
     ui.previewHandle:ClearAllPoints()
@@ -1080,25 +1438,34 @@ local function RefreshPreview()
 end
 
 ui.RefreshPreview = RefreshPreview
+ui.TeardownMUFPreview = TeardownMUFPreview
 
 local function BuildMufPreview(parent)
   local host = CreateFrame("Frame", nil, parent, "BackdropTemplate")
   Paint(host, {0.05, 0.09, 0.12, 1}, BORDER)
-  host:SetHeight(132)
-  local caption = Font(host, "GameFontDisable", "Size preview")
+  host:SetHeight(PREVIEW_CAPTION_HEIGHT + PREVIEW_PADDING * 2 + PREVIEW_PARTY_MIN_CONTENT_HEIGHT)
+  host:EnableMouse(false)
+  local caption = Font(host, "GameFontDisable", "Party preview " .. PREVIEW_SEPARATOR .. " 5 units")
   caption:SetPoint("TOPLEFT", 14, -8)
+  caption:SetPoint("TOPRIGHT", -14, -8)
+  caption:SetWordWrap(false)
   caption:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
   ui.previewCaption = caption
   ui.previewHost = host
   ui.previewSquares = {}
-  for i = 1, 5 do
+  for i = 1, PREVIEW_MAX_UNITS do
     local sq = CreateFrame("Frame", nil, host)
+    sq:EnableMouse(false)
     sq.border = sq:CreateTexture(nil, "BACKGROUND")
     sq.border:SetAllPoints()
     sq.fill = sq:CreateTexture(nil, "ARTWORK")
+    sq.light = sq:CreateTexture(nil, "OVERLAY")
+    sq.light:SetColorTexture(0.20, 1, 0.35, 1)
+    sq:Hide()
     ui.previewSquares[i] = sq
   end
   local handle = CreateFrame("Frame", nil, host)
+  handle:EnableMouse(false)
   handle:SetSize(20, 20)
   handle.border = handle:CreateTexture(nil, "BACKGROUND")
   handle.border:SetAllPoints()
@@ -1176,21 +1543,26 @@ local function BuildListsPanel(parent)
   ui.skipText = skipText
 end
 
-local function LayoutCatalog()
+LayoutCatalog = function()
   if not ui.sections then
     return
   end
+  ui.layoutCatalogActive = true
   for page, sections in pairs(ui.sections) do
     local y = 0
     local child = ui.pageChildren and ui.pageChildren[page]
     if page == "mufs" and ui.previewHost then
-      ui.previewHost:ClearAllPoints()
-      ui.previewHost:SetPoint("TOPLEFT", 0, 0)
-      ui.previewHost:SetPoint("TOPRIGHT", 0, 0)
-      ui.previewHost:SetHeight(132)
-      ui.previewHost:Show()
-      y = -140
-      RefreshPreview()
+      if MUFPreviewActive() then
+        ui.previewHost:ClearAllPoints()
+        ui.previewHost:SetPoint("TOPLEFT", 0, 0)
+        ui.previewHost:SetPoint("TOPRIGHT", 0, 0)
+        ui.previewHost:Show()
+        RefreshPreview()
+        y = -((ui.previewHeight or ui.previewHost:GetHeight()) + 8)
+      else
+        ui.previewHost:Hide()
+        TeardownMUFPreview()
+      end
     end
     for _, section in ipairs(sections) do
       local visibleRows = {}
@@ -1260,21 +1632,97 @@ local function LayoutCatalog()
       ui.simpleBtn:SetText("All")
     end
   end
+  ui.layoutCatalogActive = false
 end
 
 local function Refresh()
+  if OptionsCombatReadOnly() then
+    if ns.CloseOptionsForCombat then
+      ns.CloseOptionsForCombat("OPTIONS_REFRESH")
+    end
+    return false
+  end
   if not ui.frame then
-    return
+    return false
   end
   local addon = Addon()
+  local statusOK, profileStatus = pcall(addon.GetUIProfileStatus, addon)
+  local environmentOK, environmentStatus = pcall(addon.GetEnvironmentProfileStatus, addon)
+  if not statusOK or type(profileStatus) ~= "table" or not profileStatus.available then
+    local reason = statusOK and profileStatus and profileStatus.blockedReason or "core-unavailable"
+    ui.profileValue:SetText("Unavailable")
+    ui.resolved:SetText("Active profile: unavailable (" .. tostring(reason) .. ")")
+    ui.resolved:SetTextColor(DANGER[1], DANGER[2], DANGER[3])
+    ui.envHint:SetText("Profile storage unavailable")
+    if ui.profileActive then
+      ui.profileActive:SetText("Active profile: unavailable")
+      ui.profilePending:SetText("Pending after combat: none")
+      ui.profileSource:SetText("Resolved source: unavailable")
+    end
+    if ui.environmentApplied then
+      ui.environmentApplied:SetText("Applied: Unknown")
+      ui.environmentEditing:SetText("Editing: Unknown")
+      ui.environmentDetected:SetText("Detected: Unknown")
+      ui.environmentPending:SetText("")
+    end
+    if RefreshStatusPage then
+      RefreshStatusPage(profileStatus, environmentStatus)
+    end
+    LayoutCatalog()
+    return
+  end
   addon:EnsureEnvironments()
-  local profile = addon.db:GetCurrentProfile()
+  local profile = profileStatus.actualProfile
   local env = addon:GetEditingEnvironment()
+  local appliedEnvironment = environmentOK and type(environmentStatus) == "table" and environmentStatus.appliedEnvironment or "unknown"
+  local detectedEnvironment = environmentOK and type(environmentStatus) == "table" and environmentStatus.detectedEnvironment or "unknown"
+  local pendingEnvironment = environmentOK and type(environmentStatus) == "table" and environmentStatus.pendingEnvironment or nil
+  local environmentMode = environmentOK and type(environmentStatus) == "table" and environmentStatus.environmentMode or "multiple"
+  local appliedLabel = ns.ENV_LABELS[appliedEnvironment] or "Unknown"
+  local detectedLabel = ns.ENV_LABELS[detectedEnvironment] or "Unknown"
+  local editingLabel = ns.ENV_LABELS[env] or "Unknown"
   ui.profileValue:SetText(profile)
-  ui.resolved:SetText("Active Profile on login: " .. addon:ResolveProfileName())
+  ui.resolved:SetText("Active profile: " .. profile)
+  ui.resolved:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
   ui.envHint:SetText("Editing " .. (ns.ENV_LABELS[env] or env) .. " inside " .. profile)
+  if ui.environmentApplied then
+    ui.environmentApplied:SetText("Applied: " .. appliedLabel)
+    ui.environmentEditing:SetText("Editing: " .. editingLabel)
+    ui.environmentDetected:SetText("Detected: " .. detectedLabel)
+    if pendingEnvironment then
+      ui.environmentPending:SetText("Pending after combat: " .. (ns.ENV_LABELS[pendingEnvironment] or "Unknown"))
+    else
+      ui.environmentPending:SetText("")
+    end
+  end
+  if ui.routingMultiple then
+    ui.routingMultiple:SetText(environmentMode == "multiple" and "Multiple (active)" or "Multiple")
+    ui.routingSolo:SetText(environmentMode == "solo" and "Solo (active)" or "Solo")
+    ui.routingMultiple:SetInteractionEnabled(true)
+    ui.routingSolo:SetInteractionEnabled(true)
+  end
+  if ui.profileActive then
+    ui.profileActive:SetText("Active profile: " .. profile)
+    ui.profilePending:SetText("Pending after combat: " .. (profileStatus.pendingProfile or "none"))
+    ui.profileSource:SetText("Resolved source: " .. profileStatus.resolvedTier .. " -> " .. profileStatus.resolvedProfile)
+  end
+  if RefreshStatusPage then
+    RefreshStatusPage(profileStatus, environmentStatus)
+  end
 
-  for key, chip in pairs(ui.envChips) do
+  local chipX = 0
+  for _, row in ipairs(ns.ENVIRONMENTS) do
+    local key = row.key
+    local chip = ui.envChips[key]
+    local visible = (environmentMode == "solo" and key == "SOLO")
+      or (environmentMode == "multiple" and ns.MULTIPLE_ENV_SET[key] == true)
+    chip:SetShown(visible)
+    chip:ClearAllPoints()
+    if visible then
+      chip:SetPoint("TOPLEFT", chipX, -24)
+      chipX = chipX + 126
+    end
+    chip:SetText(ns.ENV_LABELS[key] or key)
     if key == env then
       Paint(chip, {0.07, 0.22, 0.24, 1}, GOLD)
       chip.label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
@@ -1282,6 +1730,32 @@ local function Refresh()
       Paint(chip, TAB_IDLE, {0.25, 0.25, 0.28, 1})
       chip.label:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
     end
+  end
+  if ui.envCopyBtn then
+    ui.envCopyBtn:SetShown(environmentMode == "multiple")
+  end
+
+  local navY = ui.environmentNavStartY or -84
+  for _, row in ipairs(ns.ENVIRONMENTS) do
+    local button = ui.navButtons and ui.navButtons["environment:" .. row.key]
+    local visible = (environmentMode == "solo" and row.key == "SOLO")
+      or (environmentMode == "multiple" and ns.MULTIPLE_ENV_SET[row.key] == true)
+    if button then
+      button:SetShown(visible)
+      button:ClearAllPoints()
+      if visible then
+        button:SetPoint("TOPLEFT", 20, navY)
+        navY = navY - 34
+      end
+    end
+  end
+  if ui.addonProfilesNav then
+    ui.addonProfilesNav:ClearAllPoints()
+    ui.addonProfilesNav:SetPoint("TOPLEFT", 12, navY - 10)
+  end
+  if ui.diagnosticsNav then
+    ui.diagnosticsNav:ClearAllPoints()
+    ui.diagnosticsNav:SetPoint("TOPLEFT", 12, navY - 44)
   end
 
   local searching = ui.search and ui.search ~= ""
@@ -1301,11 +1775,55 @@ local function Refresh()
     end
   end
 
+  local destination = searching and "search" or ui.destination
+  LayoutWorkspace(destination)
+  if ui.profileBar then
+    ui.profileBar:SetShown(destination == "addon_profiles")
+  end
+  if ui.envBar then
+    ui.envBar:SetShown(destination == "environment")
+  end
+  if ui.tabBar then
+    ui.tabBar:SetShown(destination == "environment")
+  end
+  if ui.simpleBtn then
+    ui.simpleBtn:SetShown(destination == "environment")
+  end
+  if ui.body then
+    ui.body:SetShown(destination ~= "status" and destination ~= "diagnostics")
+  end
+  if ui.statusPage then
+    ui.statusPage:SetShown(destination == "status")
+  end
+  if ui.diagnosticsPage then
+    ui.diagnosticsPage:SetShown(destination == "diagnostics")
+    if destination == "diagnostics" and RefreshDiagnosticsPage then
+      RefreshDiagnosticsPage()
+    end
+  end
   for key, page in pairs(ui.pages) do
-    if searching then
+    if destination == "search" then
       page:SetShown(key == "search")
+    elseif destination == "addon_profiles" then
+      page:SetShown(key == "assign")
+    elseif destination == "environment" then
+      page:SetShown(key == ui.tab and key ~= "assign")
     else
-      page:SetShown(key == ui.tab)
+      page:Hide()
+    end
+  end
+  for key, button in pairs(ui.navButtons or {}) do
+    local active = key == destination
+    if key:find("environment:", 1, true) == 1 then
+      local environment = key:sub(13)
+      active = destination == "environment" and environment == env
+    end
+    if active then
+      Paint(button, {0.06, 0.20, 0.22, 1}, GOLD)
+      button.label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+    else
+      Paint(button, TAB_IDLE, {0.25, 0.25, 0.28, 1})
+      button.label:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
     end
   end
 
@@ -1347,7 +1865,8 @@ local function Refresh()
         n = n + 1
         local row = ui.searchRows[n]
         if row then
-          row.label:SetText((PAGE_LABELS[spec.page] or spec.page) .. "  ·  " .. spec.label)
+          row.searchSpec = spec
+          row.label:SetText((PAGE_LABELS[spec.page] or spec.page) .. " - " .. spec.label)
           row:SetPoint("TOPLEFT", 16, y)
           row:Show()
           y = y - 36
@@ -1391,9 +1910,48 @@ local function Refresh()
   LayoutCatalog()
   RefreshPreview()
   RefreshListPanel()
+  return true
 end
 
-ns.RefreshOptions = Refresh
+ns.RefreshOptions = function()
+  if OptionsCombatReadOnly() then
+    return false
+  end
+  Refresh()
+  return true
+end
+
+local PROFILE_ERRORS = {
+  combat = "Profile and environment structure cannot change during combat.",
+  profile = "That profile is unavailable.",
+  ["invalid-name"] = "Use a unique profile name of 1 to 48 bytes without control characters.",
+  exists = "A profile with that name already exists.",
+  ["profile-limit"] = "The 50-profile limit has been reached.",
+  default = "The Default profile cannot be renamed or deleted.",
+  env = "That environment is unavailable.",
+  same = "Choose a different destination environment.",
+  ["forward-schema"] = "Settings were created by a newer schema; profile changes are disabled.",
+  ["unsupported-schema"] = "This settings schema is not supported by the current build.",
+  ["malformed-schema"] = "The settings schema marker is malformed; profile changes are disabled.",
+  ["malformed-storage"] = "Profile assignment storage is malformed; no change was made.",
+  storage = "Profile storage is unavailable; no change was made.",
+  transaction = "The profile change failed and was rolled back.",
+}
+
+ReportProfileAction = function(ok, state, successText)
+  Refresh()
+  if not ui.profileAction then
+    return ok, state
+  end
+  if ok then
+    ui.profileAction:SetText(successText or "Profile change applied.")
+    ui.profileAction:SetTextColor(0.35, 1, 0.55)
+  else
+    ui.profileAction:SetText(PROFILE_ERRORS[state] or "No profile change was made.")
+    ui.profileAction:SetTextColor(DANGER[1], DANGER[2], DANGER[3])
+  end
+  return ok, state
+end
 
 function ns.IsOptionsShown()
   return ui.frame and ui.frame:IsShown()
@@ -1401,6 +1959,18 @@ end
 
 local function BindRow(parent, y, spec)
   local row = MakeRow(parent, y, spec.label)
+  if type(spec.description) == "string" and spec.description ~= "" then
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", function(self)
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      GameTooltip:SetText(spec.label)
+      GameTooltip:AddLine(spec.description, 1, 1, 1, true)
+      GameTooltip:Show()
+    end)
+    row:SetScript("OnLeave", function()
+      GameTooltip:Hide()
+    end)
+  end
   local widget
   if spec.kind == "toggle" then
     widget = MakeToggle(row)
@@ -1421,7 +1991,7 @@ local function BindRow(parent, y, spec)
       OpenChoiceMenu(self, spec.values, spec.get, spec.set)
     end)
   elseif spec.kind == "color" then
-    widget = MakeColorSwatch(row)
+    widget = MakeColorSwatch(row, spec.hasOpacity)
     widget:SetPoint("RIGHT", -16, 0)
     widget.OnValueChanged = function(_, c)
       spec.set(c)
@@ -1474,6 +2044,186 @@ local function MakeScrollPage(parent)
   return child
 end
 
+local function SpellIconMarkup(spellId)
+  if type(spellId) ~= "number" or (ns.IsAccessible and not ns.IsAccessible(spellId)) then
+    return ""
+  end
+  local icon
+  if C_Spell and type(C_Spell.GetSpellTexture) == "function" then
+    local ok, value = pcall(C_Spell.GetSpellTexture, spellId)
+    if ok and (type(value) == "number" or type(value) == "string") and (not ns.IsAccessible or ns.IsAccessible(value)) then
+      icon = value
+    end
+  end
+  if not icon and C_Spell and type(C_Spell.GetSpellInfo) == "function" then
+    local ok, info = pcall(C_Spell.GetSpellInfo, spellId)
+    if ok and type(info) == "table" then
+      local value = info.iconID
+      if (type(value) == "number" or type(value) == "string") and (not ns.IsAccessible or ns.IsAccessible(value)) then
+        icon = value
+      end
+    end
+  end
+  if not icon then
+    return ""
+  end
+  return "|T" .. tostring(icon) .. ":16:16:0:0|t "
+end
+
+local function BuildStatusPage(parent)
+  local wrap = CreateFrame("Frame", nil, parent)
+  wrap:SetAllPoints()
+  local child = MakeScrollPage(wrap)
+  child:SetHeight(680)
+
+  local current = MakeCard(child, "Current setup")
+  current:SetPoint("TOPLEFT", 0, 0)
+  current:SetPoint("TOPRIGHT", 0, 0)
+  current:SetHeight(168)
+  ui.statusCurrent = Font(current, "GameFontHighlight", "Loading current setup...")
+  ui.statusCurrent:SetPoint("TOPLEFT", 16, -42)
+  ui.statusCurrent:SetPoint("RIGHT", -16, 0)
+  ui.statusCurrent:SetJustifyH("LEFT")
+  ui.statusCurrent:SetJustifyV("TOP")
+
+  local capability = MakeCard(child, "Dispel capability")
+  capability:SetPoint("TOPLEFT", current, "BOTTOMLEFT", 0, -10)
+  capability:SetPoint("TOPRIGHT", current, "BOTTOMRIGHT", 0, -10)
+  capability:SetHeight(130)
+  ui.statusCapability = Font(capability, "GameFontHighlight", "Unknown")
+  ui.statusCapability:SetPoint("TOPLEFT", 16, -42)
+  ui.statusCapability:SetPoint("RIGHT", -16, 0)
+  ui.statusCapability:SetJustifyH("LEFT")
+  ui.statusCapability:SetJustifyV("TOP")
+
+  local mappings = MakeCard(child, "Click mappings")
+  mappings:SetPoint("TOPLEFT", capability, "BOTTOMLEFT", 0, -10)
+  mappings:SetPoint("TOPRIGHT", capability, "BOTTOMRIGHT", 0, -10)
+  mappings:SetHeight(166)
+  ui.statusMappings = Font(mappings, "GameFontHighlight", "Unknown")
+  ui.statusMappings:SetPoint("TOPLEFT", 16, -42)
+  ui.statusMappings:SetPoint("RIGHT", -16, 0)
+  ui.statusMappings:SetJustifyH("LEFT")
+  ui.statusMappings:SetJustifyV("TOP")
+
+  local quick = MakeCard(child, "Quick bindings")
+  quick:SetPoint("TOPLEFT", mappings, "BOTTOMLEFT", 0, -10)
+  quick:SetPoint("TOPRIGHT", mappings, "BOTTOMRIGHT", 0, -10)
+  quick:SetHeight(132)
+  local quickHint = Font(quick, "GameFontDisable", "Changes the editing Environment Profile. Read-only in combat.")
+  quickHint:SetPoint("TOPLEFT", 16, -40)
+  quickHint:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  ui.quickBindingButtons = {}
+  local quickSpecs = {
+    {label = "AUTO", run = function() SetClickMode("AUTO") end},
+    {label = "MANUAL", run = function() SetClickMode("MANUAL") end},
+    {label = "Left: cure", run = SetMouseAction("left")},
+    {label = "Right: cure", run = SetMouseAction("right")},
+    {label = "Button 4: cure", run = SetMouseAction("button4")},
+    {label = "Button 5: cure", run = SetMouseAction("button5")},
+  }
+  local previous
+  for i = 1, #quickSpecs do
+    local spec = quickSpecs[i]
+    local modeButton = i <= 2
+    local button = MakeButton(quick, spec.label, i <= 2 and 78 or 112, i == 1 and "gold" or nil)
+    button:SetPoint("TOP", 0, -68)
+    if previous then
+      button:SetPoint("LEFT", previous, "RIGHT", 6, 0)
+    else
+      button:SetPoint("LEFT", 16, 0)
+    end
+    button:SetScript("OnClick", function()
+      if OptionsCombatReadOnly() then
+        return
+      end
+      if modeButton then
+        spec.run()
+      else
+        spec.run("CURE")
+      end
+      Refresh()
+    end)
+    ui.quickBindingButtons[#ui.quickBindingButtons + 1] = button
+    previous = button
+  end
+  local openCure = MakeButton(quick, "Open full Cure settings", 178)
+  openCure:SetPoint("TOPLEFT", 16, -102)
+  openCure:SetScript("OnClick", function()
+    ui.tab = "cure"
+    SetDestination("environment")
+  end)
+  ui.statusCureShortcut = openCure
+  ui.statusPage = wrap
+end
+
+RefreshStatusPage = function(profileStatus, environmentStatus)
+  if not ui.statusPage then
+    return
+  end
+  local addon = Addon()
+  local combatReadOnly = OptionsCombatReadOnly()
+  local appliedEnvironment = environmentStatus and environmentStatus.appliedEnvironment or "unknown"
+  local editingEnvironment = addon and addon.GetEditingEnvironment and addon:GetEditingEnvironment() or "unknown"
+  local pendingEnvironment = environmentStatus and environmentStatus.pendingEnvironment
+  local detectedEnvironment = environmentStatus and environmentStatus.detectedEnvironment or "unknown"
+  local environmentMode = environmentStatus and environmentStatus.environmentMode or "multiple"
+  local specName = addon and addon.GetSpecName and addon:GetSpecName() or nil
+  local currentLines = {
+    "Decursive Profile: " .. tostring(profileStatus and profileStatus.actualProfile or "Unknown"),
+    "Mode: " .. (environmentMode == "solo" and "Solo" or "Multiple"),
+    "Detected Environment: " .. tostring(ns.ENV_LABELS[detectedEnvironment] or "Unknown"),
+    "Applied Environment Profile: " .. tostring(ns.ENV_LABELS[appliedEnvironment] or "Unknown"),
+    "Editing Environment Profile: " .. tostring(ns.ENV_LABELS[editingEnvironment] or "Unknown"),
+    "Pending after combat: " .. tostring(pendingEnvironment and (ns.ENV_LABELS[pendingEnvironment] or "Unknown") or "None"),
+    "Specialization: " .. tostring(specName or "Unknown") .. "   Options: " .. (combatReadOnly and "Read-only (combat)" or "Writable"),
+  }
+  ui.statusCurrent:SetText(table.concat(currentLines, "\n"))
+
+  local appliedPack = addon and addon.GetAppliedEnvironmentPack and addon:GetAppliedEnvironmentPack() or nil
+  local actions = ns.GetKnownCures and ns.GetKnownCures(appliedPack) or nil
+  local capabilityLines = {}
+  if type(actions) ~= "table" then
+    capabilityLines[1] = "Unknown - authoritative cure model is unavailable."
+  elseif #actions == 0 then
+    capabilityLines[1] = "No known public cure spell is available for the current setup."
+  else
+    for i = 1, math.min(#actions, 4) do
+      local action = actions[i]
+      local name = type(action) == "table" and action.name or nil
+      local types = type(action) == "table" and action.types or nil
+      local categories = type(types) == "table" and table.concat(types, "/") or "unknown"
+      capabilityLines[#capabilityLines + 1] = SpellIconMarkup(action and action.spellId) .. tostring(name or "Unknown") .. "  [" .. categories .. "]"
+    end
+    if #actions > 4 then
+      capabilityLines[#capabilityLines + 1] = "+ " .. tostring(#actions - 4) .. " more known action(s)"
+    end
+  end
+  ui.statusCapability:SetText(table.concat(capabilityLines, "\n"))
+
+  local clickStatus = ns.GetResolvedClickStatus and ns.GetResolvedClickStatus() or nil
+  local mappingLines = {"Mode: " .. tostring(clickStatus and clickStatus.mode or "Unknown")}
+  if clickStatus and clickStatus.pending then
+    mappingLines[#mappingLines + 1] = "Secure update: pending after combat"
+  end
+  local mappings = clickStatus and clickStatus.mappings
+  if type(mappings) == "table" and #mappings > 0 then
+    for i = 1, math.min(#mappings, 6) do
+      local row = mappings[i]
+      mappingLines[#mappingLines + 1] = tostring(row.gesture or "Unknown") .. ": " .. SpellIconMarkup(row.spellId) .. tostring(row.action or "Unknown")
+    end
+    if #mappings > 6 then
+      mappingLines[#mappingLines + 1] = "+ " .. tostring(#mappings - 6) .. " more resolved mapping(s)"
+    end
+  else
+    mappingLines[#mappingLines + 1] = "Resolved mappings: Unknown"
+  end
+  ui.statusMappings:SetText(table.concat(mappingLines, "\n"))
+  for i = 1, #(ui.quickBindingButtons or {}) do
+    ui.quickBindingButtons[i]:SetInteractionEnabled(not combatReadOnly)
+  end
+end
+
 local function LayoutScrollChildren()
   if not ui.body then
     return
@@ -1508,8 +2258,8 @@ local function ApplySavedSize(f)
     w = 1100
     h = 780
   end
-  if w < 900 then
-    w = 900
+  if w < 1100 then
+    w = 1100
   end
   if h < 580 then
     h = 580
@@ -1596,40 +2346,49 @@ local function BuildPages(content)
   local assignWrap = ui.pages.assign
   local assignChild = assignWrap:GetChildren()
   -- rebuild assign as custom assignment controls on top of empty catalog
-  local asCard = MakeCard(assignWrap, "Who uses this profile")
+  local asCard = MakeCard(assignWrap, "Decursive Profiles and assignments")
   asCard:SetAllPoints()
+  ui.profileActive = Font(asCard, "GameFontHighlightLarge", "Active profile: unavailable")
+  ui.profileActive:SetPoint("TOPLEFT", 16, -42)
+  ui.profileActive:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+  ui.profilePending = Font(asCard, "GameFontHighlight", "Pending after combat: none")
+  ui.profilePending:SetPoint("TOPLEFT", 16, -64)
+  ui.profilePending:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
+  ui.profileSource = Font(asCard, "GameFontHighlight", "Resolved source: unavailable")
+  ui.profileSource:SetPoint("TOPLEFT", 16, -84)
+  ui.profileSource:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  ui.profileAction = Font(asCard, "GameFontHighlight", "")
+  ui.profileAction:SetPoint("TOPRIGHT", -16, -64)
+  ui.profileAction:SetWidth(360)
+  ui.profileAction:SetJustifyH("RIGHT")
   local asHint = Font(asCard, "GameFontDisable", "Resolver: spec (if enabled and mapped), then this character, then account, then Default.")
-  asHint:SetPoint("TOPLEFT", 16, -44)
+  asHint:SetPoint("TOPLEFT", 16, -108)
   asHint:SetWidth(760)
   asHint:SetJustifyH("LEFT")
   asHint:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
-  local rowAccount = MakeRow(asCard, -88, "Account")
+  local rowAccount = MakeRow(asCard, -140, "Account")
   ui.assign.account = MakeButton(rowAccount, "Default", 220)
   ui.assign.account:SetPoint("RIGHT", -12, 0)
   ui.assign.account:SetScript("OnClick", function(self)
     OpenProfileMenu(self, function(name)
       if name then
-        Addon().db.global.accountProfile = name
-        Refresh()
+        local ok, state = Addon():SetAccountProfileAssignment(name)
+        ReportProfileAction(ok, state, "Account assignment updated.")
       end
     end)
   end)
-  local rowChar = MakeRow(asCard, -128, "This character")
+  local rowChar = MakeRow(asCard, -180, "This character")
   ui.assign.character = MakeButton(rowChar, "Use account / Default", 220)
   ui.assign.character:SetPoint("RIGHT", -12, 0)
   ui.assign.character:SetScript("OnClick", function(self)
     OpenProfileMenu(self, function(name)
-      local key = Addon():GetCharacterKey()
-      if not key then
-        return
-      end
-      Addon().db.global.characters[key] = name
-      Refresh()
+      local ok, state = Addon():SetCharacterProfileAssignment(name)
+      ReportProfileAction(ok, state, "Character assignment updated.")
     end, true)
   end)
   ui.assign.specs = {}
   for spec = 1, 4 do
-    local y = -168 - (spec - 1) * 40
+    local y = -220 - (spec - 1) * 40
     local row = MakeRow(asCard, y, "Spec " .. spec)
     local enabled = MakeToggle(row)
     enabled:SetPoint("RIGHT", -12, 0)
@@ -1637,18 +2396,14 @@ local function BuildPages(content)
     profile:SetPoint("RIGHT", enabled, "LEFT", -8, 0)
     local captured = spec
     enabled.OnValueChanged = function(_, on)
-      local specRow = Addon():GetSpecAssignment(captured)
-      if specRow then
-        specRow.enabled = on
-        Refresh()
-      end
+      local ok, state = Addon():SetSpecProfileAssignmentEnabled(captured, on)
+      ReportProfileAction(ok, state, "Specialization assignment updated.")
     end
     profile:SetScript("OnClick", function(self)
       OpenProfileMenu(self, function(name)
-        local specRow = Addon():GetSpecAssignment(captured)
-        if specRow and name then
-          specRow.profile = name
-          Refresh()
+        if name then
+          local ok, state = Addon():SetSpecProfileAssignment(captured, name)
+          ReportProfileAction(ok, state, "Specialization profile updated.")
         end
       end)
     end)
@@ -1669,6 +2424,14 @@ local function BuildPages(content)
   ui.searchCount:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
   for i = 1, #CATALOG do
     local row = MakeRow(searchCard, -80, "")
+    row:EnableMouse(true)
+    row:SetScript("OnMouseUp", function(self)
+      local spec = self.searchSpec
+      if spec and spec.page and spec.page ~= "assign" then
+        ui.tab = spec.page
+        SetDestination("environment")
+      end
+    end)
     row:Hide()
     ui.searchRows[i] = row
   end
@@ -1676,16 +2439,155 @@ local function BuildPages(content)
 end
 
 local function SetTab(tab)
+  if not OptionsAccessAllowed("TAB_NAVIGATION") then
+    return false
+  end
+  TeardownMUFPreview()
   ui.tab = tab
+  ui.destination = "environment"
   ui.search = ""
   if ui.searchBox then
     ui.searchBox:SetText("")
   end
   Refresh()
+  return true
+end
+
+SetDestination = function(destination, environment)
+  if not OptionsAccessAllowed("PAGE_NAVIGATION") then
+    return false, "combat"
+  end
+  TeardownMUFPreview()
+  if destination == "environment" and environment then
+    local ok, state = Addon():SetEditingEnvironment(environment)
+    if not ok then
+      ReportProfileAction(ok, state, nil)
+      return false, state
+    end
+  end
+  if destination ~= "status" and destination ~= "environment" and destination ~= "addon_profiles" and destination ~= "diagnostics" then
+    destination = "status"
+  end
+  ui.destination = destination
+  ui.search = ""
+  if ui.searchBox then
+    ui.searchBox:SetText("")
+  end
+  Refresh()
+  return true, destination
+end
+
+local function BuildDiagnosticsPage(parent)
+  local wrap = CreateFrame("Frame", nil, parent)
+  wrap:SetAllPoints()
+  local card = MakeCard(wrap, "Persistent Diagnostics")
+  card:SetAllPoints()
+  local help = Font(card, "GameFontHighlight", "Critical roster and transition records are always retained in a bounded, privacy-conscious SavedVariable. Verbose monitoring is opt-in. No character names, GUIDs, profile names, or aura identifiers are recorded.")
+  help:SetPoint("TOPLEFT", 16, -42)
+  help:SetPoint("TOPRIGHT", -16, -42)
+  help:SetJustifyH("LEFT")
+  help:SetWordWrap(true)
+  ui.diagnosticsStatus = Font(card, "GameFontHighlight", "Diagnostics unavailable")
+  ui.diagnosticsStatus:SetPoint("TOPLEFT", 16, -104)
+  ui.diagnosticsStatus:SetPoint("TOPRIGHT", -16, -104)
+  ui.diagnosticsStatus:SetJustifyH("LEFT")
+
+  local health = MakeButton(card, "Run Health Check", 150, "gold")
+  health:SetPoint("TOPLEFT", 16, -176)
+  health:SetScript("OnClick", function()
+    if not OptionsAccessAllowed("DIAGNOSTICS_HEALTH") then
+      return
+    end
+    if ns.Diagnostics and type(ns.Diagnostics.RunHealthCheck) == "function" then
+      ns.Diagnostics.RunHealthCheck(true)
+    end
+    RefreshDiagnosticsPage()
+  end)
+
+  local start = MakeButton(card, "Start verbose", 120)
+  start:SetPoint("TOPLEFT", 16, -212)
+  start:SetScript("OnClick", function()
+    if ns.PersistentDiagnostics then
+      ns.PersistentDiagnostics.SetVerbose(true)
+      ns.PersistentDiagnostics.Record("MONITOR", {state = "STARTED"}, false)
+    end
+    RefreshDiagnosticsPage()
+  end)
+  local stop = MakeButton(card, "Stop verbose", 120)
+  stop:SetPoint("LEFT", start, "RIGHT", 8, 0)
+  stop:SetScript("OnClick", function()
+    if ns.PersistentDiagnostics then
+      ns.PersistentDiagnostics.Record("MONITOR", {state = "STOPPED"}, false)
+      ns.PersistentDiagnostics.SetVerbose(false)
+    end
+    RefreshDiagnosticsPage()
+  end)
+  local mark = MakeButton(card, "Mark", 90)
+  mark:SetPoint("LEFT", stop, "RIGHT", 8, 0)
+  mark:SetScript("OnClick", function()
+    if ns.PersistentDiagnostics then
+      ns.PersistentDiagnostics.HandleCommand("mark")
+    end
+    RefreshDiagnosticsPage()
+  end)
+  local monitor = MakeButton(card, "Monitor snapshot", 140)
+  monitor:SetPoint("LEFT", mark, "RIGHT", 8, 0)
+  monitor:SetScript("OnClick", function()
+    if ns.PersistentDiagnostics then
+      ns.PersistentDiagnostics.HandleCommand("monitor")
+    end
+    RefreshDiagnosticsPage()
+  end)
+  local export = MakeButton(card, "Copy/export", 110)
+  export:SetPoint("LEFT", monitor, "RIGHT", 8, 0)
+  export:SetScript("OnClick", function()
+    if ns.PersistentDiagnostics then
+      ns.PersistentDiagnostics.HandleCommand("export")
+    end
+  end)
+  local clear = MakeButton(card, "Clear", 90)
+  clear:SetPoint("LEFT", export, "RIGHT", 8, 0)
+  clear:SetScript("OnClick", function()
+    if ns.PersistentDiagnostics then
+      ns.PersistentDiagnostics.Clear()
+    end
+    RefreshDiagnosticsPage()
+  end)
+  local flush = Font(card, "GameFontDisable", "After reproducing the issue, run /zdiag mark and then /reload. WoW does not flush SavedVariables to disk continuously.")
+  flush:SetPoint("TOPLEFT", 16, -260)
+  flush:SetPoint("TOPRIGHT", -16, -260)
+  flush:SetJustifyH("LEFT")
+  flush:SetWordWrap(true)
+  ui.diagnosticsPage = wrap
+end
+
+RefreshDiagnosticsPage = function()
+  if not ui.diagnosticsStatus then
+    return
+  end
+  local persistent = ns.PersistentDiagnostics
+  local status = persistent and persistent.Status and persistent.Status() or nil
+  if type(status) ~= "table" then
+    ui.diagnosticsStatus:SetText("Persistent diagnostics are unavailable.")
+    return
+  end
+  local health = ns.Diagnostics and ns.Diagnostics.GetLastHealthCheckSummary
+    and ns.Diagnostics.GetLastHealthCheckSummary() or nil
+  ui.diagnosticsStatus:SetText(table.concat({
+    "Schema: " .. tostring(status.schema) .. "    Session: " .. tostring(status.session),
+    "Verbose: " .. (status.verbose and "On" or "Off"),
+    "Critical: " .. tostring(status.criticalEntries) .. " entries / " .. tostring(status.criticalBytes) .. " bytes",
+    "Verbose: " .. tostring(status.verboseEntries) .. " entries / " .. tostring(status.verboseBytes) .. " bytes",
+    "Last health: " .. (type(health) == "table" and tostring(health.verdict) or "Not run"),
+  }, "\n"))
 end
 
 local function BuildFrame()
+  if not OptionsAccessAllowed("FRAME_BUILD") then
+    return nil
+  end
   local f = CreateFrame("Frame", "DecursiveRebuildOptions", UIParent, "BackdropTemplate")
+  f:Hide()
   f:SetPoint("CENTER")
   f:SetFrameStrata("HIGH")
   f:SetToplevel(true)
@@ -1694,9 +2596,9 @@ local function BuildFrame()
   f:EnableMouse(true)
   f:SetClampedToScreen(true)
   if f.SetResizeBounds then
-    f:SetResizeBounds(900, 580, 1800, 1400)
+    f:SetResizeBounds(1100, 580, 1800, 1400)
   else
-    f:SetMinResize(900, 580)
+    f:SetMinResize(1100, 580)
     f:SetMaxResize(1800, 1400)
   end
   ApplySavedSize(f)
@@ -1745,7 +2647,7 @@ local function BuildFrame()
   ui.envHint:SetPoint("LEFT", 16, 0)
   ui.envHint:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
 
-  ui.resolved = Font(status, "GameFontHighlightLarge", "Active Profile on login: Default")
+  ui.resolved = Font(status, "GameFontHighlightLarge", "Active profile: unavailable")
   ui.resolved:SetPoint("RIGHT", -16, 0)
   ui.resolved:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
 
@@ -1770,6 +2672,9 @@ local function BuildFrame()
     Refresh()
   end)
   searchBox:SetScript("OnTextChanged", function(self)
+    if not OptionsAccessAllowed("SEARCH") then
+      return
+    end
     ui.search = string.lower(strtrim(self:GetText() or ""))
     Refresh()
   end)
@@ -1786,10 +2691,59 @@ local function BuildFrame()
     end
   end)
 
+  local navigation = CreateFrame("Frame", nil, f, "BackdropTemplate")
+  navigation:SetPoint("TOPLEFT", 20, -116)
+  navigation:SetPoint("BOTTOMLEFT", 20, 20)
+  navigation:SetWidth(170)
+  Paint(navigation, CARD, BORDER)
+  ui.navigation = navigation
+  ui.navButtons = {}
+  local navY = -16
+  local statusNav = MakeButton(navigation, "Status", 146, "gold")
+  statusNav:SetPoint("TOPLEFT", 12, navY)
+  statusNav:SetScript("OnClick", function()
+    SetDestination("status")
+  end)
+  ui.navButtons.status = statusNav
+  navY = navY - 44
+  local environmentLabel = Font(navigation, "GameFontNormalSmall", "ENVIRONMENT PROFILES")
+  environmentLabel:SetPoint("TOPLEFT", 12, navY)
+  environmentLabel:SetWidth(SIDEBAR_HEADING_WIDTH)
+  environmentLabel:SetWordWrap(false)
+  environmentLabel:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+  navY = navY - 24
+  ui.environmentNavStartY = navY
+  for i = 1, #ENVIRONMENT_SUBMENU_ORDER do
+    local environment = ENVIRONMENT_SUBMENU_ORDER[i]
+    local button = MakeButton(navigation, ns.ENV_LABELS[environment] or environment, 138)
+    button:SetPoint("TOPLEFT", 20, navY)
+    button:SetScript("OnClick", function()
+      SetDestination("environment", environment)
+    end)
+    ui.navButtons["environment:" .. environment] = button
+    navY = navY - 34
+  end
+  navY = navY - 10
+  local addonProfilesNav = MakeButton(navigation, "Decursive Profiles", 146)
+  addonProfilesNav:SetPoint("TOPLEFT", 12, navY)
+  addonProfilesNav:SetScript("OnClick", function()
+    SetDestination("addon_profiles")
+  end)
+  ui.navButtons.addon_profiles = addonProfilesNav
+  ui.addonProfilesNav = addonProfilesNav
+  local diagnosticsNav = MakeButton(navigation, "Diagnostics", 146)
+  diagnosticsNav:SetPoint("TOPLEFT", 12, navY - 44)
+  diagnosticsNav:SetScript("OnClick", function()
+    SetDestination("diagnostics")
+  end)
+  ui.navButtons.diagnostics = diagnosticsNav
+  ui.diagnosticsNav = diagnosticsNav
+
   local profileBar = CreateFrame("Frame", nil, f)
-  profileBar:SetPoint("TOPLEFT", 20, -116)
-  profileBar:SetPoint("TOPRIGHT", -20, -116)
+  profileBar:SetPoint("TOPLEFT", WORKSPACE_LEFT, WORKSPACE_TOP)
+  profileBar:SetPoint("TOPRIGHT", WORKSPACE_RIGHT, WORKSPACE_TOP)
   profileBar:SetHeight(48)
+  ui.profileBar = profileBar
 
   local profileLabel = Font(profileBar, "GameFontNormal", "PROFILE")
   profileLabel:SetPoint("LEFT", 0, 8)
@@ -1800,9 +2754,8 @@ local function BuildFrame()
   ui.profileValue:SetScript("OnClick", function(self)
     OpenProfileMenu(self, function(name)
       if name then
-        Addon().db:SetProfile(name)
-        Addon():EnsureEnvironments()
-        Refresh()
+        local ok, state = Addon():ActivateProfile(name)
+        ReportProfileAction(ok, state, "Profile activated.")
       end
     end)
   end)
@@ -1811,65 +2764,89 @@ local function BuildFrame()
   newBtn:SetPoint("LEFT", ui.profileValue, "RIGHT", 8, 0)
   newBtn:SetScript("OnClick", function()
     ShowModal("New profile", "", function(name)
-      Addon():CreateProfile(name)
+      local ok, state = Addon():CreateProfile(name)
+      ReportProfileAction(ok, state, "Profile created and activated.")
     end)
   end)
 
   local copyBtn = MakeButton(profileBar, "Copy", 64)
   copyBtn:SetPoint("LEFT", newBtn, "RIGHT", 6, 0)
   copyBtn:SetScript("OnClick", function()
-    ShowModal("Copy profile as", Addon().db:GetCurrentProfile() .. " copy", function(name)
-      Addon():CopyProfile(name)
+    ShowModal("Copy profile as", Addon():GetCurrentProfileName() .. " copy", function(name)
+      local ok, state = Addon():CopyProfile(name)
+      ReportProfileAction(ok, state, "Profile copied and activated.")
     end)
   end)
 
   local renameBtn = MakeButton(profileBar, "Rename", 80)
   renameBtn:SetPoint("LEFT", copyBtn, "RIGHT", 6, 0)
   renameBtn:SetScript("OnClick", function()
-    ShowModal("Rename profile", Addon().db:GetCurrentProfile(), function(name)
-      Addon():RenameProfile(name)
+    ShowModal("Rename profile", Addon():GetCurrentProfileName(), function(name)
+      local ok, state = Addon():RenameProfile(name)
+      ReportProfileAction(ok, state, "Profile renamed.")
     end)
   end)
 
   local deleteBtn = MakeButton(profileBar, "Delete", 72, "danger")
   deleteBtn:SetPoint("LEFT", renameBtn, "RIGHT", 6, 0)
   deleteBtn:SetScript("OnClick", function()
-    Addon():DeleteCurrentProfile()
-    Refresh()
+    if not OptionsAccessAllowed("PROFILE_DELETE") then
+      return
+    end
+    local ok, state = Addon():DeleteCurrentProfile()
+    ReportProfileAction(ok, state, "Profile deleted; Default activated.")
   end)
 
   local resetAllBtn = MakeButton(profileBar, "Reset all", 88, "danger")
   resetAllBtn:SetPoint("RIGHT", 0, -12)
   resetAllBtn:SetScript("OnClick", function()
     ShowConfirm("Reset everything?", "Every profile, assignment, and window setting goes back to factory defaults.", function()
-      Addon():ResetAllSettings()
+      local ok, state = Addon():ResetAllSettings()
+      ReportProfileAction(ok, state, "All settings reset.")
     end)
   end)
 
   local envBar = CreateFrame("Frame", nil, f)
-  envBar:SetPoint("TOPLEFT", 20, -176)
-  envBar:SetPoint("TOPRIGHT", -20, -176)
-  envBar:SetHeight(28)
+  envBar:SetPoint("TOPLEFT", WORKSPACE_LEFT, WORKSPACE_TOP)
+  envBar:SetPoint("TOPRIGHT", WORKSPACE_RIGHT, WORKSPACE_TOP)
+  envBar:SetHeight(88)
+  ui.envBar = envBar
+
+  ui.environmentApplied = Font(envBar, "GameFontNormalLarge", "Applied: Open World")
+  ui.environmentApplied:SetPoint("TOPLEFT", 0, 0)
+  ui.environmentApplied:SetTextColor(0.35, 1, 0.55)
+  ui.environmentEditing = Font(envBar, "GameFontHighlight", "Editing: Open World")
+  ui.environmentEditing:SetPoint("LEFT", ui.environmentApplied, "RIGHT", 18, 0)
+  ui.environmentDetected = Font(envBar, "GameFontDisable", "Detected: Open World")
+  ui.environmentDetected:SetPoint("LEFT", ui.environmentEditing, "RIGHT", 18, 0)
+  ui.environmentPending = Font(envBar, "GameFontDisable", "")
+  ui.environmentPending:SetPoint("TOPRIGHT", 0, -2)
+  ui.environmentPending:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
 
   ui.envChips = {}
   local chipX = 0
   for _, row in ipairs(ns.ENVIRONMENTS) do
     local chip = MakeButton(envBar, row.label, 118)
-    chip:SetPoint("TOPLEFT", chipX, 0)
+    chip:SetPoint("TOPLEFT", chipX, -24)
     chip:SetScript("OnClick", function()
-      Addon():SetEditingEnvironment(row.key)
+      if not OptionsAccessAllowed("ENVIRONMENT_NAVIGATION") then
+        return
+      end
+      local ok, state = Addon():SetEditingEnvironment(row.key)
+      ReportProfileAction(ok, state, "Editing environment changed.")
     end)
     ui.envChips[row.key] = chip
     chipX = chipX + 126
   end
 
   local envResetBtn = MakeButton(envBar, "Reset env", 88)
-  envResetBtn:SetPoint("TOPRIGHT", 0, 0)
+  envResetBtn:SetPoint("TOPRIGHT", 0, -24)
   envResetBtn:SetScript("OnClick", function()
     local env = Addon():GetEditingEnvironment()
     local label = ns.ENV_LABELS[env] or env
     ShowConfirm("Reset " .. label .. "?", "Only this environment inside the current profile goes back to defaults.", function()
-      Addon():ResetEditingPack()
+      local ok, state = Addon():ResetEditingPack()
+      ReportProfileAction(ok, state, label .. " reset to defaults.")
     end)
   end)
 
@@ -1878,10 +2855,39 @@ local function BuildFrame()
   envCopyBtn:SetScript("OnClick", function(self)
     OpenEnvCopyMenu(self)
   end)
+  ui.envCopyBtn = envCopyBtn
+
+  local profileModeLabel = Font(envBar, "GameFontNormal", "PROFILE MODE")
+  profileModeLabel:SetPoint("TOPLEFT", 0, -60)
+  profileModeLabel:SetWidth(PROFILE_MODE_LABEL_WIDTH)
+  profileModeLabel:SetWordWrap(false)
+  profileModeLabel:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+  ui.profileModeLabel = profileModeLabel
+  ui.routingMultiple = MakeButton(envBar, "Multiple", 118)
+  ui.routingMultiple:SetPoint("LEFT", profileModeLabel, "RIGHT", PROFILE_MODE_GAP, 0)
+  ui.routingMultiple:SetScript("OnClick", function()
+    if not OptionsAccessAllowed("PROFILE_MODE") then
+      return
+    end
+    local ok, state = Addon():SetEnvironmentMode("multiple")
+    ReportProfileAction(ok, state, "Multiple environment mode selected.")
+  end)
+  ui.routingSolo = MakeButton(envBar, "Solo", 100)
+  ui.routingSolo:SetPoint("LEFT", ui.routingMultiple, "RIGHT", PROFILE_MODE_BUTTON_GAP, 0)
+  ui.routingSolo:SetScript("OnClick", function()
+    if not OptionsAccessAllowed("PROFILE_MODE") then
+      return
+    end
+    local ok, state = Addon():SetEnvironmentMode("solo")
+    ReportProfileAction(ok, state, "Solo environment mode selected.")
+  end)
 
   ui.simpleBtn = MakeButton(header, "Simple", 72, "gold")
   ui.simpleBtn:SetPoint("RIGHT", searchBox, "LEFT", -8, 0)
   ui.simpleBtn:SetScript("OnClick", function()
+    if not OptionsAccessAllowed("SIMPLE_MODE") then
+      return
+    end
     ui.simple = not ui.simple
     local addon = Addon()
     if addon and addon.db then
@@ -1892,12 +2898,12 @@ local function BuildFrame()
   end)
 
   local tabBar = CreateFrame("Frame", nil, f)
-  tabBar:SetPoint("TOPLEFT", 20, -214)
-  tabBar:SetPoint("TOPRIGHT", -20, -214)
+  AnchorWorkspaceFrame(tabBar, envBar, envBar, WORKSPACE_GAP)
   tabBar:SetHeight(34)
+  ui.tabBar = tabBar
   ui.tabs = {}
   local tabX = 0
-  for _, key in ipairs(PAGES) do
+  for _, key in ipairs(EDITOR_PAGES) do
     local tab = MakeButton(tabBar, PAGE_LABELS[key], 100)
     tab:SetPoint("LEFT", tabX, 0)
     tab:SetScript("OnClick", function()
@@ -1908,10 +2914,19 @@ local function BuildFrame()
   end
 
   local body = CreateFrame("Frame", nil, f)
-  body:SetPoint("TOPLEFT", 20, -256)
-  body:SetPoint("BOTTOMRIGHT", -20, 20)
   ui.body = body
+  LayoutWorkspace("environment")
   BuildPages(body)
+
+  local statusHost = CreateFrame("Frame", nil, f)
+  statusHost:SetPoint("TOPLEFT", 204, -116)
+  statusHost:SetPoint("BOTTOMRIGHT", -20, 20)
+  BuildStatusPage(statusHost)
+
+  local diagnosticsHost = CreateFrame("Frame", nil, f)
+  diagnosticsHost:SetPoint("TOPLEFT", 204, -116)
+  diagnosticsHost:SetPoint("BOTTOMRIGHT", -20, 20)
+  BuildDiagnosticsPage(diagnosticsHost)
 
   local grip = CreateFrame("Button", nil, f)
   grip:SetPoint("BOTTOMRIGHT", -2, 2)
@@ -1929,6 +2944,7 @@ local function BuildFrame()
   end)
   f:SetScript("OnSizeChanged", function()
     LayoutScrollChildren()
+    RefreshPreview()
   end)
 
   local modal = CreateFrame("Frame", nil, f, "BackdropTemplate")
@@ -1986,15 +3002,27 @@ local function BuildFrame()
   modal:Hide()
   ui.modal = modal
 
-  f:SetScript("OnShow", function()
+  f:SetScript("OnShow", function(self)
+    if not OptionsAccessAllowed("FRAME_SHOW") then
+      self:Hide()
+      return
+    end
     LayoutScrollChildren()
     Refresh()
+  end)
+  f:SetScript("OnHide", function()
+    TeardownMUFPreview()
   end)
   ui.frame = f
 
   if Settings and Settings.RegisterCanvasLayoutCategory then
     local holder = CreateFrame("Frame")
     holder:SetSize(640, 200)
+    holder:SetScript("OnShow", function(self)
+      if not OptionsAccessAllowed("INTERFACE_OPTIONS") then
+        self:Hide()
+      end
+    end)
     local note = Font(holder, "GameFontHighlight", "Use /zdecursive, /zd, or /dcr or the button below.")
     note:SetPoint("TOPLEFT", 16, -16)
     local open = MakeButton(holder, "Open Zhaohu's Decursive", 240, "gold")
@@ -2005,14 +3033,26 @@ local function BuildFrame()
     local cat = Settings.RegisterCanvasLayoutCategory(holder, "Zhaohu's Decursive")
     Settings.RegisterAddOnCategory(cat)
   end
+  return f
 end
 
 function ns.RegisterOptions(addon)
+  if ns.DiagnosticModuleEnabled then
+    ns.DiagnosticModuleEnabled("Options", true)
+  end
 end
 
 function ns.ShowOptions()
+  if not OptionsAccessAllowed("SHOW_OPTIONS") then
+    return false, "combat"
+  end
+  if ns.DiagnosticModuleRefresh then
+    ns.DiagnosticModuleRefresh("Options")
+  end
   if not ui.frame then
-    BuildFrame()
+    if not BuildFrame() then
+      return false, "combat"
+    end
   else
     ApplySavedSize(ui.frame)
   end
@@ -2023,4 +3063,78 @@ function ns.ShowOptions()
   ui.frame:Show()
   LayoutScrollChildren()
   Refresh()
+  return true, "shown"
+end
+
+function ns.ToggleOptions()
+  if not OptionsAccessAllowed("TOGGLE_OPTIONS") then
+    return false, "combat"
+  end
+  if ui.frame and ui.frame:IsShown() then
+    ui.frame:Hide()
+    return true, "hidden"
+  end
+  return ns.ShowOptions()
+end
+
+function ns.CloseOptionsForCombat(source)
+  if not OptionsCombatReadOnly() or not ui.frame or not ui.frame:IsShown() then
+    return false
+  end
+  TeardownMUFPreview()
+  if ui.modal then
+    ui.modal:Hide()
+    ui.modal.onAccept = nil
+  end
+  if ui.searchBox then
+    ui.searchBox:ClearFocus()
+  end
+  ui.search = ""
+  ui.frame:Hide()
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("options_closed_for_combat", {source = source or "PLAYER_REGEN_DISABLED"}, false)
+  end
+  return true
+end
+
+if ns.RegisterDiagnosticProvider then
+  ns.RegisterDiagnosticProvider("Options", function()
+    local shown = false
+    if ui.frame and type(ui.frame.IsShown) == "function" then
+      local ok, value = pcall(ui.frame.IsShown, ui.frame)
+      local public = ns.Diagnostics and ns.Diagnostics.SafePublicBoolean(value) or nil
+      shown = ok and public == true
+    end
+    local health = ns.Diagnostics and ns.Diagnostics.GetLastHealthCheckSummary
+      and ns.Diagnostics.GetLastHealthCheckSummary() or nil
+    return {
+      frameCreated = ui.frame ~= nil,
+      frameShown = shown,
+      simpleMode = ui.simple == true,
+      currentPageAvailable = type(ui.destination) == "string" and ui.destination ~= "",
+      architectureVersion = OPTIONS_ARCHITECTURE_VERSION,
+      defaultDestination = OPTIONS_DEFAULT_DESTINATION,
+      currentDestination = tostring(ui.destination or "status"):upper(),
+      environmentWorkspace = ui.destination == "environment",
+      addonProfilesSeparate = true,
+      environmentSubmenuCount = #ENVIRONMENT_SUBMENU_ORDER,
+      environmentSubmenu = ENVIRONMENT_SUBMENU_ORDER,
+      environmentMode = Addon() and Addon().GetEnvironmentMode and Addon():GetEnvironmentMode() or "multiple",
+      multipleEnvironmentCount = #ns.MULTIPLE_ENVIRONMENTS,
+      soloEnvironmentCount = 1,
+      fullEnvironmentPageCount = #EDITOR_PAGES,
+      quickBindingCount = QUICK_BINDING_COUNT,
+      shortcutOnlyCount = SHORTCUT_ONLY_COUNT,
+      combatReadOnly = OptionsCombatReadOnly(),
+      healthCheckAvailable = ns.Diagnostics and type(ns.Diagnostics.RunHealthCheck) == "function" or false,
+      lastHealthVerdict = type(health) == "table" and health.verdict or "NOT_RUN",
+      searchAvailable = true,
+      simpleModeAvailable = true,
+      statusPanels = {"CURRENT_SETUP", "DISPEL_CAPABILITY", "CLICK_MAPPINGS", "QUICK_BINDINGS"},
+    }
+  end)
+end
+
+if ns.DiagnosticModuleLoaded then
+  ns.DiagnosticModuleLoaded("Options")
 end

@@ -1,0 +1,103 @@
+name: Verify ZDecursive release
+
+# This workflow is intentionally credential-free. Publishing the verified ZIP
+# is a separate, explicitly authorized maintainer action.
+on:
+  push:
+    branches:
+      - zdecursive
+    tags:
+      - 'v13.1.0-alpha'
+  pull_request:
+    branches:
+      - zdecursive
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Source, tests, and package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned validation runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools_dir="$RUNNER_TEMP/zdecursive-node"
+          npm install --no-save --ignore-scripts --prefix "$tools_dir" \
+            luaparse@0.3.1 \
+            fengari@0.1.5 \
+            fengari-interop@0.1.4
+          echo "NODE_PATH=$tools_dir/node_modules" >> "$GITHUB_ENV"
+
+      - name: Validate maintained source
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--root "$GITHUB_WORKSPACE")
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            args+=(--release-tag "$GITHUB_REF_NAME")
+          fi
+          python3 .github/scripts/validate-zdecursive-source.py "${args[@]}"
+
+      - name: Run complete Lua regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_file in tests/*.lua; do
+            node tests/run-fengari.cjs "$test_file"
+          done
+
+      - name: Run diagnostics exporter contract
+        shell: pwsh
+        run: ./tests/export-diagnostics-contract.ps1
+
+      - name: Fetch pinned BigWigs packager
+        shell: bash
+        env:
+          PACKAGER_REVISION: 36b4c3b7b7bd17c835ad8c83fed4976c067edfbe
+        run: |
+          set -euo pipefail
+          packager_dir="$RUNNER_TEMP/bigwigs-packager"
+          git init "$packager_dir"
+          git -C "$packager_dir" remote add origin https://github.com/BigWigsMods/packager.git
+          git -C "$packager_dir" fetch --depth=1 origin "$PACKAGER_REVISION"
+          git -C "$packager_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$packager_dir" rev-parse HEAD)" = "$PACKAGER_REVISION"
+
+      - name: Assemble without publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="$RUNNER_TEMP/zdecursive-release"
+          bash "$RUNNER_TEMP/bigwigs-packager/release.sh" \
+            -d \
+            -t "$GITHUB_WORKSPACE" \
+            -r "$release_root"
+
+      - name: Validate expanded package and ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="$RUNNER_TEMP/zdecursive-release"
+          mapfile -t archives < <(find "$release_root" -maxdepth 1 -type f -name 'ZDecursive-*.zip' -print)
+          test "${#archives[@]}" -eq 1
+          args=(
+            "$release_root"
+            --archive "${archives[0]}"
+            --source-root "$GITHUB_WORKSPACE"
+            --expected-source-commit "$(git rev-parse HEAD)"
+          )
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            args+=(--expected-version "$GITHUB_REF_NAME")
+          else
+            args+=(--allow-development-version)
+          fi
+          python3 .github/scripts/validate-zdecursive-package.py "${args[@]}"
