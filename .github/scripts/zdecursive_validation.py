@@ -524,7 +524,7 @@ def validate_workflow(check: Validation, repo_root: Path) -> None:
         "path: ${{ runner.temp }}/zdecursive-release/ZDecursive-*.zip",
         "if-no-files-found: error",
         "retention-days: 7",
-        "-d \\",
+        "-d -u \\",
     ]
     for marker in required:
         if marker not in text:
