@@ -432,4 +432,160 @@ Equal(savedDungeon.mouse.right, savedRight, "combat rejects menu mutation")
 Equal(savedDungeon.cure.manual["spell:4987"], nil, "combat rejects spell assignment")
 combat = false
 Check(refreshCount > 0, "settings reached the shared refresh path")
+
+-- Load the extended binding model into the same live UI harness. Existing
+-- saved manual assignments above remain the defaults until explicitly changed.
+assert(loadfile("ZDecursive/ClickBindings.lua"))("ZDecursive", ns)
+local keyboardConflicts = {}
+local keyboardOverrides = {}
+local keyboardWrites = 0
+GetBindingAction = function(key) return keyboardConflicts[key] or "" end
+SetOverrideBindingClick = function(_, _, key, name)
+  Check(not combat, "keyboard override mutation during combat")
+  keyboardWrites = keyboardWrites + 1
+  keyboardOverrides[key] = name
+end
+ClearOverrideBindings = function()
+  Check(not combat, "keyboard override clearing during combat")
+  keyboardWrites = keyboardWrites + 1
+  keyboardOverrides = {}
+end
+assert(loadfile("ZDecursive/KeyboardBindings.lua"))("ZDecursive", ns)
+assert(loadfile("ZDecursive/Options.lua"))("ZDecursive", ns)
+assert(ns.ShowOptions())
+ui = Upvalue(ns.ShowOptions, "ui")
+addon:SetEditingEnvironment("DUNGEON")
+environmentStatus.appliedEnvironment = "DUNGEON"
+ui.tabs.cure.scripts.OnClick()
+ns.RefreshOptions()
+Pick("Click mode", "AUTO - priority bindings")
+Check(Row("Left click"):IsShown(), "extended binding editor is reachable in AUTO Simple mode")
+Check(Row("Keyboard mouseover casting"):IsShown(), "keyboard controls are reachable in Simple mode")
+Pick("Mouse modifier", "Ctrl+Shift")
+Pick("Button 4", "Cleanse")
+Equal(savedDungeon.cure.clickBindings["ctrl-shift-button4"], "spell:4987", "combination persists in the editing pack")
+Check(MacroIncludes("ctrl-shift-macrotext4", "Cleanse"), "modifier menu updates the real secure attributes")
+Equal(savedDungeon.cure.manual["spell:475"], "left", "extended settings preserve old manual choices")
+Pick("Mouse modifier", "None")
+Pick("Middle click", "Remove Curse")
+Check(MacroIncludes("*macrotext3", "Remove Curse"), "middle is now assignable to a cure")
+Pick("Mouse modifier", "Ctrl")
+Pick("Middle click", "Assist")
+Equal(secureButton.attributes["ctrl-type3"], "assist", "Ctrl+Middle can be reassigned")
+Pick("Mouse modifier", "Alt")
+Pick("Left click", "No action")
+Equal(secureButton.attributes["alt-type1"], "", "No action explicitly blocks fallback")
+local staleModifierPick = Open("Right click").Cleanse.pick
+Pick("Mouse modifier", "Shift")
+staleModifierPick()
+Equal(savedDungeon.cure.clickBindings["shift-right"], nil, "stale menu cannot write a different modifier")
+Pick("Mouse modifier", "Ctrl+Shift")
+Pick("Button 4", "Default (AUTO / MANUAL)")
+Equal(secureButton.attributes["ctrl-shift-type4"], nil, "Default clears the explicit modifier action")
+Pick("Mouse modifier", "None")
+Pick("Middle click", "Default (AUTO / MANUAL)")
+Equal(secureButton.attributes["*type3"], "target", "Default restores the original middle target")
+local combatPick = Open("Middle click").Cleanse.pick
+combat = true
+combatPick()
+Equal(savedDungeon.cure.clickBindings.middle, nil, "extended menu rejects combat-time mutation")
+combat = false
+
+-- Use the real keyboard normalizer and status producer through the rendered
+-- widgets, including the Save callback, without manually refreshing labels.
+local function OpenKeyboardModal()
+  local widget = Binding("Keyboard key").widget
+  widget.scripts.OnClick(widget)
+  Check(ui.modal:IsShown(), "keyboard key opens its input modal")
+  return ui.modal.onAccept
+end
+local function SaveKeyboardKey(text)
+  OpenKeyboardModal()
+  ui.modal.edit:SetText(text)
+  ui.modal.ok.scripts.OnClick(ui.modal.ok)
+end
+local function SetKeyboardToggle(label, value)
+  local widget = Binding(label).widget
+  widget:OnValueChanged(value)
+end
+local function KeyboardReadout()
+  return Binding("Active keyboard binding").widget:GetText()
+end
+SaveKeyboardKey("  f8  ")
+Equal(savedDungeon.cure.keyboardKey, "F8", "accepted key is normalized and saved")
+Equal(Binding("Keyboard key").widget:GetText(), "F8", "accepted key label refreshes immediately")
+Check(KeyboardReadout():find("off", 1, true), "accepted disabled key keeps an accurate status")
+SetKeyboardToggle("Keyboard mouseover casting", true)
+Equal(savedDungeon.cure.keyboardEnabled, true, "keyboard enable toggle saves")
+Equal(Binding("Keyboard mouseover casting").widget._on, true, "enable toggle refreshes its state")
+Equal(ns.GetKeyboardBindingStatus().state, "active", "enable installs keyboard casting")
+Check(KeyboardReadout():find("F8: Remove Curse", 1, true), "enable immediately shows first active cure")
+Check(KeyboardReadout():find("CTRL-F8: Cleanse", 1, true), "enable immediately shows modifier cure")
+Check(keyboardOverrides.F8 and keyboardOverrides["CTRL-F8"], "real keyboard refresh installs expected keys")
+
+local activeKeyWrites = keyboardWrites
+SaveKeyboardKey("CTRL-F9")
+Equal(savedDungeon.cure.keyboardKey, "F8", "invalid key cannot replace saved key")
+Equal(Binding("Keyboard key").widget:GetText(), "F8", "invalid input retains displayed accepted key")
+Check(KeyboardReadout():find("without Ctrl", 1, true), "invalid input immediately displays normalization guidance")
+Equal(keyboardWrites, activeKeyWrites, "invalid input does not touch active bindings")
+SaveKeyboardKey("F9")
+Equal(Binding("Keyboard key").widget:GetText(), "F9", "correcting input immediately updates label")
+Check(KeyboardReadout():find("F9: Remove Curse", 1, true), "accepted input clears prior validation error")
+
+keyboardConflicts.F10 = "ACTIONBUTTON1"
+SaveKeyboardKey("F10")
+Equal(ns.GetKeyboardBindingStatus().state, "conflict", "existing key is protected by default")
+Check(KeyboardReadout():find("ACTIONBUTTON1", 1, true), "conflict is immediately visible")
+SetKeyboardToggle("Override existing key bindings", true)
+Equal(savedDungeon.cure.keyboardOverride, true, "override toggle saves")
+Equal(Binding("Override existing key bindings").widget._on, true, "override toggle refreshes its state")
+Equal(ns.GetKeyboardBindingStatus().state, "active", "explicit override resolves key conflict")
+Check(KeyboardReadout():find("F10: Remove Curse", 1, true), "override immediately updates status")
+SetKeyboardToggle("Override existing key bindings", false)
+Equal(ns.GetKeyboardBindingStatus().state, "conflict", "disabling override respects underlying key again")
+Check(KeyboardReadout():find("Key already bound", 1, true), "turning override off refreshes conflict status")
+
+SaveKeyboardKey("   ")
+Equal(savedDungeon.cure.keyboardKey, "", "empty key clears stored assignment")
+Equal(Binding("Keyboard key").widget:GetText(), "empty", "empty key label refreshes immediately")
+Equal(ns.GetKeyboardBindingStatus().state, "unconfigured", "enabled empty key has no active binding")
+Check(KeyboardReadout():find("Choose a keyboard key", 1, true), "clearing key immediately explains configuration state")
+Equal(next(keyboardOverrides), nil, "clearing key restores underlying bindings")
+SetKeyboardToggle("Keyboard mouseover casting", false)
+Equal(Binding("Keyboard mouseover casting").widget._on, false, "disable toggle refreshes its state")
+Check(KeyboardReadout():find("off", 1, true), "disable immediately shows off status")
+
+SaveKeyboardKey("F8")
+local staleKeyEnvironment = OpenKeyboardModal()
+local worldKeyBefore = environments.OPEN_WORLD.cure.keyboardKey
+addon:SetEditingEnvironment("OPEN_WORLD")
+staleKeyEnvironment("F11")
+Equal(environments.OPEN_WORLD.cure.keyboardKey, worldKeyBefore, "stale modal cannot edit the next environment")
+Equal(savedDungeon.cure.keyboardKey, "F8", "stale modal also leaves its original environment unchanged")
+addon:SetEditingEnvironment("DUNGEON")
+ns.RefreshOptions()
+local staleKeyProfile = OpenKeyboardModal()
+local replacementDungeon = ns.MakePack("DUNGEON")
+environments.DUNGEON = replacementDungeon
+staleKeyProfile("F12")
+Equal(replacementDungeon.cure.keyboardKey, "", "stale modal cannot edit a replacement profile pack")
+Equal(savedDungeon.cure.keyboardKey, "F8", "replaced profile retains its saved key")
+environments.DUNGEON = savedDungeon
+ns.RefreshOptions()
+
+local forbiddenKeyboardAccept = OpenKeyboardModal()
+local writesBeforeCombat = keyboardWrites
+local refreshesBeforeCombat = refreshCount
+combat = true
+forbiddenKeyboardAccept("F11")
+Binding("Keyboard key").set("F12") -- The setter itself must also reject combat.
+SetKeyboardToggle("Keyboard mouseover casting", true)
+SetKeyboardToggle("Override existing key bindings", true)
+Equal(savedDungeon.cure.keyboardKey, "F8", "combat blocks modal and direct key changes")
+Equal(savedDungeon.cure.keyboardEnabled, false, "combat blocks enable toggle mutation")
+Equal(savedDungeon.cure.keyboardOverride, false, "combat blocks override toggle mutation")
+Equal(keyboardWrites, writesBeforeCombat, "combat callbacks never modify secure key bindings")
+Equal(refreshCount, refreshesBeforeCombat, "rejected combat edits do not dispatch reconfiguration")
+combat = false
 io.write("manual-click-options-contract: ok\n")

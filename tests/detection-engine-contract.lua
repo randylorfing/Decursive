@@ -233,6 +233,9 @@ CreateFrame = function(kind, _name, parent)
   function frame:RegisterEvent(event)
     self.events[event] = true
   end
+  function frame:UnregisterEvent(event)
+    self.events[event] = nil
+  end
   eventFrames[#eventFrames + 1] = frame
   return frame
 end
@@ -334,7 +337,7 @@ local presentationAt = assert(toc:find("MUFPresentation.lua", 1, true))
 local mufsAt = assert(toc:find("MUFs.lua", 1, true))
 Check(detectionAt < engineAt and engineAt < presentationAt and presentationAt < mufsAt, "engine and presentation load-order seam")
 local engineSource = Read("ZDecursive/DetectionEngine.lua")
-Check(not engineSource:find("UNIT_AURA", 1, true), "engine does not register UNIT_AURA")
+Check(not engineSource:find("GetAuraData", 1, true), "engine never reads aura payloads")
 Check(not engineSource:find("COMBAT_LOG", 1, true), "engine does not parse combat log")
 Check(not engineSource:find('SetScript("OnUpdate"', 1, true), "engine does not poll")
 Check(engineSource:find("MAX_RETRY_ATTEMPTS", 1, true), "engine bounds native recovery retries")
@@ -576,7 +579,7 @@ Equal(engine.state, "READY", "restriction clear leaves the engine ready")
 Check(engine:AssignCarrier(owners[3], "raid1"), "party to raid transition")
 Check(engine:AssignCarrier(owners[4], "raidpet1"), "follower pet transition")
 local report = engine:GetDiagnostics()
-Equal(report.engineVersion, 6, "diagnostic engine version")
+Equal(report.engineVersion, 7, "diagnostic engine version")
 Equal(report.lifecycleState, "READY", "diagnostic lifecycle")
 Equal(report.assignedCarrierCount, 4, "diagnostic assigned count")
 Equal(report.carrierCategoryCounts.party, 1, "diagnostic party category")
@@ -790,7 +793,7 @@ Check(rawequal(configuredPacks[1], soloPack) and configuredTypes[1] == "Poison",
 
 local configureRetryBaseline = #timerQueue
 failingRecord.container.failCandidateRefresh = true
-Check(not modeEngine:Refresh("MODE_CONFIG_FAILURE"), "provider refresh failure rejects the environment transaction")
+Check(not modeEngine:Refresh("RECOVERY_CONFIG_FAILURE"), "forced provider refresh failure rejects the environment transaction")
 Check(failingRecord.container.enabled == false and healthyRecord.container.enabled == true, "configuration failure quarantines only the affected owner bank")
 Equal(#timerQueue, configureRetryBaseline + 1, "configuration failure schedules one coalesced retry")
 failingRecord.container.failCandidateRefresh = nil
@@ -831,4 +834,78 @@ Check(pcall(function()
   return failedEngine:GetDiagnostics()
 end), "failed engine diagnostics remain available")
 
+local reuseNS = NewNamespace()
+local reuseEngine = LoadEngine(reuseNS)
+local reuseOwner = {}
+local reuseContainer = reuseEngine:CreateCarrier("MUFs", {}, PaintSlot, reuseOwner)
+reuseEngine:RegisterConsumer("MUFs", function()
+  local ok, status = reuseEngine:AssignCarrier(reuseOwner, "player")
+  return ok, status, 1
+end)
+RegisterNonMUFConsumers(reuseEngine)
+Check(reuseEngine:Start(), "reuse fixture starts")
+local refreshCount = reuseContainer.providerRefreshes
+local operationCount = #reuseContainer.operations
+Check(reuseEngine:Refresh("UNCHANGED"), "unchanged bank applies")
+Equal(reuseContainer.providerRefreshes, refreshCount, "unchanged bank avoids provider writes")
+Equal(#reuseContainer.operations, operationCount, "unchanged bank avoids disable/enable/show")
+reuseNS.SetAppliedPack({priority = 4, useGap = true})
+Check(reuseEngine:Refresh("PRESENTATION_EDIT"), "presentation change applies")
+Equal(reuseContainer.providerRefreshes, refreshCount, "priority edit avoids unchanged provider writes")
+reuseNS.SetAppliedPack({primaryType = "Poison"})
+Check(reuseEngine:Refresh("FILTER_EDIT"), "changed filter applies")
+Check(reuseContainer.providerRefreshes > refreshCount, "changed filter reaches provider")
+Check(reuseContainer.candidates.main.includeDispelTypes.Poison, "new candidate map committed")
+refreshCount = reuseContainer.providerRefreshes
+combat = true
+Check(not reuseEngine:Refresh("COMBAT_EDIT"), "combat defers")
+Equal(reuseContainer.providerRefreshes, refreshCount, "no provider writes in combat")
+combat = false
+Check(reuseEngine:Recover("REGEN"), "regen recovers")
+Check(reuseContainer.providerRefreshes > refreshCount, "regen forces provider reapplication")
+Check(reuseEngine.eventFrame.events.UNIT_AURA, "trace starts automatically for applied pack")
+Check(reuseEngine:SetAuraTrace(true), "trace starts")
+combat = true
+reuseEngine:OnEvent("UNIT_AURA", "party1", secretBoolean)
+reuseEngine:OnEvent("UNIT_AURA", secretBoolean, secretBoolean)
+reuseEngine:OnEvent("UNIT_AURA", "raid0001")
+reuseEngine:OnEvent("UNIT_AURA", "raid41")
+combat = false
+local trace = reuseEngine:GetDiagnostics()
+Equal(trace.auraTraceTotal, 1, "only canonical public roster token counted")
+Equal(trace.auraTraceCombat, 1, "combat events counted without reading payload")
+trace.auraTraceUnits.party1 = 999
+Equal(reuseEngine:GetDiagnostics().auraTraceUnits.party1, 1, "snapshot cannot mutate trace")
+reuseEngine:SetAuraTrace(false)
+Check(not reuseEngine.eventFrame.events.UNIT_AURA, "trace unregisters on stop")
+reuseEngine:OnEvent("UNIT_AURA", "party1")
+Equal(reuseEngine.auraTraceTotal, 1, "stopped trace retains bounded report")
+Check(reuseEngine:Refresh("SAME_ENVIRONMENT"), "same pack refresh succeeds")
+Check(not reuseEngine.auraTraceEnabled, "same pack refresh respects manual off")
+Equal(reuseEngine.auraTraceTotal, 1, "same pack preserves report")
+reuseNS.SetAppliedPack({primaryType = "Curse"})
+combat = true
+Check(not reuseEngine:Refresh("ENVIRONMENT_CHANGED"), "environment waits for combat")
+Check(not reuseEngine.auraTraceEnabled, "deferred environment does not restart trace")
+Equal(reuseEngine.auraTraceTotal, 1, "deferred environment preserves report")
+combat = false
+Check(reuseEngine:Recover("REGEN"), "new environment commits")
+Check(reuseEngine.auraTraceEnabled, "new applied environment restarts trace")
+Equal(reuseEngine.auraTraceTotal, 0, "new environment starts fresh counters")
+reuseEngine:OnEvent("UNIT_AURA", "player")
+Check(reuseEngine:Refresh("SAME_ENVIRONMENT"), "routine refresh succeeds")
+Equal(reuseEngine.auraTraceTotal, 1, "routine refresh retains active counters")
+local tracePack = {advanced = {autoAuraTrace = false}}
+reuseNS.SetAppliedPack(tracePack)
+Check(reuseEngine:Refresh("DISABLED_ENVIRONMENT"), "disabled environment applies")
+Check(not reuseEngine.auraTraceEnabled, "per-environment off disables trace")
+Equal(reuseEngine.auraTraceTotal, 0, "disabled environment clears previous environment counts")
+tracePack.advanced.autoAuraTrace = true
+Check(reuseEngine:Refresh("OPTIONS"), "current environment toggle on applies")
+Check(reuseEngine.auraTraceEnabled, "same pack on starts trace")
+reuseEngine:OnEvent("UNIT_AURA", "player")
+tracePack.advanced.autoAuraTrace = false
+Check(reuseEngine:Refresh("OPTIONS"), "current environment toggle off applies")
+Check(not reuseEngine.auraTraceEnabled, "same pack off stops trace")
+Equal(reuseEngine.auraTraceTotal, 1, "turning off preserves captured evidence")
 io.write("detection-engine-contract: ok\n")

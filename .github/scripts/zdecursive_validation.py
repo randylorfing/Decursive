@@ -22,7 +22,7 @@ import zipfile
 
 
 ADDON = "ZDecursive"
-RELEASE_TAG = "v13.1.1-Alpha"
+RELEASE_TAG = "v13.1.2-Alpha"
 UPLOAD_ARTIFACT_PIN = "ea165f8d65b6e75b540449e92b4886f43607fa02"
 TOC_LOAD_ORDER = [
     "embeds.xml",
@@ -34,6 +34,8 @@ TOC_LOAD_ORDER = [
     "Lists.lua",
     "Detection.lua",
     "DetectionEngine.lua",
+    "ClickBindings.lua",
+    "KeyboardBindings.lua",
     "MUFPresentation.lua",
     "MUFs.lua",
     "LiveList.lua",
@@ -484,7 +486,7 @@ def validate_readme(check: Validation, repo_root: Path) -> None:
         return
     text = read_text(path)
     for marker in (
-        "v13.1.1-Alpha",
+        "v13.1.2-Alpha",
         "One addon folder: `ZDecursive`",
         "randylorfing/Decursive",
         "DecursiveRebuildDB",
@@ -509,7 +511,7 @@ def validate_workflow(check: Validation, repo_root: Path) -> None:
         "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
         "36b4c3b7b7bd17c835ad8c83fed4976c067edfbe",
         "- zdecursive",
-        "- 'v13.1.1-Alpha'",
+        "- 'v13.1.2-Alpha'",
         "contents: read",
         "luaparse@0.3.1",
         "validate-zdecursive-source.py",

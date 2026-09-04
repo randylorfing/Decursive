@@ -2282,6 +2282,9 @@ function ns.PrintSlashHelp()
     "/dcridentity alldebuffs  native tooltip HARMFUL vs dispellable",
     "/dcralerts [on|off|status|move]  editing-pack alerts, drag text",
     "/dcralertdiag  aura sound diagnostic",
+    "/dcrshow /dcrhide  show or hide MUFs (editing pack)",
+    "/dcrshoworder  print current MUF unit order",
+    "/zddb  alias of /dcrstatus",
     "/dcrreset [pack|profile|all]  reset editing pack by default",
     "/dcrpr /dcrsk  priority and skip lists",
     "/dcrsoullink [on|off|status]  emergency Soul Link fallback",
@@ -2707,12 +2710,7 @@ function ns.EnableDetection()
       eventFrame:RegisterEvent(name)
     end
   end
-  local addon = Addon()
-  if addon and addon.RegisterChatCommand then
-    addon:RegisterChatCommand("dcridentity", function(msg)
-      ns.PrintIdentity(msg)
-    end)
-  end
+  -- /dcridentity is registered once in Core OnInitialize. Do not re-register here.
   if ns.DiagnosticModuleEnabled then
     ns.DiagnosticModuleEnabled("Detection", true)
   end

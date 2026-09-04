@@ -77,7 +77,7 @@ local FOCUS_GESTURE = "ctrl-%s3"
 local PVP_BANDAGE_GESTURE = "*%s5"
 local PHYSICAL_LEFT = "*%s1"
 
-local GESTURE_PREFIXES = {"", "*", "ctrl-", "shift-", "alt-"}
+local GESTURE_PREFIXES = {"", "*", "ctrl-", "shift-", "alt-", "ctrl-shift-", "alt-ctrl-", "alt-shift-", "alt-ctrl-shift-"}
 
 local header
 local handle
@@ -88,7 +88,8 @@ local eventsOn = false
 local eventFrame
 local cooldownStates = {}
 local cooldownPending = {}
-local cooldownGeneration = {0, 0, 0}
+local cooldownGeneration = {}
+local cooldownPriorityCount = AUTO_CURE_LIMIT
 local cureAttempt
 local rangeElapsed = 0
 local paintElapsed = 0
@@ -169,23 +170,25 @@ local function PassClicks(frame)
   if not frame then
     return
   end
-  if LockedDown() then
-    return
-  end
-  if frame.EnableMouse then
-    frame:EnableMouse(false)
-  end
+  -- Click-off / passthrough first: these keep SecureUnitButton cure reachable.
   if frame.SetMouseClickEnabled then
     frame:SetMouseClickEnabled(false)
-  end
-  if frame.SetMouseMotionEnabled then
-    frame:SetMouseMotionEnabled(false)
   end
   if frame.SetPropagateMouseClicks then
     frame:SetPropagateMouseClicks(true)
   end
   if frame.SetPassThroughButtons then
     frame:SetPassThroughButtons(PASS_BUTTONS[1], PASS_BUTTONS[2], PASS_BUTTONS[3], PASS_BUTTONS[4], PASS_BUTTONS[5])
+  end
+  -- EnableMouse / motion are combat-protected on some trees; skip when locked.
+  if LockedDown() then
+    return
+  end
+  if frame.EnableMouse then
+    frame:EnableMouse(false)
+  end
+  if frame.SetMouseMotionEnabled then
+    frame:SetMouseMotionEnabled(false)
   end
 end
 
@@ -314,6 +317,23 @@ local function SoulLinkFallbackApplies(unit)
   local _battle, _ooc, combatSoulLink, outOfCombatSoulLink = ns.GetSmartRezActions(GetPack())
   return combatSoulLink == true or outOfCombatSoulLink == true
 end
+
+local function IsPubliclyDeadUnit(unit)
+  if type(unit) ~= "string" or type(UnitIsDeadOrGhost) ~= "function" then
+    return false
+  end
+  local ok, dead = pcall(UnitIsDeadOrGhost, unit)
+  return ok and IsTrue(dead)
+end
+
+local function ShouldBeginSoulLinkAttempt(unit)
+  -- The secure macro chooses rez/Soul Link only for a dead friendly mouseover.
+  -- Do not arm attribution for a normal living-unit cure: its range failure
+  -- belongs to the dispel, not to the Soul Link fallback.
+  return IsPubliclyDeadUnit(unit) and SoulLinkFallbackApplies(unit)
+end
+
+ns.ShouldBeginSoulLinkAttemptForValidation = ShouldBeginSoulLinkAttempt
 
 local function IdentityTooltipAllowed(pack)
   if not pack or not pack.mufs or pack.mufs.tooltip == false then
@@ -760,28 +780,15 @@ local function BindAuraSlot(slot, pack, cover, slotInfo)
   if ns.ConfigureMUFDispelPresentation then
     ns.ConfigureMUFDispelPresentation(slot, pack, cover, baseLevel, host, slotInfo)
   end
-  local tooltip = pack and pack.mufs and pack.mufs.tooltip ~= false
   if slot.SetTooltipAnchorPoint then
     slot:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)
   end
   if slot.SetHideTooltipInCombat then
     slot:SetHideTooltipInCombat(false)
   end
-  if slot.EnableMouse then
-    slot:EnableMouse(tooltip)
-  end
-  if slot.SetMouseClickEnabled then
-    slot:SetMouseClickEnabled(false)
-  end
-  if slot.SetPropagateMouseClicks then
-    slot:SetPropagateMouseClicks(true)
-  end
-  if slot.SetPassThroughButtons then
-    slot:SetPassThroughButtons(PASS_BUTTONS[1], PASS_BUTTONS[2], PASS_BUTTONS[3], PASS_BUTTONS[4], PASS_BUTTONS[5])
-  end
-  if slot.SetMouseMotionEnabled then
-    slot:SetMouseMotionEnabled(tooltip)
-  end
+  -- Managed AuraSlots must not take the mouse. Tooltip stays on the MUF button.
+  -- Do not re-enable mouse for slot tooltips after DisableInteraction (combat click eat).
+  PassClicks(slot)
   if ns.ConfigureDispelAlertSlot then
     ns.ConfigureDispelAlertSlot(slot)
   end
@@ -837,6 +844,10 @@ function ns.GetManualClickActions(pack)
     choices[i] = {key = CureActionKey(actions[i]), name = actions[i].name}
   end
   return choices
+end
+
+function ns.GetKeyboardCureActions(pack)
+  return DistinctFriendlyCures(pack or GetPack())
 end
 
 local function BuildSmartRezMacroText(cureCommand, cureName, cureUsesPet)
@@ -1030,6 +1041,9 @@ end
 local function ClickSignature(pack)
   local bits = {}
   bits[#bits + 1] = pack.cure and pack.cure.mode or "AUTO"
+  for _, gesture in ipairs(ns.ClickBindingGestures or {}) do
+    bits[#bits + 1] = tostring(ns.GetClickBindingOverride(pack, gesture.key))
+  end
   local mouse = pack.mouse or {}
   bits[#bits + 1] = tostring(mouse.left)
   bits[#bits + 1] = tostring(mouse.right)
@@ -1136,6 +1150,42 @@ function ns.InvalidateClickModel(_reason)
   end
 end
 
+local function ApplyBindingOverrides(rows, pack, cures)
+  -- Put default utility actions in the same model as every configurable click.
+  rows[#rows + 1] = {binding = TARGET_GESTURE, secureType = "target", action = "Target", actionKind = "TARGET"}
+  rows[#rows + 1] = {binding = FOCUS_GESTURE, secureType = "focus", action = "Focus", actionKind = "FOCUS"}
+  for _, gesture in ipairs(ns.ClickBindingGestures or {}) do
+    local choice = ns.GetClickBindingOverride(pack, gesture.key)
+    if choice then
+      local row
+      local utility = SECURE_MOUSE_ACTIONS[choice]
+      if utility then
+        row = {binding = gesture.binding, secureType = utility.secureType, action = utility.action, actionKind = utility.kind}
+      else
+        local priority = tonumber(choice:match("^CURE([123])$"))
+        if not priority then
+          for i, action in ipairs(cures) do
+            if CureActionKey(action) == choice or (action.itemId and choice == "item:" .. tostring(action.itemId)) then
+              priority = i
+              break
+            end
+          end
+        end
+        if priority and cures[priority] then row = MakeCureRow(cures[priority], gesture.binding, priority) end
+        if not row then
+          -- An explicit empty action blocks wildcard fallthrough, including an
+          -- assigned spell that becomes unavailable after a spec change.
+          row = {binding = gesture.binding, secureType = "", action = choice == "NONE" and "None" or "Unavailable", actionKind = "NONE"}
+        end
+      end
+      for i = #rows, 1, -1 do
+        if rows[i].binding == gesture.binding then table.remove(rows, i) end
+      end
+      rows[#rows + 1] = row
+    end
+  end
+end
+
 function ns.RebuildClickModel(pack)
   if LockedDown() then
     pending = true
@@ -1145,6 +1195,12 @@ function ns.RebuildClickModel(pack)
     return clickModel
   end
   pack = pack or GetPack()
+  if ns.RefreshKeyboardBindings then
+    -- Runtime always reads the applied pack, even when a caller builds an
+    -- editing-pack preview. Keyboard assignment has its own idempotent refresh.
+    local applied = GetPack()
+    ns.RefreshKeyboardBindings(applied, DistinctFriendlyCures(applied))
+  end
   local sig = ClickSignature(pack)
   if clickModel and clickModelSig == sig then
     return clickModel
@@ -1155,6 +1211,7 @@ function ns.RebuildClickModel(pack)
   end
   local cures = DistinctFriendlyCures(pack)
   local bandage = ScanPvPBandage()
+  cooldownPriorityCount = math.max(cooldownPriorityCount, #cures)
   local rows = {}
   local used = {
     [TARGET_GESTURE] = true,
@@ -1268,6 +1325,7 @@ function ns.RebuildClickModel(pack)
     end
   end
 
+  ApplyBindingOverrides(rows, pack, cures)
   clickModel = {
     mode = mode,
     rows = rows,
@@ -1294,10 +1352,7 @@ function ns.GetResolvedClickStatus()
     mode = pack and pack.cure and pack.cure.mode == "MANUAL" and "MANUAL" or "AUTO",
     generation = clickModelGeneration,
     pending = pending == true,
-    mappings = {
-      {gesture = "Middle", action = "Target", kind = "TARGET"},
-      {gesture = "Ctrl+Middle", action = "Focus", kind = "FOCUS"},
-    },
+    mappings = {},
   }
   if type(model) ~= "table" or type(model.rows) ~= "table" then
     status.available = false
@@ -1340,6 +1395,16 @@ function ns.GetResolvedClickStatus()
         kind = kind,
         spellId = type(row.spellId) == "number" and row.spellId or nil,
       }
+    end
+  end
+  -- Keep the familiar utility gestures first while reporting their actual,
+  -- possibly overridden actions from the shared model.
+  for _, preferred in ipairs({"Ctrl+Middle", "Middle"}) do
+    for index, mapping in ipairs(status.mappings) do
+      if mapping.gesture == preferred then
+        table.insert(status.mappings, 1, table.remove(status.mappings, index))
+        break
+      end
     end
   end
   return status
@@ -1392,15 +1457,7 @@ local function ApplyClickAttributes(btn, pack, unit)
     return false
   end
 
-  SetSecure(btn, TARGET_GESTURE:format("type"), "target")
-  SetSecure(btn, TARGET_GESTURE:format("unit"), unit)
-  SetSecure(btn, FOCUS_GESTURE:format("type"), "focus")
-  SetSecure(btn, FOCUS_GESTURE:format("unit"), unit)
-
-  local installed = {
-    [TARGET_GESTURE] = true,
-    [FOCUS_GESTURE] = true,
-  }
+  local installed = {}
   local rezOk = RezEligible(unit)
   local leftAssigned = false
   local leftReserved = false
@@ -1408,6 +1465,7 @@ local function ApplyClickAttributes(btn, pack, unit)
   for i = 1, #model.rows do
     local row = model.rows[i]
     local binding = row.binding
+    if binding then btn.cureRows[binding] = false end
     if binding and row.secureType and not installed[binding] then
       SetSecure(btn, binding:format("type"), row.secureType)
       SetSecure(btn, binding:format("unit"), unit)
@@ -1479,21 +1537,9 @@ local function IdentitySlotOptions(btn)
       if slot.SetHideTooltipInCombat then
         slot:SetHideTooltipInCombat(false)
       end
-      if slot.EnableMouse then
-        slot:EnableMouse(true)
-      end
-      if slot.SetMouseClickEnabled then
-        slot:SetMouseClickEnabled(false)
-      end
-      if slot.SetPropagateMouseClicks then
-        slot:SetPropagateMouseClicks(true)
-      end
-      if slot.SetPassThroughButtons then
-        slot:SetPassThroughButtons(PASS_BUTTONS[1], PASS_BUTTONS[2], PASS_BUTTONS[3], PASS_BUTTONS[4], PASS_BUTTONS[5])
-      end
-      if slot.SetMouseMotionEnabled then
-        slot:SetMouseMotionEnabled(true)
-      end
+      -- Pass clicks through so combat cure still hits the SecureUnitButton.
+      -- Do not EnableMouse(true) on identity: that ate LeftButton in combat.
+      PassClicks(slot)
     end,
   }
 end
@@ -1938,7 +1984,7 @@ local function PaintManagedOverlays(btn, pack, unit)
       btn.skullNativeValue = false
       btn.cooldownSuppressedBySkull = false
       if SetCooldownGateActive then
-        for priority = 1, 3 do
+        for priority = 1, cooldownPriorityCount do
           SetCooldownGateActive(btn, priority, cooldownStates[priority])
         end
       end
@@ -1970,7 +2016,7 @@ local function PaintManagedOverlays(btn, pack, unit)
   if wasSuppressed and not btn.cooldownSuppressedBySkull and ReconcileCooldowns then
     ReconcileCooldowns()
   elseif (wasSuppressed ~= btn.cooldownSuppressedBySkull or not Accessible(death.nativeValue)) and SetCooldownGateActive then
-    for priority = 1, 3 do
+    for priority = 1, cooldownPriorityCount do
       SetCooldownGateActive(btn, priority, cooldownStates[priority])
     end
   end
@@ -2224,7 +2270,7 @@ SetCooldownGateActive = function(btn, priority, state)
   local pack = GetPack()
   local shared = pack.mufs.shareCooldown ~= false
   local clearClicked = pack.mufs.clearCleansedImmediately ~= false
-  local isClicked = state and state.targetBtn == btn
+  local isClicked = state and state.targetBtn == btn and Public(btn.unit) == state.targetUnit
   local active = state ~= nil and btn.assigned == true and pack.alerts.cooldown ~= false
   active = active and gate.actionKey == state.actionKey
   if shared then
@@ -2254,7 +2300,7 @@ local function FinishCooldown(priority, generation)
   if generation and generation ~= cooldownGeneration[priority] then
     return false
   end
-  cooldownGeneration[priority] = cooldownGeneration[priority] + 1
+  cooldownGeneration[priority] = (cooldownGeneration[priority] or 0) + 1
   cooldownPending[priority] = nil
   cooldownStates[priority] = nil
   RefreshCooldownPriority(priority)
@@ -2337,12 +2383,12 @@ local function BeginPendingCooldown(priority, spellId, attempt)
     spellId = spellId,
     actionKey = attempt.actionKey,
     targetBtn = attempt.targetBtn,
+    targetUnit = attempt.targetUnit,
     startedAt = now,
     expiresAt = now + 2.8,
-    confirmedNone = 0,
   }
   if C_Timer and C_Timer.After then
-    for _, delay in ipairs({0, 0.05, 0.12, 0.25, 0.55, 1.0, 2.8}) do
+    for _, delay in ipairs({0, 0.05, 0.12, 0.25, 0.55, 1.0, 1.8, 2.8}) do
       C_Timer.After(delay, function()
         RetryPendingCooldown(priority, generation)
       end)
@@ -2358,45 +2404,38 @@ RetryPendingCooldown = function(priority, generation)
     return false
   end
   local now = GetTime and GetTime() or 0
+  local info, active, onGCD = PublicCooldownState(pendingCooldown.spellId)
+  if info and active and not onGCD then
+    local charged, currentCharges = PublicChargeState(pendingCooldown.spellId, info)
+    if not charged or (type(currentCharges) == "number" and currentCharges == 0) then
+      local durationObject = CooldownDurationObject(pendingCooldown.spellId, charged)
+      if durationObject then
+        cooldownPending[priority] = nil
+        cooldownStates[priority] = {
+          generation = generation,
+          spellId = pendingCooldown.spellId,
+          actionKey = pendingCooldown.actionKey,
+          targetBtn = pendingCooldown.targetBtn,
+          targetUnit = pendingCooldown.targetUnit,
+          durationObject = durationObject,
+        }
+        RefreshCooldownPriority(priority)
+        return true
+      end
+    end
+  end
+
+  -- Cast success can precede the cooldown or last-charge update. Early ready
+  -- and GCD samples are not final: retain discovery for the bounded window,
+  -- and let the last scheduled callback check readiness before expiring.
   if now >= pendingCooldown.expiresAt then
     return FinishCooldown(priority, generation)
   end
-  local info, active, onGCD = PublicCooldownState(pendingCooldown.spellId)
-  if not info then
-    return true
-  end
-  if not active or onGCD then
-    pendingCooldown.confirmedNone = pendingCooldown.confirmedNone + 1
-    if now - pendingCooldown.startedAt >= 0.55 and pendingCooldown.confirmedNone >= 3 then
-      return FinishCooldown(priority, generation)
-    end
-    return true
-  end
-  local charged, currentCharges = PublicChargeState(pendingCooldown.spellId, info)
-  if charged and currentCharges == nil then
-    return true
-  end
-  if charged and currentCharges > 0 then
-    return FinishCooldown(priority, generation)
-  end
-  local durationObject = CooldownDurationObject(pendingCooldown.spellId, charged)
-  if not durationObject then
-    return true
-  end
-  cooldownPending[priority] = nil
-  cooldownStates[priority] = {
-    generation = generation,
-    spellId = pendingCooldown.spellId,
-    actionKey = pendingCooldown.actionKey,
-    targetBtn = pendingCooldown.targetBtn,
-    durationObject = durationObject,
-  }
-  RefreshCooldownPriority(priority)
   return true
 end
 
 ReconcileCooldowns = function()
-  for priority = 1, 3 do
+  for priority = 1, cooldownPriorityCount do
     local pendingCooldown = cooldownPending[priority]
     if pendingCooldown then
       RetryPendingCooldown(priority, pendingCooldown.generation)
@@ -2540,7 +2579,10 @@ AttachCooldownGates = function(btn, pack, unit)
   end
   btn.cooldownGates = btn.cooldownGates or {}
   local actions = DistinctFriendlyCures(pack)
-  for priority = 1, 3 do
+  -- Manual bindings may use cures beyond AUTO's three slots. Retain previous
+  -- slots in this bound so a shorter catalog also retires their old gates.
+  cooldownPriorityCount = math.max(cooldownPriorityCount, #actions)
+  for priority = 1, cooldownPriorityCount do
     local action = actions[priority]
     local gate = btn.cooldownGates[priority]
     local visualSignature = action and CooldownGateVisualSignature(btn, pack, action, priority) or nil
@@ -2625,33 +2667,17 @@ local function CureRowForClick(btn, button)
     return nil
   end
   local suffix = "%s" .. tostring(index)
-  if IsControlKeyDown and IsControlKeyDown() then
-    local row = btn.cureRows["ctrl-" .. suffix]
-    if row then
-      return row
-    end
-  end
-  if IsShiftKeyDown and IsShiftKeyDown() then
-    local row = btn.cureRows["shift-" .. suffix]
-    if row then
-      return row
-    end
-  end
-  if IsAltKeyDown and IsAltKeyDown() then
-    local row = btn.cureRows["alt-" .. suffix]
-    if row then
-      return row
-    end
-  end
-  return btn.cureRows["*" .. suffix]
+  -- Match SecureButton_GetModifierPrefix's order and exact-combination lookup.
+  local prefix = ""
+  if IsShiftKeyDown and IsShiftKeyDown() then prefix = "shift-" .. prefix end
+  if IsControlKeyDown and IsControlKeyDown() then prefix = "ctrl-" .. prefix end
+  if IsAltKeyDown and IsAltKeyDown() then prefix = "alt-" .. prefix end
+  local exact = btn.cureRows[prefix .. suffix]
+  if exact ~= nil then return exact or nil end
+  return btn.cureRows["*" .. suffix] or nil
 end
 
-local function BeginCureAttempt(btn, button)
-  local row = CureRowForClick(btn, button)
-  if not row or not btn.assigned then
-    cureAttempt = nil
-    return
-  end
+local function RecordCureAttempt(row, btn)
   local aliases = {}
   if type(row.spellId) == "number" and row.spellId > 0 then
     aliases[row.spellId] = true
@@ -2661,11 +2687,43 @@ local function BeginCureAttempt(btn, button)
   end
   cureAttempt = {
     targetBtn = btn,
+    targetUnit = btn and Public(btn.unit) or nil,
     priority = row.priority,
     actionKey = row.actionKey,
     aliasSpellIDs = aliases,
     startedAt = GetTime and GetTime() or 0,
   }
+end
+
+local function BeginCureAttempt(btn, button)
+  local row = CureRowForClick(btn, button)
+  if not row or not btn.assigned then
+    cureAttempt = nil
+    return
+  end
+  RecordCureAttempt(row, btn)
+end
+
+function ns.BeginKeyboardCureAttempt(binding)
+  if type(binding) ~= "table" or type(binding.index) ~= "number"
+    or binding.index < 1 or binding.index > 3 or binding.index ~= math.floor(binding.index) then return end
+  local targetBtn
+  if type(UnitIsUnit) == "function" then
+    -- Resolve the public roster identity at the key press. The mouseover can
+    -- change before the cast result; inaccessible matches remain targetless.
+    for _, btn in ipairs(pool) do
+      local unit = Public(btn.unit)
+      if btn.assigned == true and type(unit) == "string" and unit ~= "" then
+        local ok, same = pcall(UnitIsUnit, "mouseover", unit)
+        if ok and Accessible(same) and same == true then
+          targetBtn = btn
+          break
+        end
+      end
+    end
+  end
+  RecordCureAttempt({priority = binding.index, actionKey = binding.actionKey,
+    spellId = binding.spellId, baseId = binding.baseId}, targetBtn)
 end
 
 local function OnPlayerSpellResult(event, unit, spellId)
@@ -2680,15 +2738,18 @@ local function OnPlayerSpellResult(event, unit, spellId)
     return
   end
   cureAttempt = nil
+  if attempt.targetBtn and (attempt.targetBtn.assigned ~= true or Public(attempt.targetBtn.unit) ~= attempt.targetUnit) then
+    attempt.targetBtn = nil
+  end
   if event == "UNIT_SPELLCAST_SUCCEEDED" then
     MarkButtonStatus(attempt.targetBtn, true)
-    attempt.targetBtn.suppressFailureUntil = now + 2
+    if attempt.targetBtn then attempt.targetBtn.suppressFailureUntil = now + 2 end
     if ns.NotifyCureSucceeded then
       ns.NotifyCureSucceeded(attempt.targetBtn and attempt.targetBtn.unit)
     end
     BeginPendingCooldown(attempt.priority, spellId, attempt)
   else
-    if (attempt.targetBtn.suppressFailureUntil or 0) > now then
+    if attempt.targetBtn and (attempt.targetBtn.suppressFailureUntil or 0) > now then
       return
     end
     MarkButtonStatus(attempt.targetBtn, false)
@@ -2761,11 +2822,7 @@ local function CreateMUF(parent)
   PassClicks(btn.deathHost)
   btn.deathHost:SetFrameLevel((btn:GetFrameLevel() or 0) + (layers.deathLevelOffset or 44))
 
-  btn.cooldownHost = CreateFrame("Frame", nil, btn)
-  btn.cooldownHost:SetAllPoints(btn.inner)
-  PassClicks(btn.cooldownHost)
-  btn.cooldownHost:SetFrameLevel((btn:GetFrameLevel() or 0) + (layers.cooldownLevelOffset or 48))
-
+  -- Live cooldown paint uses AuraContainer gate slots (AttachCooldownGates), not cdTex/cdText.
   btn.readabilityHost = CreateFrame("Frame", nil, btn)
   btn.readabilityHost:SetAllPoints(btn)
   PassClicks(btn.readabilityHost)
@@ -2781,16 +2838,6 @@ local function CreateMUF(parent)
   btn.playerMark:SetPoint("BOTTOM", 0, 1)
   btn.playerMark:SetText("")
   btn.playerMark:Hide()
-
-  btn.cdTex = btn.cooldownHost:CreateTexture(nil, "OVERLAY")
-  btn.cdTex:SetAllPoints()
-  btn.cdTex:SetColorTexture(0, 0, 0, 0.62)
-  btn.cdTex:Hide()
-
-  btn.cdText = btn.cooldownHost:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
-  btn.cdText:SetPoint("CENTER")
-  btn.cdText:SetTextColor(1, 1, 1, 1)
-  btn.cdText:Hide()
 
   btn.statusLight = btn.readabilityHost:CreateTexture(nil, "OVERLAY", nil, 6)
   btn.statusLight:SetTexture(STATUS_MASK)
@@ -2851,7 +2898,7 @@ local function CreateMUF(parent)
 
   WireTooltip(btn)
   btn:SetScript("PreClick", function(self, button)
-    if button == "LeftButton" and ns.BeginSoulLinkAttempt and SoulLinkFallbackApplies(self.unit) then
+    if button == "LeftButton" and ns.BeginSoulLinkAttempt and ShouldBeginSoulLinkAttempt(self.unit) then
       ns.BeginSoulLinkAttempt(self.unit)
     end
     BeginCureAttempt(self, button)
@@ -3027,7 +3074,7 @@ function ns.ResetMUFsForWorldTransition(reason)
     return false
   end
   cureAttempt = nil
-  for priority = 1, 3 do
+  for priority = 1, cooldownPriorityCount do
     FinishCooldown(priority)
   end
   local cleared = HideAll() == true
@@ -3185,7 +3232,7 @@ function ns.LayoutMUFs()
   end
 
   UpdateStatusLights()
-  for priority = 1, 3 do
+  for priority = 1, cooldownPriorityCount do
     RefreshCooldownPriority(priority)
   end
   mufsConfigured = layoutOK
@@ -3254,7 +3301,7 @@ local function RegisterExtraEvents()
   eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3)
     if event == "SPELLS_CHANGED" then
       cureAttempt = nil
-      for priority = 1, 3 do
+      for priority = 1, cooldownPriorityCount do
         FinishCooldown(priority)
       end
       if ns.InvalidateDetection then
@@ -3417,6 +3464,8 @@ if ns.RegisterDiagnosticProvider then
       presentationExpectedEffectiveAlpha = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.expectedEffectiveAlpha or 0,
 		presentationPaletteRefreshMode = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteRefreshMode or "UNAVAILABLE",
 		presentationPaletteSignatureMode = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteSignatureMode or "UNAVAILABLE",
+    presentationPaletteColorMode = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteColorMode or "UNAVAILABLE",
+    presentationPaletteCurveFailureCount = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteCurveFailureCount or 0,
 		presentationPaletteRegistrationGeneration = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteRegistrationGeneration or 0,
 		presentationPaletteRefreshGeneration = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteRefreshGeneration or 0,
 		presentationPaletteRefreshFailureCount = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteRefreshFailureCount or 0,

@@ -166,7 +166,8 @@ local parent = NewFrame(nil)
 local first = ns.CreateMUFVisualValidationFrame(parent)
 local second = ns.CreateMUFVisualValidationFrame(parent)
 Check(first and second and first ~= second, "real MUF visual constructor initializes repeatedly")
-Check(#createdTextures >= 32, "all textures initialize on two complete MUFs")
+Check(#createdTextures >= 30, "all live textures initialize on two complete MUFs")
+Check(first.cdTex == nil and second.cdTex == nil, "removed cooldown texture path stays absent")
 
 for i = 1, #createdTextures do
   local sublevel = createdTextures[i].sublevel
@@ -175,7 +176,7 @@ end
 
 Equal(first.managedHost.frameLevel, 39, "managed overlays frame level")
 Equal(first.deathHost.frameLevel, 47, "death host stays above range and Soul Link")
-Equal(first.cooldownHost.frameLevel, 51, "cooldown host remains above ordinary overlays")
+Check(first.cooldownHost == nil, "removed cooldown host path stays absent")
 Equal(first.readabilityHost.frameLevel, 67, "text, raid icon, border-adjacent status, and skull remain readable")
 Check(first.deadFill.parent == first.deathHost, "death fill is isolated on authoritative frame host")
 Equal(first.deadFill.sublevel, 0, "death fill uses a legal texture sublevel")
@@ -193,16 +194,13 @@ Equal(first.skullTex.vertex[4], 1, "dead skull is visible")
 
 local cooldown = ns.ResolveMUFCooldownPresentation(true, true, true)
 Check(cooldown.suppressedBySkull and not cooldown.active, "dead skull suppresses cooldown")
-Check(ns.ApplyMUFCooldownVisibility(first.cooldownHost, cooldown), "suppressed cooldown state applies")
-Equal(first.cooldownHost.alpha, 0, "cooldown host is hidden for skull state")
 
 local alive = ns.ResolveMUFDeathPresentation(pack, false, true, "PUBLIC_ALIVE")
 ns.ApplyMUFDeathPresentation(first.deadFill, first.skullTex, alive)
 local resumed = ns.ResolveMUFCooldownPresentation(true, false, false)
-ns.ApplyMUFCooldownVisibility(first.cooldownHost, resumed)
+Check(resumed.active and not resumed.suppressedBySkull, "valid cooldown may resume after alive transition")
 Equal(first.deadFill.vertex[4], 0, "alive transition clears death fill")
 Equal(first.skullTex.vertex[4], 0, "alive transition clears skull")
-Equal(first.cooldownHost.alpha, 1, "valid cooldown may resume after alive transition")
 
 local range = ns.ResolveMUFRangePresentation({colors = {range = {0.2, 0.4, 0.8, 1}}, mufs = {dimOutOfRange = true, dimAmount = 0.7}}, false, false)
 ns.ApplyMUFRangePresentation(first.rangeOverlay, range, first.rangeHost)

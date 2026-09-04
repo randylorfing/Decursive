@@ -229,4 +229,43 @@ Check(engineText:find("slotType = slot.dispelType", 1, true), "diagnostics recor
 Check(engineText:find("priority = slot.priority", 1, true), "diagnostics record public configured priority")
 Check(not engineText:find("winner =", 1, true), "diagnostics never infer or persist a secret native winner")
 
+local curvesCreated = 0
+C_CurveUtil = {CreateColorCurve = function()
+  curvesCreated = curvesCreated + 1
+  local curve = {points = {}}
+  function curve:AddPoint(x, color) self.points[#self.points + 1] = {x = x, color = color} end
+  return curve
+end}
+for _, info in ipairs(second) do
+  local slot, owner = NewSlot(), NewFrame(nil)
+  ns.ConfigureMUFDispelPresentation(slot, pack, owner, 0, owner, info)
+  local curve = slot.registration.options.customDispelColorCurve
+  Check(curve and #curve.points == 2, "native slot receives color curve")
+  local expected = pack.colors[info.typeKey]
+  for _, point in ipairs(curve.points) do
+    Equal(point.color.r, expected[1], "constant curve uses slot red")
+    Equal(point.color.g, expected[2], "constant curve uses slot green")
+    Equal(point.color.b, expected[3], "constant curve uses slot blue")
+  end
+  local registration = slot.registration
+  local before = curvesCreated
+  ns.ConfigureMUFDispelPresentation(slot, pack, owner, 0, owner, info)
+  Equal(curvesCreated, before, "unchanged palette reuses curve")
+  Equal(slot.registration, registration, "unchanged palette preserves registration")
+  pack.colors[info.typeKey] = {0.23, 0.45, 0.67}
+  ns.ConfigureMUFDispelPresentation(slot, pack, owner, 0, owner, info)
+  Check(slot.registration ~= registration, "palette edit replaces registration")
+  Equal(slot.registration.options.customDispelColorCurve.points[1].color.r, 0.23, "edited color reaches new curve")
+end
+C_CurveUtil = nil
+local fallback, owner = NewSlot(), NewFrame(nil)
+ns.ConfigureMUFDispelPresentation(fallback, pack, owner, 0, owner, second[1])
+Check(fallback.registration.options.customDispelColorCurve == nil, "missing API retains map fallback")
+Check(fallback.registration.options.customDispelColorMap ~= nil, "fallback has native color map")
+C_CurveUtil = {CreateColorCurve = function() error("unavailable curve") end}
+pack.colors[second[1].typeKey] = {0.91, 0.72, 0.53}
+local failedCurveSlot = NewSlot()
+ns.ConfigureMUFDispelPresentation(failedCurveSlot, pack, owner, 0, owner, second[1])
+Check(failedCurveSlot.registration.options.customDispelColorCurve == nil, "curve failure preserves supported map path")
+Check(ns.MUF_PRESENTATION.paletteCurveFailureCount > 0, "curve failure is diagnosable")
 print("muf-type-priority-contract: ok")

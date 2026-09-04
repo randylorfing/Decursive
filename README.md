@@ -1,7 +1,7 @@
 # Zhaohu's Decursive (ZDecursive)
 
 ZDecursive is an independently maintained rebuild of Zhaohu's Decursive for
-WoW Retail 12.1. The `v13.1.1-Alpha` line is packaged as one installable addon
+WoW Retail 12.1. The `v13.1.2-Alpha` line is packaged as one installable addon
 folder and is prepared for publication from the `zdecursive` branch of
 `randylorfing/Decursive`.
 
@@ -32,6 +32,14 @@ the button's previous assignment. An explicit Button 5 spell takes precedence
 over the automatic PvP bandage. Automatic cure restores assignment from the
 remaining cures; Button 5 also permits the bandage fallback. Changes belong to
 the editing environment and become active when that environment is applied.
+
+## v13.1.2 Alpha changes
+
+- Adds an optional per-environment automatic aura diagnostics trace, enabled by default, with a documented Advanced toggle and `/zdiag auraon` / `/zdiag auraoff`.
+- Refreshes only the native aura provider that changed and records bounded recovery diagnostics when combat events need attention.
+- Uses the native dispel color curve when available while retaining the compatible map fallback.
+- Adds hover descriptions to all environment options and keeps the diagnostics report visible when ordinary runtime notices arrive.
+- Prevents living, out-of-range dispel attempts from being misreported as Battle Resurrection Soul Link failures.
 
 ## Licensing and attribution
 

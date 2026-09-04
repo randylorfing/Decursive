@@ -147,6 +147,13 @@ SlashCmdList = {}
 local ns = {}
 assert(loadfile("ZDecursive/Diagnostics.lua"))("ZDecursive", ns)
 local diagnostics = ns.Diagnostics
+local initialLogCount = diagnostics.GetLogCount()
+local windowBeforeNotice = diagnostics.GetWindow()
+Check(diagnostics.AppendRuntimeMessage("Battle rez range warning emitted"), "sanitized notice is accepted")
+Equal(diagnostics.GetLogCount(), initialLogCount + 1, "notice is appended to bounded runtime log")
+Equal(diagnostics.GetWindow(), windowBeforeNotice, "notice does not create or replace diagnostics window")
+Check(diagnostics.BuildReport():find("Battle rez range warning emitted", 1, true) ~= nil, "notice appears in copyable report")
+Check(not diagnostics.AppendRuntimeMessage(secretValue), "secret notice is rejected")
 
 local tocFile = assert(io.open("ZDecursive/ZDecursive.toc", "rb"))
 local toc = tocFile:read("*a")

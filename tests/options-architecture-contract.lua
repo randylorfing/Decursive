@@ -93,8 +93,8 @@ end
 Check(asciiOnly, "Options labels must remain ASCII")
 
 Check(mufs:find("function ns.GetResolvedClickStatus()", 1, true), "MUFs exposes authoritative resolved click status")
-Check(mufs:find('{gesture = "Middle", action = "Target", kind = "TARGET"}', 1, true), "fixed target mapping is reported")
-Check(mufs:find('{gesture = "Ctrl+Middle", action = "Focus", kind = "FOCUS"}', 1, true), "fixed focus mapping is reported")
+Check(mufs:find('binding = TARGET_GESTURE, secureType = "target"', 1, true), "default target mapping participates in the configurable model")
+Check(mufs:find('binding = FOCUS_GESTURE, secureType = "focus"', 1, true), "default focus mapping participates in the configurable model")
 Check(detection:find("if ns.RefreshOptions then\n        ns.RefreshOptions()", 1, true), "existing talent event path refreshes Status")
 Check(not detection:find('RegisterEvent("UNIT_AURA")', 1, true), "no Lua aura discovery event introduced")
 Check(core:find('self:RegisterEvent("PLAYER_REGEN_DISABLED", "OnCombatOptionsChanged")', 1, true), "combat entry refreshes Status read-only state")

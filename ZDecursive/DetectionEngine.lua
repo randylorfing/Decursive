@@ -25,7 +25,7 @@ if ns.DiagnosticCheckpoint then
   ns.DiagnosticCheckpoint("module", "DetectionEngine file start")
 end
 
-local ENGINE_VERSION = 6
+local ENGINE_VERSION = 7
 local RETRY_DELAYS = {0.15, 0.50, 1.00, 2.00, 4.00, 7.00, 10.00, 13.00, 16.00}
 local MAX_RETRY_ATTEMPTS = #RETRY_DELAYS
 local STATES = {
@@ -95,6 +95,12 @@ local Engine = {
   dirtyGeneration = 0,
   committedGeneration = 0,
   itemActionRefreshScheduled = false,
+  providerReuseCount = 0,
+  auraTraceEnabled = false,
+  auraTraceTotal = 0,
+  auraTraceCombat = 0,
+  auraTraceUnits = {},
+  auraTraceRegistrationFailures = 0,
 }
 
 local function LockedDown()
@@ -260,6 +266,12 @@ function Engine:Defer(reason)
 end
 
 local function SetCarrierInteraction(container)
+  if type(container) ~= "table" and type(container) ~= "userdata" then
+    return
+  end
+  if LockedDown() then
+    return
+  end
   if type(container.EnableMouse) == "function" then
     pcall(container.EnableMouse, container, false)
   end
@@ -413,7 +425,28 @@ function Engine:FailClosed(reason, scope)
   return false
 end
 
-function Engine:ConfigureCarrier(record, pack)
+-- Only serialize our public configuration, never aura data. Unknown values
+-- deliberately disable reuse so future filter extensions remain conservative.
+local function ConfigurationKey(value, depth)
+  if issecretvalue and issecretvalue(value) then return nil end
+  local kind = type(value)
+  if kind == "nil" then return "nil" end
+  if kind == "string" then return string.format("%q", value) end
+  if kind == "number" or kind == "boolean" then return kind .. tostring(value) end
+  if kind ~= "table" or depth > 6 then return nil end
+  local parts = {}
+  for key, item in pairs(value) do
+    if #parts >= 64 then return nil end
+    local left = ConfigurationKey(key, depth + 1)
+    local right = ConfigurationKey(item, depth + 1)
+    if not left or not right then return nil end
+    parts[#parts + 1] = left .. "=" .. right
+  end
+  table.sort(parts)
+  return "{" .. table.concat(parts, ";") .. "}"
+end
+
+function Engine:ConfigureCarrier(record, pack, allowReuse)
   if not record or not record.container then
     return false
   end
@@ -431,6 +464,26 @@ function Engine:ConfigureCarrier(record, pack)
   local ok, slots = pcall(getSlots, pack, record.unit)
   if not ok or type(slots) ~= "table" then
     self:RecordFailure("SLOTS_FAILED", true)
+    return false
+  end
+  local providerPlan = {}
+  for i = 1, #slots do
+    local slot = slots[i]
+    if type(slot) == "table" then
+      providerPlan[i] = {key = slot.key, filter = slot.filter, candidateFilters = slot.candidateFilters}
+    else
+      providerPlan[i] = slot
+    end
+  end
+  local signature = ConfigurationKey(providerPlan, 0)
+  local reuse = allowReuse == true and signature ~= nil
+    and record.providerSignature == signature and record.providerUnit == record.unit
+    and record.quarantined ~= true and record.configuredGeneration ~= nil
+    and record.configuredGeneration > 0
+  record.providerReused = reuse
+  if not reuse then record.providerSignature = nil end
+  if allowReuse ~= nil and not reuse and not SetCarrierEnabled(record, false) then
+    self:RecordFailure("CARRIER_DISABLE_FAILED", false)
     return false
   end
   record.slotFrames = record.slotFrames or {}
@@ -460,7 +513,9 @@ function Engine:ConfigureCarrier(record, pack)
       if record.slotKeys[key] then
         local setFilter = record.container.SetAuraSlotFilterString
         local setCandidates = record.container.SetAuraSlotCandidateFilters
-        if type(setFilter) == "function" then
+        if reuse then
+          -- Presentation still runs below: palette/layout edits are independent.
+        elseif type(setFilter) == "function" then
           local filterOk = pcall(setFilter, record.container, key, filter)
           if not filterOk then
             self:RecordFailure("FILTER_REFRESH_FAILED", false)
@@ -470,7 +525,9 @@ function Engine:ConfigureCarrier(record, pack)
           self:RecordFailure("FILTER_REFRESH_UNAVAILABLE", false)
           configured = false
         end
-        if type(setCandidates) == "function" then
+        if reuse then
+          self.providerReuseCount = self.providerReuseCount + 1
+        elseif type(setCandidates) == "function" then
           local candidateOk = pcall(setCandidates, record.container, key, slot.candidateFilters)
           if not candidateOk then
             self:RecordFailure("PROVIDER_REFRESH_FAILED", false)
@@ -520,7 +577,7 @@ function Engine:ConfigureCarrier(record, pack)
       end
     end
   end
-  if type(record.container.SetAuraSlotCandidateFilters) == "function" then
+  if not reuse and type(record.container.SetAuraSlotCandidateFilters) == "function" then
     for key in pairs(record.slotKeys) do
       if not wanted[key] then
         local clearOk = pcall(record.container.SetAuraSlotCandidateFilters, record.container, key, {includeDispelTypes = {}})
@@ -532,8 +589,11 @@ function Engine:ConfigureCarrier(record, pack)
     end
   end
   if not configured then
+    record.providerSignature = nil
     return false
   end
+  record.providerSignature = signature
+  record.providerUnit = record.unit
   record.configuredGeneration = self.configurationGeneration
   record.configuredPackGeneration = self.desiredGeneration
   self.slotProviderRefreshGeneration = self.slotProviderRefreshGeneration + 1
@@ -649,6 +709,8 @@ function Engine:AssignCarrier(owner, unit)
     return self:FailClosed("CARRIER_DISABLE_FAILED", {record = record}), "CARRIER_DISABLE_FAILED"
   end
   local wasDeferred = record.pendingAssignment == true
+  -- Even a return to the same token is a native binding lifecycle transition.
+  record.providerSignature = nil
   local ok, assignReason = ns.SafeNativeSetUnit(container, unit)
   if not ok and (assignReason == "DEFERRED_COMBAT" or assignReason == "DEFERRED_RESTRICTION") then
     record.pendingUnit = unit
@@ -927,7 +989,7 @@ function Engine:GetCarrierTransactionCounts()
   return desired, active, configured, shown, pending, valid
 end
 
-function Engine:Configure(reason)
+function Engine:Configure(reason, allowReuse)
   if MutationBlocked() then
     return self:Defer(reason or "CONFIGURE_COMBAT")
   end
@@ -942,19 +1004,20 @@ function Engine:Configure(reason)
   local failedRecord
   for i = 1, #self.carriers do
     local record = self.carriers[i]
-    if not SetCarrierEnabled(record, false) then
+    if record.active ~= true and not SetCarrierEnabled(record, false) then
       configured = false
       failedRecord = record
       self:RecordFailure("CARRIER_DISABLE_FAILED", false)
       break
     end
-    if not self:ConfigureCarrier(record, pack) then
+    if not self:ConfigureCarrier(record, pack, allowReuse == true) then
       configured = false
       failedRecord = record
       break
     end
     if record.active == true and PublicUnitToken(record.unit) ~= nil then
-      if not SetCarrierEnabled(record, true) or not SetCarrierShown(record, true) then
+      if (not record.providerReused or record.enabled ~= true or record.shown ~= true)
+        and (not SetCarrierEnabled(record, true) or not SetCarrierShown(record, true)) then
         configured = false
         failedRecord = record
         self:RecordFailure("CARRIER_ENABLE_FAILED", false)
@@ -1005,6 +1068,9 @@ function Engine:Reconcile(reason, fromRegen, isRetry)
   if MutationBlocked() then
     return self:Defer(reason or "REFRESH_COMBAT")
   end
+  local allowReuse = self.state == STATES.READY and not fromRegen and not isRetry
+    and not self.failClosed and not self.pending
+    and not (type(reason) == "string" and (reason:find("WORLD", 1, true) or reason:find("RECOVER", 1, true)))
   self.reconciling = true
   if not isRetry then
     self:MarkDirty(reason or "REFRESH")
@@ -1068,8 +1134,21 @@ function Engine:Reconcile(reason, fromRegen, isRetry)
       end
     end
   end
-  local configured = not self.transactionFailed and self:Configure(reason)
+  local configured = not self.transactionFailed and self:Configure(reason, allowReuse)
   if configured then
+    -- A committed applied pack starts its own trace. Ordinary refreshes and
+    -- combat recovery of that same pack must preserve evidence and manual off.
+    local appliedPack = CurrentPack()
+    local tracePolicy = appliedPack and (not appliedPack.advanced or appliedPack.advanced.autoAuraTrace ~= false)
+    if appliedPack and (self.auraTracePack ~= appliedPack or self.auraTracePolicy ~= tracePolicy) then
+      if self:SetAuraTrace(tracePolicy) then
+        if self.auraTracePack ~= appliedPack and not tracePolicy then
+          self.auraTraceTotal, self.auraTraceCombat, self.auraTraceUnits = 0, 0, {}
+        end
+        self.auraTracePack = appliedPack
+        self.auraTracePolicy = tracePolicy
+      end
+    end
     self:ClearDirty()
     self.deferredStatus = nil
     self.retryAttempts = 0
@@ -1149,7 +1228,41 @@ function Engine:Reset()
   return true
 end
 
+function Engine:SetAuraTrace(enabled)
+  if not self.eventFrame then self:RegisterEvents() end
+  if not self.eventFrame then return false end
+  enabled = enabled == true
+  local method = enabled and self.eventFrame.RegisterEvent or self.eventFrame.UnregisterEvent
+  if type(method) ~= "function" or not pcall(method, self.eventFrame, "UNIT_AURA") then
+    self.auraTraceRegistrationFailures = self.auraTraceRegistrationFailures + 1
+    return false
+  end
+  if enabled then
+    self.auraTraceTotal, self.auraTraceCombat = 0, 0
+    self.auraTraceUnits = {}
+  end
+  self.auraTraceEnabled = enabled
+  return true
+end
+
 function Engine:OnEvent(event, arg1, arg2)
+  if event == "UNIT_AURA" then
+    if not self.auraTraceEnabled then return end
+    local unit = PublicUnitToken(arg1)
+    -- Bound the key space to canonical friendly roster tokens. Payload ignored.
+    if not unit then return end
+    local index = unit:match("^party(%d+)$") or unit:match("^partypet(%d+)$")
+    local raidIndex = unit:match("^raid(%d+)$") or unit:match("^raidpet(%d+)$")
+    if index and index ~= tostring(tonumber(index)) then return end
+    if raidIndex and raidIndex ~= tostring(tonumber(raidIndex)) then return end
+    if unit ~= "player" and unit ~= "pet"
+      and not (index and tonumber(index) >= 1 and tonumber(index) <= 4)
+      and not (raidIndex and tonumber(raidIndex) >= 1 and tonumber(raidIndex) <= 40) then return end
+    self.auraTraceTotal = self.auraTraceTotal + 1
+    if LockedDown() then self.auraTraceCombat = self.auraTraceCombat + 1 end
+    self.auraTraceUnits[unit] = (self.auraTraceUnits[unit] or 0) + 1
+    return
+  end
   if event == "PLAYER_REGEN_DISABLED" then
     self.combatEntryGeneration = self.combatEntryGeneration + 1
     self.nativeCombatGeneration = self.nativeCombatGeneration + 1
@@ -1296,6 +1409,8 @@ function Engine:Start()
 end
 
 function Engine:GetDiagnostics()
+  local auraTraceUnits = {}
+  for unit, count in pairs(self.auraTraceUnits) do auraTraceUnits[unit] = count end
   local categories = {player = 0, party = 0, raid = 0, pets = 0, other = 0}
   local assigned = 0
   local configured = 0
@@ -1435,6 +1550,13 @@ function Engine:GetDiagnostics()
     carrierGeneration = self.carrierGeneration,
     slotCreationGeneration = self.slotCreationGeneration,
     providerRefreshGeneration = self.providerRefreshGeneration,
+    providerReuseCount = self.providerReuseCount,
+    auraTraceEnabled = self.auraTraceEnabled,
+    auraTraceAutomatic = self.auraTracePolicy,
+    auraTraceRegistrationFailures = self.auraTraceRegistrationFailures,
+    auraTraceTotal = self.auraTraceTotal,
+    auraTraceCombat = self.auraTraceCombat,
+    auraTraceUnits = auraTraceUnits,
     presentationRegisteredSlotCount = presentationRegisteredSlots,
     presentationVisibilityGatedSlotCount = presentationVisibilityGatedSlots,
     configuredCarrierCount = configured,

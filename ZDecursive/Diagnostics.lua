@@ -1433,6 +1433,20 @@ local function ShowText(text)
   return pcall(frame.Show, frame)
 end
 
+-- Status messages belong in the report's bounded runtime log. They must not
+-- replace or open the copyable report window, and callers provide sanitized
+-- text that contains no unit names or other identities.
+local function AppendRuntimeMessage(message)
+  if IsSecret(message) or type(message) ~= "string" then
+    return false
+  end
+  AppendLog("NOTICE", message)
+  if window and window.IsShown and window:IsShown() then
+    pcall(RefreshWindow)
+  end
+  return true
+end
+
 local function RunHealthCheck(showWindow)
   local snapshot = BuildSnapshot()
   local result = EvaluateHealthCheck(snapshot)
@@ -1503,7 +1517,12 @@ local function RegisterSlashCommands()
   SLASH_ZDECURSIVEDIAGNOSTICS2 = "/zdiagnostics"
   SlashCmdList.ZDECURSIVEDIAGNOSTICS = function(message)
     local command = type(message) == "string" and message:match("^%s*(%S+)") or nil
-    if command and command:lower() == "health" then
+    if command and (command:lower() == "auraon" or command:lower() == "auraoff") then
+      if ns.DetectionEngine then
+        ns.DetectionEngine:SetAuraTrace(command:lower() == "auraon")
+      end
+      ShowWindow()
+    elseif command and command:lower() == "health" then
       RunHealthCheck(true)
     else
       ShowWindow()
@@ -1599,6 +1618,7 @@ local Diagnostics = {
   GetLastHealthCheckSummary = GetLastHealthCheckSummary,
   Show = ShowWindow,
   ShowText = ShowText,
+  AppendRuntimeMessage = AppendRuntimeMessage,
   RefreshWindow = RefreshWindow,
   ClearRuntimeLog = ClearRuntimeLog,
   TryInstallMenuButton = TryInstallMenuButton,

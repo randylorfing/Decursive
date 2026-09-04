@@ -30,6 +30,8 @@ Core.lua
 Lists.lua
 Detection.lua
 DetectionEngine.lua
+ClickBindings.lua
+KeyboardBindings.lua
 MUFPresentation.lua
 MUFs.lua
 LiveList.lua

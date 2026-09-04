@@ -59,9 +59,15 @@ Check(not source:find("ConfigureMUFNativePresentation", 1, true), "no public tes
 Check(bind:find("ns.ConfigureMUFDispelPresentation(slot, pack, cover, baseLevel, host, slotInfo)", 1, true), "MUF delegates type and priority metadata to isolated presentation seam")
 Check(bind:find('slot:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)', 1, true), "presented native aura owns the MUF tooltip")
 Check(bind:find("slot:SetHideTooltipInCombat(false)", 1, true), "presented aura tooltip remains available in combat")
-Check(bind:find("slot:SetMouseClickEnabled(false)", 1, true), "presented aura cannot consume secure clicks")
-Check(bind:find("slot:SetPropagateMouseClicks(true)", 1, true), "presented aura passes clicks to the secure MUF")
+Check(bind:find("PassClicks(slot)", 1, true), "presented aura delegates click pass-through to the shared combat-safe helper")
 Check(not bind:find("slot:CreateTexture", 1, true), "MUF binder does not create or inspect native slot regions")
+
+local passStart = assert(source:find("local function PassClicks", 1, true))
+local passEnd = assert(source:find("local function ColorOf", passStart, true))
+local passClicks = source:sub(passStart, passEnd - 1)
+Check(passClicks:find("frame:SetMouseClickEnabled(false)", 1, true), "shared helper prevents native providers from consuming secure clicks")
+Check(passClicks:find("frame:SetPropagateMouseClicks(true)", 1, true), "shared helper propagates clicks to the secure MUF")
+Check(passClicks:find("frame:EnableMouse(false)", 1, true), "shared helper disables native mouse capture outside lockdown")
 
 local presentation = Read("ZDecursive/MUFPresentation.lua")
 for _, token in ipairs({
@@ -92,7 +98,7 @@ Check(presentation:find("PRESENTATION.alpha", 1, true), "opaque presentation alp
 Check(presentation:find("texture.SetIgnoreParentAlpha", 1, true), "owned provider texture feature-detects parent-alpha isolation")
 Check(presentation:find("pcall(texture.SetIgnoreParentAlpha, texture, true)", 1, true), "owned provider texture bypasses ancestor alpha safely")
 Check(not presentation:find("owner:SetAlpha", 1, true), "MUF alpha is never changed globally")
-Check(source:find("btn.cooldownHost:SetFrameLevel", 1, true), "existing cooldown overlay has an explicit frame above fill")
+Check(not source:find("btn.cooldownHost", 1, true), "removed cooldown host path stays absent")
 Check(source:find("holder:SetFrameLevel", 1, true), "native cooldown gates have an explicit frame above fill")
 Check(source:find("btn.readabilityHost:SetFrameLevel", 1, true), "raid, text, and status readability layer remains above fill")
 Check(presentation:find("fillLevelOffset = 40", 1, true), "affliction frame is above ordinary managed state")

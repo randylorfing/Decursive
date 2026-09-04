@@ -52,11 +52,19 @@ local PRESENTATION = {
 	paletteRegistrationGeneration = 0,
 	paletteRefreshGeneration = 0,
 	paletteRefreshFailureCount = 0,
+  paletteColorMode = "MAP_FALLBACK",
+  paletteCurveFailureCount = 0,
 }
 
 ns.MUF_PRESENTATION = PRESENTATION
 
 local function DisableInteraction(frame)
+  if not frame then
+    return
+  end
+  if InCombatLockdown and InCombatLockdown() then
+    return
+  end
   if frame.EnableMouse then
     frame:EnableMouse(false)
   end
@@ -116,6 +124,29 @@ local function DispelColorMap(pack)
 		map[keys[1]] = Color(keys[2])
 	end
 	return map
+end
+
+local curveCache = {}
+local function DispelSlotCurve(dispelType, color, signature)
+  if not color or not C_CurveUtil or type(C_CurveUtil.CreateColorCurve) ~= "function" then
+    return nil
+  end
+  local cached = curveCache[dispelType]
+  if cached and cached.signature == signature then return cached.curve end
+  local ok, curve = pcall(function()
+    local result = C_CurveUtil.CreateColorCurve()
+    -- Each owned slot admits exactly one public configured dispel type.
+    -- Native visibility handles absence; the constant curve handles secret tint.
+    result:AddPoint(0, color)
+    result:AddPoint(255, color)
+    return result
+  end)
+  if not ok or not curve then
+    PRESENTATION.paletteCurveFailureCount = PRESENTATION.paletteCurveFailureCount + 1
+    return nil
+  end
+  curveCache[dispelType] = {signature = signature, curve = curve}
+  return curve
 end
 
 local function PreserveAssetStyle()
@@ -198,6 +229,10 @@ function ns.ConfigureMUFDispelPresentation(slot, pack, bounds, baseLevel, owner,
   if type(dispelType) == "string" and type(colorMap) == "table" then
     colorMap = {[dispelType] = colorMap[dispelType]}
   end
+  local colorCurve = type(dispelType) == "string" and colorMap
+    and DispelSlotCurve(dispelType, colorMap[dispelType], paletteSignature) or nil
+  PRESENTATION.paletteColorMode = colorCurve and "NATIVE_CONSTANT_CURVE" or "MAP_FALLBACK"
+  paletteSignature = paletteSignature .. ":" .. tostring(dispelType) .. ":" .. PRESENTATION.paletteColorMode
   local options = {
     showAlways = false,
     showWhenHarmful = true,
@@ -205,6 +240,7 @@ function ns.ConfigureMUFDispelPresentation(slot, pack, bounds, baseLevel, owner,
     showWithoutDispelType = false,
     style = style,
     customDispelColorMap = colorMap,
+    customDispelColorCurve = colorCurve,
   }
   if not slot.AddDispelTypeTexture then
     return nil

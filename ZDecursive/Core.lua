@@ -610,6 +610,62 @@ function Decursive:OnInitialize()
       ns.PrintAuraSoundDiagnostics()
     end
   end)
+
+  self:RegisterChatCommand("dcrshow", function()
+    local pack = self:GetEditingPack()
+    if not pack or type(pack.mufs) ~= "table" then
+      self:Print("no editing pack")
+      return
+    end
+    pack.mufs.show = true
+    if ns.RefreshMUFs then
+      ns.RefreshMUFs()
+    end
+    self:Print("MUFs shown (editing pack)")
+  end)
+
+  self:RegisterChatCommand("dcrhide", function()
+    local pack = self:GetEditingPack()
+    if not pack or type(pack.mufs) ~= "table" then
+      self:Print("no editing pack")
+      return
+    end
+    pack.mufs.show = false
+    if ns.RefreshMUFs then
+      ns.RefreshMUFs()
+    end
+    self:Print("MUFs hidden (editing pack)")
+  end)
+
+  self:RegisterChatCommand("dcrshoworder", function()
+    if not ns.BuildRoster then
+      self:Print("BuildRoster unavailable")
+      return
+    end
+    local units = ns.BuildRoster()
+    if type(units) ~= "table" or #units == 0 then
+      self:Print("roster empty")
+      return
+    end
+    local parts = {}
+    for i = 1, #units do
+      local u = units[i]
+      local name = UnitName and UnitName(u)
+      parts[#parts + 1] = string.format("%d:%s%s", i, tostring(u), name and ("=" .. name) or "")
+    end
+    self:Print("order " .. table.concat(parts, " "))
+  end)
+
+  self:RegisterChatCommand("zddb", function()
+    if ns.PrintAddonStatus then
+      ns.PrintAddonStatus()
+    elseif ns.PrintDiagnostics then
+      ns.PrintDiagnostics()
+    else
+      self:Print("status dump unavailable")
+    end
+  end)
+
   if ns.Diagnostics then
     ns.Diagnostics.State.coreInitialize = "success"
     ns.DiagnosticCheckpoint("core", "Core OnInitialize success")

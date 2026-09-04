@@ -301,7 +301,9 @@ verify("default tertiary remains on Ctrl+Left", 3, clickButton.cureRows["ctrl-%s
 verify("restoring defaults clears Ctrl+Right fallback", nil, clickButton.attributes["ctrl-type2"])
 verify("restoring defaults clears Shift+Left fallback", nil, clickButton.attributes["shift-type1"])
 local assignedCures = 0
-for _ in pairs(clickButton.cureRows) do assignedCures = assignedCures + 1 end
+for _, row in pairs(clickButton.cureRows) do
+  if row then assignedCures = assignedCures + 1 end
+end
 verify("AUTO retains its three-cure limit", 3, assignedCures)
 ns.GetKnownCures = realKnownCures
 

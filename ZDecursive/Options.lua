@@ -516,6 +516,7 @@ local function SetMouseAction(key)
       pack.mouse = {}
     end
     pack.mouse[key] = value
+    if ns.SetClickBindingOverride then ns.SetClickBindingOverride(pack, key, "DEFAULT") end
     NotifyPack()
   end
 end
@@ -524,9 +525,18 @@ local function ManualClickActions()
   return ns.GetManualClickActions and ns.GetManualClickActions(Pack()) or {}
 end
 
+local editingModifier = "NONE"
+local keyboardInputError
+
+local function SelectedGesture(button)
+  return ns.ClickBindingKey and ns.ClickBindingKey(editingModifier, button)
+end
+
 local function GetMouseBinding(button)
   return function()
     local pack = Pack()
+    local gesture = SelectedGesture(button)
+    if gesture then return ns.GetClickBindingOverride(pack, gesture) or "DEFAULT" end
     local mouse = pack.mouse or {}
     if RESERVED_MOUSE[button] then
       return RESERVED_MOUSE[button]
@@ -556,6 +566,17 @@ end
 
 local function MouseBindingChoices(button)
   return function()
+    if SelectedGesture(button) then
+      local values = {
+        DEFAULT = "Default (AUTO / MANUAL)", NONE = "No action",
+        CURE1 = "First available cure", CURE2 = "Second available cure", CURE3 = "Third available cure",
+        TARGET = "Target", FOCUS = "Focus", ASSIST = "Assist",
+      }
+      for _, action in ipairs(ManualClickActions()) do values[action.key] = action.name end
+      local selected = GetMouseBinding(button)()
+      if not values[selected] then values[selected] = "Unavailable (" .. tostring(selected) .. ")" end
+      return values
+    end
     if RESERVED_MOUSE[button] then
       return {TARGET = "Target (fixed)"}
     end
@@ -580,6 +601,12 @@ end
 
 local function SetMouseBinding(button)
   return function(value)
+    local gesture = SelectedGesture(button)
+    if gesture then
+      if not OptionsAccessAllowed("MOUSE_BINDING") or not MouseBindingChoices(button)()[value] then return end
+      if ns.SetClickBindingOverride(Pack(), gesture, value) then NotifyPack() end
+      return
+    end
     if not OptionsAccessAllowed("MOUSE_BINDING") or RESERVED_MOUSE[button] then
       return
     end
@@ -614,6 +641,37 @@ local function SetMouseBinding(button)
     end
     NotifyPack()
   end
+end
+
+local function SetKeyboardKey(raw)
+  if not OptionsAccessAllowed("KEYBOARD_BINDING") then return end
+  if not ns.NormalizeKeyboardKey then return end
+  local key, err = ns.NormalizeKeyboardKey(raw)
+  if not key then
+    keyboardInputError = err or "Enter one keyboard key, for example F8."
+    if ns.RefreshOptions then ns.RefreshOptions() end
+    return
+  end
+  keyboardInputError = nil
+  Pack().cure.keyboardKey = key
+  NotifyPack()
+  if ns.RefreshOptions then ns.RefreshOptions() end
+end
+
+local function SetKeyboardToggle(key)
+  return function(value)
+    if not OptionsAccessAllowed("KEYBOARD_BINDING") then return end
+    keyboardInputError = nil
+    Pack().cure[key] = value == true
+    NotifyPack()
+    if ns.RefreshOptions then ns.RefreshOptions() end
+  end
+end
+
+local function KeyboardStatusText()
+  if keyboardInputError then return keyboardInputError end
+  local status = ns.GetKeyboardBindingStatus and ns.GetKeyboardBindingStatus()
+  return status and status.message or "Disabled"
 end
 
 local function AfterPackChange()
@@ -960,11 +1018,18 @@ local CATALOG = {
   end},
   {page = "cure", label = "Add custom dispel spell", kind = "text", get = function() return "" end, set = AddCustomSpellFromUI},
   {page = "cure", label = "Remove custom dispel spell", kind = "text", get = CustomSpellSummary, set = RemoveCustomSpellFromUI},
+  {page = "cure", label = "Mouse modifier", description = "Choose the modifier combination to edit below. Default keeps your existing AUTO or MANUAL mapping. Explicit assignments override it in either mode; No action disables that gesture. Unassigned modifiers inherit the unmodified button unless AUTO supplies a specific mapping.", kind = "choice", values = ns.ClickBindingModifiers or {NONE = "None"}, get = function() return editingModifier end, set = function(value)
+    if OptionsAccessAllowed("CLICK_MODIFIER") and ns.ClickBindingModifiers and ns.ClickBindingModifiers[value] then editingModifier = value end
+  end},
   {page = "cure", label = "Left click", kind = "choice", values = MouseBindingChoices("left"), get = GetMouseBinding("left"), set = SetMouseBinding("left"), manualBinding = true},
   {page = "cure", label = "Right click", kind = "choice", values = MouseBindingChoices("right"), get = GetMouseBinding("right"), set = SetMouseBinding("right"), manualBinding = true},
   {page = "cure", label = "Middle click", kind = "choice", values = MouseBindingChoices("middle"), get = GetMouseBinding("middle"), set = SetMouseBinding("middle"), manualBinding = true},
   {page = "cure", label = "Button 4", kind = "choice", values = MouseBindingChoices("button4"), get = GetMouseBinding("button4"), set = SetMouseBinding("button4"), manualBinding = true},
   {page = "cure", label = "Button 5", kind = "choice", values = MouseBindingChoices("button5"), get = GetMouseBinding("button5"), set = SetMouseBinding("button5"), manualBinding = true},
+  {page = "cure", label = "Keyboard mouseover casting", description = "Enable the chosen key in this environment. Key: first available cure. Ctrl+key: second. Shift+key: third. Casts only at a living friendly mouseover, with no target or self fallback.", kind = "toggle", get = PathGet("cure", "keyboardEnabled"), set = SetKeyboardToggle("keyboardEnabled")},
+  {page = "cure", label = "Keyboard key", description = "Enter one unmodified keyboard key, for example F8. Ctrl and Shift variants use the second and third available cures. Leave empty to clear.", kind = "text", get = PathGet("cure", "keyboardKey"), set = SetKeyboardKey},
+  {page = "cure", label = "Override existing key bindings", description = "Allow this environment's keyboard casting to temporarily replace existing key assignments. Disabling keyboard casting restores the underlying bindings. Other addons may still take precedence while hovering their frames.", kind = "toggle", get = PathGet("cure", "keyboardOverride"), set = SetKeyboardToggle("keyboardOverride")},
+  {page = "cure", label = "Active keyboard binding", description = "Reports the applied environment's keyboard bindings. Changes to another editing environment take effect when that environment is applied.", kind = "readout", get = KeyboardStatusText},
 
   {page = "color", label = "Dead / ghost / offline", kind = "color", get = PathGet("colors", "dead"), set = PathSet("colors", "dead")},
   {page = "color", label = "Out of range", description = "RGB color only. Out-of-range dim controls brightness exactly once.", kind = "color", hasOpacity = false, get = PathGet("colors", "range"), set = PathSet("colors", "range")},
@@ -984,9 +1049,99 @@ local CATALOG = {
   {page = "alerts", label = "Live list opacity", kind = "slider", min = 0.2, max = 1, step = 0.05, get = PathGet("alerts", "liveListAlpha"), set = PathSet("alerts", "liveListAlpha")},
 
   {page = "advanced", label = "Allow macro editing", kind = "toggle", get = PathGet("advanced", "allowMacroEdit"), set = PathSet("advanced", "allowMacroEdit")},
+  {page = "advanced", label = "Automatic aura diagnostics", description = "Starts fresh aura-update event counts when this environment becomes active. Helps investigate missed indicators without reading protected aura contents or changing cures. On by default. Turn off to stop automatic counting; inspect results with /zdiag. Editing an inactive environment takes effect when it becomes active. /zdiag auraoff pauses counting until the next environment change.", kind = "toggle", get = function() return Pack().advanced.autoAuraTrace ~= false end, set = PathSet("advanced", "autoAuraTrace")},
   {page = "advanced", label = "Custom macro", kind = "text", get = PathGet("advanced", "customMacro"), set = SetCustomMacro},
 }
 
+
+local OPTION_HELP = {
+  ["Show MUFs"] = "Shows the small clickable unit squares used to cast your configured cures. Auto-hide rules can also hide them.",
+  ["Lock position"] = "Prevents moving the MUF group by dragging its handle. Unlock to reposition it outside combat.",
+  ["MUF hover tooltip"] = "Requests the native aura tooltip on afflicted squares. Availability depends on native slot mouse-motion support; this does not change cure bindings.",
+  ["Status indicator light"] = "Shows the MUF group's small status light to help identify its current operating state.",
+  ["Party MUF size"] = "Sets the width and height of each unit square in a party, before MUF scale is applied.",
+  ["Raid MUF size"] = "Sets the width and height of each unit square in a raid, before MUF scale is applied.",
+  ["Link horizontal and vertical spacing"] = "Keeps both spacing values equal. Changing either spacing control updates the other while linked.",
+  ["Horizontal spacing"] = "Sets the gap between neighboring MUF columns. Linked spacing also changes the vertical gap.",
+  ["Vertical spacing"] = "Sets the gap between neighboring MUF rows. Linked spacing also changes the horizontal gap.",
+  ["Grow upward"] = "Places additional rows above the group anchor instead of below it.",
+  ["Grow from right edge"] = "Places additional columns to the left of the group anchor instead of to the right.",
+  ["Units per line"] = "Sets how many unit squares fit before wrapping to the next row or column, according to orientation.",
+  ["Show MUF border"] = "Displays borders around the unit squares. Border opacity is configured on the Color page.",
+  ["Inactive opacity"] = "Sets the opacity used for inactive MUF presentation. Lower values make it more transparent.",
+  ["MUF order"] = "Chooses the ordering rule for displayed group members. Roster changes are applied outside combat.",
+  ["Include player"] = "Includes your own character among the displayed unit squares.",
+  ["Include pets"] = "Includes eligible pets with their owners in the MUF roster. Cure pets separately controls pet curing.",
+  ["Center on player"] = "Uses the player-centered sorting option when arranging the MUF roster.",
+  ["Skip dead and offline"] = "Excludes dead or offline members when rebuilding the roster. Combat defers roster changes.",
+  ["Click mode"] = "AUTO assigns cures by priority. MANUAL uses per-button assignments. Explicit modifier assignments can override either mode.",
+  ["Detection filter"] = "By me limits actionable detection to your known targeted cures. All actionable includes enabled Magic, Curse, Poison and Disease types, even if you cannot cure them.",
+  ["Healthy MUF"] = "Sets the square's healthy-state fill color. Healthy center opacity controls its transparency.",
+  ["Afflicted MUF"] = "Sets the general afflicted-state color. Native dispel-type fills use the individual Magic, Curse, Poison and Disease colors.",
+  ["Healthy center opacity"] = "Sets how opaque the center of a healthy square is. Zero is transparent; one is fully opaque.",
+  ["Class border opacity"] = "Sets the opacity of class-colored MUF borders. Zero is transparent; one is fully opaque.",
+  ["Display mode"] = "Timed hides the landing DISPEL text after its duration. Until cleared lets the native aura provider control how long it remains visible.",
+  ["Display duration"] = "Sets how many seconds a timed landing DISPEL alert stays visible. Until cleared uses native aura visibility instead.",
+  ["Text size"] = "Sets the font size of the landing DISPEL alert. Use Test Text to preview it.",
+  ["Text color"] = "Sets the landing DISPEL alert color. Use Test Text to preview the editing environment.",
+  ["PvP text"] = "Controls PvP-specific text alert behavior. Landing DISPEL and successful-cure text have their own switches.",
+  ["Text alerts"] = "Enables general text alerts, including the landing DISPEL alert. Individual alert switches also determine which messages appear.",
+  ["Chat status messages"] = "Enables ordinary status messages for the configured diagnostic/custom-window output routes. Error messages have a separate switch.",
+  ["Dispel sound"] = "Enables sounds for dispel opportunities. Choose the sound and playback channel below.",
+  ["Sound"] = "Selects the sound preset used for dispel alerts. Test Sound previews the current selection.",
+  ["Sound channel"] = "Selects the WoW audio channel used for alert playback. That channel's volume and mute settings affect what you hear.",
+  ["Cure-failure sound"] = "Plays an error sound when a cure attempt reports a supported failure.",
+  ["Test Sound"] = "Plays a sample through the sound test path so you can check your alert audio.",
+  ["Cooldown overlay"] = "Shows cooldown shading on MUFs when a configured cure is cooling down. Dead/offline presentation suppresses it.",
+  ["Countdown numbers"] = "Requests remaining cooldown numbers on the cooldown display. Cooldown overlay must also be enabled.",
+  ["Overlay darkness"] = "Sets cooldown shading strength. Zero adds no darkness; one uses full opacity.",
+  ["Out-of-range status"] = "Enables range status feedback. The MUF dim controls determine how out-of-range squares look.",
+  ["Auto-hide MUFs"] = "Never keeps MUFs eligible to show; When solo hides them outside a group; Always hide hides them in this environment.",
+  ["Hide move handle"] = "Hides the group's drag handle. Turn this off and unlock position when you need to move the MUFs.",
+  ["Show help text"] = "Displays MUF help text near the group. This does not control the settings descriptions shown on hover.",
+  ["Center unit name"] = "Displays the unit's name in the center of its MUF when that information is available.",
+  ["Show stealth status"] = "Shows supported stealth-state feedback on MUFs when the client exposes that state.",
+  ["MUF scale"] = "Scales the whole MUF group. One is normal size; larger values enlarge it.",
+  ["Dim out of range"] = "Dims unit squares when range information reports that they are outside cure range.",
+  ["Out-of-range dim"] = "Sets the brightness used for out-of-range squares. Lower values make them darker.",
+  ["Share cooldown with same-priority MUFs"] = "Shows the cure cooldown across MUFs using that same cure priority, rather than only the clicked square.",
+  ["Clear cleansed target immediately"] = "Omits cooldown shading on the square you just cured. Other same-priority squares can still show it. Native aura updates decide whether an affliction remains.",
+  ["Soul Link fallback"] = "Allows the supported Soul Link fallback in the generated click action when applicable to your character.",
+  ["Tie center and border opacity"] = "Uses linked center and border opacity behavior so the MUF's fill and border remain visually consistent.",
+  ["Cure pets"] = "Allows eligible pet units in cure behavior. Include pets controls whether pets are displayed.",
+  ["Custom spell type"] = "Chooses the cure category for the next custom dispel spell you add.",
+  ["Add custom dispel spell"] = "Adds a custom spell using the selected cure type. Enter a valid spell ID recognized by the client.",
+  ["Remove custom dispel spell"] = "Removes an entry from your custom dispel spell list. Enter the spell ID to remove.",
+  ["Dead / ghost / offline"] = "Sets the fill color behind the skull for dead, ghost or offline units. This state takes precedence over cooldown shading.",
+  ["Stealth"] = "Sets the color used for supported stealth-state presentation.",
+  ["Show in copyable diagnostics"] = "Routes eligible status messages into the copyable diagnostics report opened with /zdiag.",
+  ["Print to custom window"] = "Routes eligible status messages to the addon's custom text window.",
+  ["Print errors"] = "Includes error messages in the configured message output routes.",
+  ["Native 12.1 aura sounds"] = "Uses Blizzard's native aura-sound registrations for supported dispel alerts. Playback follows native aura events and does not use the Lua fallback debounce.",
+  ["Live list"] = "Shows the separate live-list display for this environment. It uses the native detection provider.",
+  ["Live list only in range"] = "Restricts the live-list display using supported range information.",
+  ["Live list rows"] = "Sets the maximum number of rows in the live-list display.",
+  ["Live list scan (seconds)"] = "Sets the live-list maintenance interval. Smaller values update its supporting state more often; native aura detection remains event-driven.",
+  ["Reverse live list"] = "Reverses the live-list display direction.",
+  ["Live list scale"] = "Scales the separate live-list window. One is normal size.",
+  ["Live list opacity"] = "Sets how opaque the live-list window is. Lower values make it more transparent.",
+  ["Allow macro editing"] = "Unlocks the custom macro editor. Custom macro text can change the generated cure action; leave disabled to use normal bindings.",
+  ["Custom macro"] = "Edits the custom macro text used by supported cure bindings. Include UNITID where the unit token belongs. Allow macro editing must be enabled first; leave the text empty to use normal generated actions.",
+}
+
+for _, spec in ipairs(CATALOG) do
+  if not spec.description then
+    if spec.manualBinding then
+      spec.description = "Assigns " .. spec.label .. " with the selected Mouse modifier. Default follows AUTO/MANUAL bindings; No action disables this gesture. Changes belong to the editing environment."
+    elseif spec.kind == "color" and (spec.label == "Magic" or spec.label == "Curse" or spec.label == "Poison" or spec.label == "Disease") then
+      spec.description = "Sets the MUF fill color for " .. spec.label .. " afflictions. Cure priority determines which type appears on top when more than one is present."
+    elseif spec.page == "cure" and (spec.label == "Magic" or spec.label == "Curse" or spec.label == "Poison" or spec.label == "Disease") then
+      spec.description = "Includes " .. spec.label .. " in this environment's actionable cure types. The Detection filter also determines whether your character must have a suitable cure."
+    else
+      spec.description = OPTION_HELP[spec.label]
+    end
+  end
+end
 
 local ROW_META = {
   ["mufs|Show MUFs"] = {group = "Display", simple = true},
@@ -1024,6 +1179,11 @@ local ROW_META = {
   ["sorting|Skip dead and offline"] = {group = "Roster"},
   ["cure|Click mode"] = {group = "Clicks", simple = true},
   ["cure|Detection filter"] = {group = "Clicks", simple = true},
+  ["cure|Mouse modifier"] = {group = "Clicks", simple = true},
+  ["cure|Keyboard mouseover casting"] = {group = "Keyboard", simple = true},
+  ["cure|Keyboard key"] = {group = "Keyboard", simple = true},
+  ["cure|Override existing key bindings"] = {group = "Keyboard", simple = true},
+  ["cure|Active keyboard binding"] = {group = "Keyboard", simple = true},
   ["cure|Left click"] = {group = "Clicks"},
   ["cure|Right click"] = {group = "Clicks"},
   ["cure|Middle click"] = {group = "Clicks"},
@@ -1080,16 +1240,17 @@ local ROW_META = {
   ["alerts|Live list scale"] = {group = "Live list"},
   ["alerts|Live list opacity"] = {group = "Live list"},
   ["advanced|Allow macro editing"] = {group = "Engine"},
+  ["advanced|Automatic aura diagnostics"] = {group = "Diagnostics", simple = true},
   ["advanced|Custom macro"] = {group = "Engine"},
 }
 
 local GROUP_ORDER = {
   mufs = {"Display", "Size", "Spacing", "Layout", "Look", "Status"},
   sorting = {"Roster"},
-  cure = {"Types", "Clicks", "Rules", "Custom"},
+  cure = {"Types", "Clicks", "Keyboard", "Rules", "Custom"},
   color = {"Afflictions", "Squares"},
   alerts = {"Text Alerts", "Sound", "Cooldown", "Chat", "Live list"},
-  advanced = {"Engine"},
+  advanced = {"Diagnostics", "Engine"},
 }
 
 for _, spec in ipairs(CATALOG) do
@@ -1195,6 +1356,7 @@ local function OpenChoiceMenu(anchor, values, get, set)
     return false
   end
   local editingPack = Pack()
+  local modifierAtOpen = editingModifier
   values = type(values) == "function" and values() or values
   MenuUtil.CreateContextMenu(anchor, function(_, root)
     local current = get()
@@ -1202,7 +1364,7 @@ local function OpenChoiceMenu(anchor, values, get, set)
       root:CreateRadio(label, function()
         return current == key
       end, function()
-        if OptionsAccessAllowed("CHOICE_MENU_SELECT") and Pack() == editingPack then
+        if OptionsAccessAllowed("CHOICE_MENU_SELECT") and Pack() == editingPack and editingModifier == modifierAtOpen then
           set(key)
           ns.RefreshOptions()
         end
@@ -1284,7 +1446,7 @@ local function RowVisible(spec)
   if spec.hideEnv and spec.hideEnv[env] then
     return false
   end
-  if spec.manualBinding and Pack().cure.mode == "MANUAL" then
+  if spec.manualBinding and (ns.ClickBindingModifiers or Pack().cure.mode == "MANUAL") then
     return true
   end
   local searching = ui.search and ui.search ~= ""
@@ -1942,6 +2104,8 @@ local function Refresh()
       bind.widget:SetText(values[v] or tostring(v))
     elseif bind.kind == "color" then
       bind.widget:SetColor(bind.get())
+    elseif bind.kind == "readout" then
+      bind.widget:SetText(bind.get() or "")
     elseif bind.kind == "text" then
       if bind.label == "Custom macro" then
         local advanced = Pack().advanced
@@ -2108,8 +2272,18 @@ local function BindRow(parent, y, spec)
           return
         end
       end
-      ShowModal(spec.label, spec.get() or "", spec.set)
+      local editingPack = Pack()
+      ShowModal(spec.label, spec.get() or "", function(value)
+        if Pack() == editingPack then spec.set(value) end
+      end)
     end)
+  elseif spec.kind == "readout" then
+    widget = Font(row, "GameFontHighlightSmall", "")
+    widget:SetPoint("RIGHT", -12, 0)
+    widget:SetWidth(440)
+    widget:SetHeight(38)
+    widget:SetJustifyH("RIGHT")
+    widget:SetWordWrap(true)
   elseif spec.kind == "button" then
     widget = MakeButton(row, spec.buttonLabel or "Test", 88, "gold")
     widget:SetPoint("RIGHT", -12, 0)
@@ -2120,6 +2294,15 @@ local function BindRow(parent, y, spec)
     end)
   end
   ui.binds[#ui.binds + 1] = {kind = spec.kind, widget = widget, get = spec.get, set = spec.set, values = spec.values, label = spec.label}
+  if widget and type(widget.HookScript) == "function" and spec.kind ~= "readout" and spec.description then
+    widget:HookScript("OnEnter", function(self)
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      GameTooltip:SetText(spec.label)
+      GameTooltip:AddLine(spec.description, 1, 1, 1, true)
+      GameTooltip:Show()
+    end)
+    widget:HookScript("OnLeave", function() GameTooltip:Hide() end)
+  end
   return row
 end
 

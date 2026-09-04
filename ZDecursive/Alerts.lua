@@ -914,6 +914,17 @@ local function EnsurePrintFrame()
   return printFrame
 end
 
+local function RecordCopyableAlertText(text)
+  if type(text) ~= "string" then
+    return false
+  end
+  if ns.Diagnostics and type(ns.Diagnostics.AppendRuntimeMessage) == "function" then
+    return ns.Diagnostics.AppendRuntimeMessage(text) == true
+  end
+  return false
+end
+
+-- Explicit slash/help reports still intentionally use the copyable report view.
 local function ShowCopyableAlertText(text)
   if type(text) ~= "string" then
     return false
@@ -924,7 +935,7 @@ local function ShowCopyableAlertText(text)
   return false
 end
 
-local function PrintLine(message, isError, pack)
+local function PrintLine(message, isError, pack, diagnosticMessage)
   if not pack.alerts then
     return
   end
@@ -936,7 +947,7 @@ local function PrintLine(message, isError, pack)
   end
   local line = "|cff51dbd1Decursive|r: " .. message
   if pack.alerts.printChat ~= false then
-    ShowCopyableAlertText(line)
+    RecordCopyableAlertText(diagnosticMessage or (isError and "ZDecursive error status emitted" or "ZDecursive status emitted"))
   end
   if pack.alerts.printCustom then
     local f = EnsurePrintFrame()
@@ -1081,7 +1092,7 @@ local function ShowSoulLinkWarning(destName)
   textFont:SetText("Battle rez: move within range of " .. who .. "!")
   textFrame:Show()
   hideAt = (GetTime and GetTime() or 0) + 2.5
-  PrintLine("Battle rez: move within range of " .. who, false, pack)
+  PrintLine("Battle rez: move within range of " .. who, false, pack, "Battle rez range warning emitted")
 end
 
 function ns.BeginSoulLinkAttempt(unit)
