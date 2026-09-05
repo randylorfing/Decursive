@@ -59,7 +59,7 @@ Check(not source:find("ConfigureMUFNativePresentation", 1, true), "no public tes
 Check(bind:find("ns.ConfigureMUFDispelPresentation(slot, pack, cover, baseLevel, host, slotInfo)", 1, true), "MUF delegates type and priority metadata to isolated presentation seam")
 Check(bind:find('slot:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)', 1, true), "presented native aura owns the MUF tooltip")
 Check(bind:find("slot:SetHideTooltipInCombat(false)", 1, true), "presented aura tooltip remains available in combat")
-Check(bind:find("PassClicks(slot)", 1, true), "presented aura delegates click pass-through to the shared combat-safe helper")
+Check(bind:find("PassClicks(slot, tooltipEnabled)", 1, true), "presented aura delegates native hover and click pass-through to the shared helper")
 Check(not bind:find("slot:CreateTexture", 1, true), "MUF binder does not create or inspect native slot regions")
 
 local passStart = assert(source:find("local function PassClicks", 1, true))
@@ -68,6 +68,7 @@ local passClicks = source:sub(passStart, passEnd - 1)
 Check(passClicks:find("frame:SetMouseClickEnabled(false)", 1, true), "shared helper prevents native providers from consuming secure clicks")
 Check(passClicks:find("frame:SetPropagateMouseClicks(true)", 1, true), "shared helper propagates clicks to the secure MUF")
 Check(passClicks:find("frame:EnableMouse(false)", 1, true), "shared helper disables native mouse capture outside lockdown")
+Check(passClicks:find("frame:SetMouseMotionEnabled(tooltipEnabled == true)", 1, true), "native hover is independent of clicks")
 
 local presentation = Read("ZDecursive/MUFPresentation.lua")
 for _, token in ipairs({
@@ -106,8 +107,9 @@ Check(presentation:find("deathLevelOffset = 44", 1, true), "death frame level is
 Check(source:find("btn.deathHost:SetFrameLevel", 1, true), "death fill uses an authoritative frame host")
 Check(source:find('btn.rangeHost = CreateFrame("Frame", nil, btn.managedHost)', 1, true), "range texture owns an isolated composition host")
 Check(source:find("btn.rangeOverlay:SetColorTexture(COLOR_RANGE_OVERLAY[1], COLOR_RANGE_OVERLAY[2], COLOR_RANGE_OVERLAY[3], 1)", 1, true), "range texture initializes with intrinsic alpha one")
-Check(source:find("holder:SetAlphaFromBoolean(NormalizeBooleanWidgetValue(inRange), 0, 1)", 1, true), "range composition host is an opaque visibility gate")
-Check(source:find("(color[1] or 0) * dimAmount", 1, true), "range dim applies once as RGB brightness")
+Check(source:find('ManagedSet(holder, "SetAlphaFromBoolean", NormalizeBooleanWidgetValue(inRange), 0, 1)', 1, true), "range composition host keeps native opaque visibility gating through the public setter cache")
+Check(not source:find("(color[1] or 0) * dimAmount", 1, true), "underlying range color is never dimmed a second time")
+Check(presentation:find("pcall(host.SetAlphaFromBoolean, host, inRange, 0, opacity)", 1, true), "whole-MUF shade owns the one range brightness gate")
 Check(not source:find("texture:SetAlphaFromBoolean(NormalizeBooleanWidgetValue(inRange)", 1, true), "range texture never receives the dim alpha")
 Check(source:find('btn.deadFill = btn.deathHost:CreateTexture(nil, "ARTWORK", nil, 0)', 1, true), "death texture sublevel stays inside the WoW -8..7 contract")
 Check(source:find('btn.skullTex = btn.readabilityHost:CreateTexture', 1, true), "death skull remains above cooldown overlays")
@@ -115,12 +117,13 @@ Check(source:find("btn.deadFill:SetAllPoints(btn.fillTex)", 1, true), "death fil
 
 local options = Read("ZDecursive/Options.lua")
 Check(options:find('label = "Dead / ghost / offline", kind = "color", get = PathGet("colors", "dead"), set = PathSet("colors", "dead")', 1, true), "each editing environment exposes a dedicated death color picker")
-Check(options:find('label = "Out of range", description = "RGB color only. Out-of-range dim controls brightness exactly once.", kind = "color", hasOpacity = false', 1, true), "range color picker is RGB-only")
+Check(options:find('label = "Out of range", description = "Underlying RGB color for unafflicted out-of-range squares. Out-of-range brightness dims the whole MUF once, including affliction colors, icons and countdown numbers.", kind = "color", hasOpacity = false', 1, true), "range color picker is RGB-only")
 
 local toc = Read("ZDecursive/ZDecursive.toc")
 Check(toc:find("MUFPresentation.lua", 1, true), "presentation seam is in explicit load order")
 local packagedVersionToken = "@" .. "project-version" .. "@"
-Check(toc:find("## Version: " .. packagedVersionToken, 1, true), "release version remains owned by the packager token")
+local version = toc:match("## Version: ([^\r\n]+)")
+Check(version == packagedVersionToken or (version and version:match("^v%d+%.%d+%.%d+%-Alpha")), "TOC carries the packager token or a rendered alpha version")
 
 local lists = Read("ZDecursive/Lists.lua")
 Check(not lists:find("DandersFrames.*SetParent"), "Danders adapter does not reparent frames")

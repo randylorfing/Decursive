@@ -44,6 +44,25 @@ local STATUS = {
   FAILURE = "FAILURE",
 }
 
+local STATUS_SEVERITY = {
+  SUCCESS = 0, DEFERRED_RESTRICTED = 1, DEFERRED_COMBAT = 2, FAILURE = 3,
+}
+
+local function StrongerStatus(left, right)
+  return (STATUS_SEVERITY[right] or 3) > (STATUS_SEVERITY[left] or 3) and right or left
+end
+
+-- Initializers historically return nil; consumer refreshes require explicit success.
+local function CallbackStatus(ok, result, status, allowNil)
+  if not ok then return STATUS.FAILURE end
+  if status == STATUS.FAILURE or result == STATUS.FAILURE then return STATUS.FAILURE end
+  if status == STATUS.DEFERRED_COMBAT or result == STATUS.DEFERRED_COMBAT then return STATUS.DEFERRED_COMBAT end
+  if status == STATUS.DEFERRED_RESTRICTED or result == STATUS.DEFERRED_RESTRICTED then return STATUS.DEFERRED_RESTRICTED end
+  if result == false then return STATUS.FAILURE end
+  if result == true or result == STATUS.SUCCESS or allowNil and result == nil then return STATUS.SUCCESS end
+  return STATUS.FAILURE
+end
+
 local REQUIRED_CONSUMERS = {"MUFs", "Alerts", "LiveList"}
 local REQUIRED_CONSUMER_SET = {MUFs = true, Alerts = true, LiveList = true}
 
@@ -75,6 +94,7 @@ local Engine = {
   reconciling = false,
   preparingConsumers = false,
   transactionFailed = false,
+  scopedFailureConsumers = {},
   failClosed = false,
   desiredGeneration = 0,
   configuredPackGeneration = 0,
@@ -95,6 +115,10 @@ local Engine = {
   dirtyGeneration = 0,
   committedGeneration = 0,
   itemActionRefreshScheduled = false,
+  capabilityRefreshPending = false,
+  capabilityRefreshScheduled = false,
+  capabilityRefreshToken = 0,
+  capabilityRefreshReasons = {},
   providerReuseCount = 0,
   auraTraceEnabled = false,
   auraTraceTotal = 0,
@@ -147,6 +171,22 @@ local function CurrentPack()
   end
   if type(ns.PACK) == "table" then
     return ns.PACK
+  end
+  return nil
+end
+
+local function ItemActionSignature()
+  if type(ns.GetDetectionItemActionSignature) ~= "function" then
+    return nil
+  end
+  local ok, signature = pcall(ns.GetDetectionItemActionSignature)
+  if ok and type(signature) == "string" then
+    if type(ns.GetBandageInventorySignature) == "function" then
+      local bandageOK, bandageSignature = pcall(ns.GetBandageInventorySignature)
+      if not bandageOK or type(bandageSignature) ~= "string" then return nil end
+      return signature .. "|bandages:" .. bandageSignature
+    end
+    return signature
   end
   return nil
 end
@@ -255,7 +295,7 @@ end
 function Engine:Defer(reason)
   self:MarkDirty(reason)
   self.deferredStatus = LockedDown() and STATUS.DEFERRED_COMBAT or STATUS.DEFERRED_RESTRICTED
-  self:SetState(STATES.COMBAT_DEFERRED, "combat deferred")
+  self:SetState(LockedDown() and STATES.COMBAT_DEFERRED or STATES.RECOVERING, "mutation deferred")
   if ns.DiagnosticRecord then
     ns.DiagnosticRecord("ENGINE_DEFER", {reason = self.pendingReason}, false)
   end
@@ -361,6 +401,17 @@ function Engine:ScheduleRetry(reason)
     if ResumeCoreWorldRecovery("ENGINE_RETRY") then
       return
     end
+    local addon = ns.addon
+    if addon and type(addon.RetryPendingEnvironment) == "function" then
+      local ok, handled, applied = pcall(addon.RetryPendingEnvironment, addon, "engine-retry")
+      if not ok or handled == true then
+        if not ok then self:RecordFailure("PENDING_ENVIRONMENT_RETRY_FAILED", false) end
+        if not ok or applied ~= true then
+          self:ScheduleRetry("PENDING_ENVIRONMENT_RETRY")
+        end
+        return
+      end
+    end
     self:Reconcile("NATIVE_RETRY", false, true)
   end)
   if ns.DiagnosticRecord then
@@ -389,6 +440,9 @@ end
 
 function Engine:FailClosed(reason, scope)
   self.transactionFailed = true
+  if scope and scope.record then
+    self.scopedFailureConsumers[scope.record.consumer] = true
+  end
   self.failClosed = true
   self.deferredStatus = nil
   local affected = 0
@@ -490,6 +544,17 @@ function Engine:ConfigureCarrier(record, pack, allowReuse)
   record.slotKeys = record.slotKeys or {}
   local wanted = {}
   local configured = true
+  local configureStatus = STATUS.SUCCESS
+  local function InitializePresentation(frame, key, slot)
+    if type(record.initialize) ~= "function" then return end
+    local ok, result, resultStatus = pcall(record.initialize, frame, key, slot, pack)
+    local status = CallbackStatus(ok, result, resultStatus, true)
+    if status ~= STATUS.SUCCESS then
+      configured = false
+      configureStatus = StrongerStatus(configureStatus, status)
+      if status == STATUS.FAILURE then self:RecordFailure("CONSUMER_PAINT_FAILED", false) end
+    end
+  end
   for i = 1, #slots do
     local slot = slots[i]
     local key = type(slot) == "table" and slot.key or nil
@@ -497,18 +562,13 @@ function Engine:ConfigureCarrier(record, pack, allowReuse)
     if type(key) ~= "string" or key == "" or type(filter) ~= "string" or filter == "" then
       self:RecordFailure("SLOT_MALFORMED", false)
       configured = false
+      configureStatus = STATUS.FAILURE
     else
       wanted[key] = true
       local function Initialize(frame)
         record.slotFrames[key] = frame
         SetCarrierInteraction(frame)
-        if type(record.initialize) == "function" then
-          local initOk = pcall(record.initialize, frame, key, slot, pack)
-          if not initOk then
-            self:RecordFailure("CONSUMER_PAINT_FAILED", false)
-            configured = false
-          end
-        end
+        InitializePresentation(frame, key, slot)
       end
       if record.slotKeys[key] then
         local setFilter = record.container.SetAuraSlotFilterString
@@ -520,10 +580,12 @@ function Engine:ConfigureCarrier(record, pack, allowReuse)
           if not filterOk then
             self:RecordFailure("FILTER_REFRESH_FAILED", false)
             configured = false
+            configureStatus = STATUS.FAILURE
           end
         else
           self:RecordFailure("FILTER_REFRESH_UNAVAILABLE", false)
           configured = false
+          configureStatus = STATUS.FAILURE
         end
         if reuse then
           self.providerReuseCount = self.providerReuseCount + 1
@@ -532,21 +594,17 @@ function Engine:ConfigureCarrier(record, pack, allowReuse)
           if not candidateOk then
             self:RecordFailure("PROVIDER_REFRESH_FAILED", false)
             configured = false
+            configureStatus = STATUS.FAILURE
           else
             self.providerRefreshGeneration = self.providerRefreshGeneration + 1
           end
         else
           self:RecordFailure("PROVIDER_REFRESH_UNAVAILABLE", false)
           configured = false
+          configureStatus = STATUS.FAILURE
         end
         local frame = record.slotFrames[key]
-        if frame and type(record.initialize) == "function" then
-          local initOk = pcall(record.initialize, frame, key, slot, pack)
-          if not initOk then
-            self:RecordFailure("CONSUMER_PAINT_FAILED", false)
-            configured = false
-          end
-        end
+        if frame then InitializePresentation(frame, key, slot) end
       elseif type(record.container.AddAuraSlot) == "function" then
         local addOk, added = pcall(record.container.AddAuraSlot, record.container, key, filter, {
           initializeFrame = Initialize,
@@ -584,13 +642,14 @@ function Engine:ConfigureCarrier(record, pack, allowReuse)
         if not clearOk then
           self:RecordFailure("STALE_SLOT_CLEAR_FAILED", false)
           configured = false
+          configureStatus = STATUS.FAILURE
         end
       end
     end
   end
   if not configured then
     record.providerSignature = nil
-    return false
+    return false, configureStatus ~= STATUS.SUCCESS and configureStatus or STATUS.FAILURE
   end
   record.providerSignature = signature
   record.providerUnit = record.unit
@@ -695,7 +754,12 @@ function Engine:AssignCarrier(owner, unit)
       return true
     end
     if unit ~= nil and record.configuredGeneration ~= self.configurationGeneration then
-      if not self:ConfigureCarrier(record, CurrentPack()) then
+      local configured, status = self:ConfigureCarrier(record, CurrentPack())
+      if not configured then
+        if status == STATUS.DEFERRED_COMBAT or status == STATUS.DEFERRED_RESTRICTED then
+          self:Defer(status)
+          return false, status
+        end
         self:RecordFailure("CARRIER_CONFIGURE_FAILED", false)
         return self:FailClosed("CARRIER_CONFIGURE_FAILED", {record = record}), "CARRIER_CONFIGURE_FAILED"
       end
@@ -753,7 +817,12 @@ function Engine:AssignCarrier(owner, unit)
     return true
   end
   if record.configuredGeneration ~= self.configurationGeneration then
-    if not self:ConfigureCarrier(record, CurrentPack()) then
+    local configured, status = self:ConfigureCarrier(record, CurrentPack())
+    if not configured then
+      if status == STATUS.DEFERRED_COMBAT or status == STATUS.DEFERRED_RESTRICTED then
+        self:Defer(status)
+        return false, status
+      end
       self:RecordFailure("CARRIER_CONFIGURE_FAILED", false)
       return self:FailClosed("CARRIER_CONFIGURE_FAILED", {record = record}), "CARRIER_CONFIGURE_FAILED"
     end
@@ -872,10 +941,11 @@ function Engine:RequiredConsumersRegistered()
   return true
 end
 
-function Engine:RefreshConsumers(reason)
+local function RefreshConsumerBanks(self, reason)
   local refreshed = true
   local status = STATUS.SUCCESS
   local failedConsumer
+  local outcomes = {}
   for i = 1, #self.consumerOrder do
     local name = self.consumerOrder[i]
     local consumer = self.consumers[name]
@@ -885,42 +955,76 @@ function Engine:RefreshConsumers(reason)
       if type(expectedCount) == "number" and expectedCount >= 0 then
         consumer.expectedCount = math.floor(expectedCount)
       end
-      if resultStatus == STATUS.DEFERRED_COMBAT or resultStatus == STATUS.DEFERRED_RESTRICTED or resultStatus == STATUS.FAILURE then
-        result = resultStatus
-      end
-      if ok and (result == true or result == STATUS.SUCCESS) and not MutationBlocked() then
+      local outcome = CallbackStatus(ok, result, resultStatus, false)
+      if outcome == STATUS.SUCCESS and MutationBlocked() then outcome = STATUS.DEFERRED_COMBAT end
+      outcomes[name] = outcome
+      consumer.status = outcome
+      consumer.deferred = outcome == STATUS.DEFERRED_COMBAT or outcome == STATUS.DEFERRED_RESTRICTED
+      consumer.available = outcome == STATUS.SUCCESS
+      if consumer.available then
         consumer.refreshes = consumer.refreshes + 1
-        consumer.available = true
       else
         consumer.failures = consumer.failures + 1
-        consumer.available = false
-        if result == STATUS.DEFERRED_COMBAT or LockedDown() or self.deferredStatus == STATUS.DEFERRED_COMBAT then
-          status = STATUS.DEFERRED_COMBAT
-        elseif result == STATUS.DEFERRED_RESTRICTED or self.deferredStatus == STATUS.DEFERRED_RESTRICTED then
-          status = STATUS.DEFERRED_RESTRICTED
-        else
-          status = STATUS.FAILURE
-          self:RecordFailure("CONSUMER_REFRESH_FAILED", false)
-        end
+        if outcome == STATUS.FAILURE then self:RecordFailure("CONSUMER_REFRESH_FAILED", false) end
+        status = StrongerStatus(status, outcome)
         refreshed = false
         failedConsumer = failedConsumer or name
       end
     end
   end
-  return refreshed, status, failedConsumer
+  return refreshed, status, failedConsumer, outcomes
 end
 
-function Engine:ValidateExpectedBanks(requireShown)
+function Engine:RefreshConsumers(reason)
+  local token
+  local begin = ns.BeginRosterTransaction
+  local finish = ns.EndRosterTransaction
+  local ready = type(begin) ~= "function" or type(finish) == "function"
+  if ready and type(begin) == "function" then
+    local ok, result = pcall(begin, CurrentPack())
+    ready = ok and result ~= nil
+    if ready then token = result end
+  end
+  local ok, refreshed, status, failedConsumer, outcomes
+  if ready then
+    ok, refreshed, status, failedConsumer, outcomes = pcall(RefreshConsumerBanks, self, reason)
+  end
+  if token then
+    local ended, result = pcall(finish, token)
+    ready = ready and ended and result == true
+  end
+  if not ready or not ok then
+    self:RecordFailure("ROSTER_CONSUMER_TRANSACTION_FAILED", false)
+    outcomes = {}
+    for i = 1, #self.consumerOrder do
+      local name = self.consumerOrder[i]
+      outcomes[name] = STATUS.FAILURE
+      local consumer = self.consumers[name]
+      if consumer then
+        consumer.status = STATUS.FAILURE
+        consumer.available = false
+        consumer.deferred = false
+      end
+    end
+    return false, STATUS.FAILURE, nil, outcomes
+  end
+  return refreshed, status, failedConsumer, outcomes
+end
+
+function Engine:ValidateExpectedBanks(requireShown, outcomes)
   local requiredReady = self:RequiredConsumersRegistered()
   if not requiredReady then
     return false, 0
   end
   local expectedTotal = 0
+  local invalidBanks = {}
   for i = 1, #self.consumerOrder do
     local name = self.consumerOrder[i]
     local consumer = self.consumers[name]
     local expected = consumer and consumer.expectedCount
-    if type(expected) == "number" then
+    if outcomes and outcomes[name] ~= STATUS.SUCCESS then
+      -- An unavailable bank cannot veto completion of an independent bank.
+    elseif type(expected) == "number" then
       expectedTotal = expectedTotal + expected
       local desired = 0
       local active = 0
@@ -944,13 +1048,13 @@ function Engine:ValidateExpectedBanks(requireShown)
         end
       end
       if desired ~= expected or active ~= expected or configured ~= expected or requireShown and shown ~= expected then
-        return false, expectedTotal
+        invalidBanks[#invalidBanks + 1] = name
       end
     elseif REQUIRED_CONSUMER_SET[name] and consumer and consumer.registered == true then
-      return false, expectedTotal
+      invalidBanks[#invalidBanks + 1] = name
     end
   end
-  return true, expectedTotal
+  return #invalidBanks == 0, expectedTotal, invalidBanks
 end
 
 function Engine:GetCarrierTransactionCounts()
@@ -989,58 +1093,87 @@ function Engine:GetCarrierTransactionCounts()
   return desired, active, configured, shown, pending, valid
 end
 
-function Engine:Configure(reason, allowReuse)
+function Engine:Configure(reason, allowReuse, outcomes)
   if MutationBlocked() then
     return self:Defer(reason or "CONFIGURE_COMBAT")
   end
   local pack = CurrentPack()
   if type(pack) ~= "table" then
     self:RecordFailure("PACK_UNAVAILABLE", true)
-    return false
+    return false, STATUS.FAILURE
   end
   self:SetState(STATES.CONFIGURING, "configuring")
   self.configurationGeneration = self.configurationGeneration + 1
-  local configured = true
-  local failedRecord
+  local status = self.transactionFailed and STATUS.FAILURE or STATUS.SUCCESS
+  for _, outcome in pairs(outcomes or {}) do status = StrongerStatus(status, outcome) end
+  local failedBanks = {}
   for i = 1, #self.carriers do
     local record = self.carriers[i]
-    if record.active ~= true and not SetCarrierEnabled(record, false) then
-      configured = false
-      failedRecord = record
-      self:RecordFailure("CARRIER_DISABLE_FAILED", false)
-      break
-    end
-    if not self:ConfigureCarrier(record, pack, allowReuse == true) then
-      configured = false
-      failedRecord = record
-      break
-    end
-    if record.active == true and PublicUnitToken(record.unit) ~= nil then
-      if (not record.providerReused or record.enabled ~= true or record.shown ~= true)
-        and (not SetCarrierEnabled(record, true) or not SetCarrierShown(record, true)) then
-        configured = false
-        failedRecord = record
-        self:RecordFailure("CARRIER_ENABLE_FAILED", false)
-        break
+    if not outcomes or outcomes[record.consumer] == nil or outcomes[record.consumer] == STATUS.SUCCESS then
+      local ok, recordStatus = true, STATUS.SUCCESS
+      if MutationBlocked() then
+        ok, recordStatus = false, STATUS.DEFERRED_COMBAT
+      elseif record.active ~= true and not SetCarrierEnabled(record, false) then
+        ok, recordStatus = false, STATUS.FAILURE
+        self:RecordFailure("CARRIER_DISABLE_FAILED", false)
+      else
+        ok, recordStatus = self:ConfigureCarrier(record, pack, allowReuse == true)
+        recordStatus = ok and STATUS.SUCCESS or recordStatus or STATUS.FAILURE
       end
-      record.quarantined = false
+      if ok and record.active == true and PublicUnitToken(record.unit) ~= nil then
+        if (not record.providerReused or record.enabled ~= true or record.shown ~= true)
+          and (not SetCarrierEnabled(record, true) or not SetCarrierShown(record, true)) then
+          ok, recordStatus = false, STATUS.FAILURE
+          self:RecordFailure("CARRIER_ENABLE_FAILED", false)
+        else
+          record.quarantined = false
+        end
+      end
+      if not ok then
+        status = StrongerStatus(status, recordStatus)
+        failedBanks[record.consumer] = StrongerStatus(failedBanks[record.consumer] or STATUS.SUCCESS, recordStatus)
+        if recordStatus == STATUS.FAILURE then
+          self:FailClosed("TRANSACTION_CONFIGURE_FAILED", {record = record})
+        else
+          self:Defer(recordStatus)
+        end
+      end
     end
   end
-  local desiredCount, activeCount, configuredCount, _shownBefore, pendingCount, transactionValid = self:GetCarrierTransactionCounts()
-  local banksValid = self:ValidateExpectedBanks(false)
-  if configured and (not transactionValid or not banksValid or pendingCount ~= 0 or desiredCount ~= activeCount or activeCount ~= configuredCount) then
-    configured = false
-    self:RecordFailure("CARRIER_TRANSACTION_INCOMPLETE", false)
+  -- Validate only the banks which completed this pass. A sound deferral must
+  -- withhold global success without disabling a newly configured MUF provider.
+  local completed = {}
+  for i = 1, #self.consumerOrder do
+    local name = self.consumerOrder[i]
+    completed[name] = failedBanks[name] or outcomes and outcomes[name] or STATUS.SUCCESS
   end
-  if not configured then
-    self:RecordFailure("TRANSACTION_CONFIGURE_FAILED", false)
-    return self:FailClosed("TRANSACTION_CONFIGURE_FAILED", failedRecord and {record = failedRecord} or nil)
+  local banksVisible, expectedAfter, invalidBanks = self:ValidateExpectedBanks(true, completed)
+  if not banksVisible then
+    status = STATUS.FAILURE
+    self:RecordFailure("CARRIER_TRANSACTION_INCOMPLETE", false)
+    for i = 1, #(invalidBanks or {}) do
+      local name = invalidBanks[i]
+      failedBanks[name] = STATUS.FAILURE
+      self:FailClosed("CARRIER_TRANSACTION_INCOMPLETE", {consumer = name})
+    end
+  end
+  for name, outcome in pairs(failedBanks) do
+    local consumer = self.consumers[name]
+    if consumer then
+      consumer.status = outcome
+      consumer.available = false
+      consumer.deferred = outcome == STATUS.DEFERRED_COMBAT or outcome == STATUS.DEFERRED_RESTRICTED
+    end
+  end
+  if status ~= STATUS.SUCCESS then
+    self:ScheduleRetry("TRANSACTION_INCOMPLETE")
+    self:SetState(LockedDown() and STATES.COMBAT_DEFERRED or STATES.RECOVERING, "transaction incomplete")
+    return false, status
   end
   local desiredAfter, activeAfter, configuredAfter, shownAfter, pendingAfter, transactionValidAfter = self:GetCarrierTransactionCounts()
-  local banksVisible, expectedAfter = self:ValidateExpectedBanks(true)
-  if not transactionValidAfter or not banksVisible or pendingAfter ~= 0 or desiredAfter ~= activeAfter or activeAfter ~= configuredAfter or configuredAfter ~= shownAfter then
+  if not transactionValidAfter or pendingAfter ~= 0 or desiredAfter ~= activeAfter or activeAfter ~= configuredAfter or configuredAfter ~= shownAfter then
     self:RecordFailure("CARRIER_TRANSACTION_NOT_VISIBLE", false)
-    return self:FailClosed("CARRIER_TRANSACTION_NOT_VISIBLE")
+    return self:FailClosed("CARRIER_TRANSACTION_NOT_VISIBLE"), STATUS.FAILURE
   end
   self.failClosed = false
   self.configuredPackGeneration = self.desiredGeneration
@@ -1058,6 +1191,42 @@ function Engine:Configure(reason, allowReuse)
     }, false)
   end
   self:SetState(STATES.READY, "ready")
+  return true, STATUS.SUCCESS
+end
+
+function Engine:ConsumeCapabilityRefresh()
+  if not self.capabilityRefreshPending then return false end
+  -- Consume before invoking callbacks: re-entrant events belong to the next
+  -- batch and must not be cleared when this transaction completes.
+  self.capabilityRefreshPending = false
+  self.capabilityRefreshScheduled = false
+  self.capabilityRefreshToken = self.capabilityRefreshToken + 1
+  self.capabilityRefreshReasons = {}
+  if ns.InvalidateDetection then ns.InvalidateDetection() end
+  if ns.ScheduleFollowerRosterGuard then ns.ScheduleFollowerRosterGuard() end
+  return true
+end
+
+function Engine:QueueCapabilityRefresh(reason)
+  self.capabilityRefreshPending = true
+  self.capabilityRefreshReasons[reason or "CAPABILITY_CHANGED"] = true
+  if MutationBlocked() then return self:Defer("CAPABILITY_CHANGED") end
+  if self.capabilityRefreshScheduled then return true end
+  if not C_Timer or type(C_Timer.After) ~= "function" then
+    if self.reconciling then
+      self:MarkDirty("CAPABILITY_CHANGED")
+      return false
+    end
+    return self:Refresh("CAPABILITY_CHANGED")
+  end
+  self.capabilityRefreshScheduled = true
+  self.capabilityRefreshToken = self.capabilityRefreshToken + 1
+  local token = self.capabilityRefreshToken
+  C_Timer.After(0, function()
+    if token ~= Engine.capabilityRefreshToken then return end
+    Engine.capabilityRefreshScheduled = false
+    if Engine.capabilityRefreshPending then Engine:Refresh("CAPABILITY_CHANGED") end
+  end)
   return true
 end
 
@@ -1068,10 +1237,25 @@ function Engine:Reconcile(reason, fromRegen, isRetry)
   if MutationBlocked() then
     return self:Defer(reason or "REFRESH_COMBAT")
   end
+  self.reconciling = true
+  -- Immediate profile/world/recovery transactions cover queued capability
+  -- work using their current applied pack and invalidate its old timer token.
+  local invalidated = pcall(self.ConsumeCapabilityRefresh, self)
+  if not invalidated then
+    self.reconciling = false
+    self.capabilityRefreshPending = true
+    self:RecordFailure("CAPABILITY_INVALIDATION_FAILED", false)
+    self:ScheduleRetry("CAPABILITY_INVALIDATION_FAILED")
+    self:SetState(STATES.RECOVERING, "capability invalidation failed")
+    return false, STATUS.FAILURE
+  end
+  if MutationBlocked() then
+    self.reconciling = false
+    return self:Defer(reason or "REFRESH_COMBAT")
+  end
   local allowReuse = self.state == STATES.READY and not fromRegen and not isRetry
     and not self.failClosed and not self.pending
     and not (type(reason) == "string" and (reason:find("WORLD", 1, true) or reason:find("RECOVER", 1, true)))
-  self.reconciling = true
   if not isRetry then
     self:MarkDirty(reason or "REFRESH")
     self.desiredGeneration = self.desiredGeneration + 1
@@ -1082,12 +1266,14 @@ function Engine:Reconcile(reason, fromRegen, isRetry)
     self.retryExhausted = false
   end
   self.transactionFailed = false
+  self.scopedFailureConsumers = {}
   self.deferredStatus = nil
   self:SetState(STATES.RECOVERING, "recovering")
   self.preparingConsumers = true
   local requiredReady, missingConsumer = self:RequiredConsumersRegistered()
   if not requiredReady then
     self.reconciling = false
+    self.preparingConsumers = false
     self.started = false
     self:RecordFailure("REQUIRED_CONSUMER_MISSING_" .. tostring(missingConsumer), false)
     self:SetState(STATES.RECOVERING, "required consumer missing")
@@ -1095,46 +1281,53 @@ function Engine:Reconcile(reason, fromRegen, isRetry)
     return false, STATUS.FAILURE
   end
   self.started = true
-  local consumersReady, consumerStatus, failedConsumer = self:RefreshConsumers(reason)
+  local consumersReady, consumerStatus, failedConsumer, outcomes = self:RefreshConsumers(reason)
   self.preparingConsumers = false
   if not consumersReady then
-    self.reconciling = false
-    if consumerStatus == STATUS.DEFERRED_COMBAT or consumerStatus == STATUS.DEFERRED_RESTRICTED then
-      self:Defer(consumerStatus)
-      if ns.DiagnosticRecord then
-        ns.DiagnosticRecord("ENGINE_RECONCILE", {
-          reason = reason or "NONE",
-          result = consumerStatus,
-          desiredGeneration = self.desiredGeneration,
-          configuredGeneration = self.configuredPackGeneration,
-          failClosed = self.failClosed == true,
-        }, false)
+    -- Every failed bank gets its own isolation. A lower-level owner failure
+    -- already identified its scope, so retain that consumer's healthy owners.
+    for name, outcome in pairs(outcomes) do
+      if outcome == STATUS.FAILURE then
+        if not self.scopedFailureConsumers[name] and not MutationBlocked() then
+          self:FailClosed("CONSUMER_TRANSACTION_FAILED", {consumer = name})
+        end
+      elseif outcome ~= STATUS.SUCCESS then
+        self:MarkDirty(outcome)
+        self.deferredStatus = StrongerStatus(self.deferredStatus or STATUS.SUCCESS, outcome)
       end
-      return false, consumerStatus
     end
-    self:RecordFailure("CONSUMER_TRANSACTION_FAILED", false)
-    if not self.failClosed then
-      self:FailClosed("CONSUMER_TRANSACTION_FAILED", failedConsumer and {consumer = failedConsumer} or nil)
-    end
-    return false, STATUS.FAILURE
+    if consumerStatus == STATUS.FAILURE then self:RecordFailure("CONSUMER_TRANSACTION_FAILED", false) end
   end
   for i = 1, #self.carriers do
     local record = self.carriers[i]
-    if record.pendingAssignment and not self.transactionFailed then
+    if record.pendingAssignment and (outcomes[record.consumer] == nil or outcomes[record.consumer] == STATUS.SUCCESS) then
+      local ok, assignmentStatus
       if record.pendingUnit == nil then
-        local ok = self:UnassignCarrier(record.owner)
-        if not ok then
-          self.transactionFailed = true
-        end
+        ok, assignmentStatus = self:UnassignCarrier(record.owner)
       else
-        local ok = self:AssignCarrier(record.owner, record.pendingUnit)
-        if not ok then
-          self.transactionFailed = true
+        ok, assignmentStatus = self:AssignCarrier(record.owner, record.pendingUnit)
+      end
+      if not ok then
+        local outcome = CallbackStatus(true, false, assignmentStatus, false)
+        outcomes[record.consumer] = outcome
+        if outcome == STATUS.FAILURE then self.transactionFailed = true end
+        local consumer = self.consumers[record.consumer]
+        if consumer then
+          consumer.status = outcome
+          consumer.available = false
+          consumer.deferred = outcome == STATUS.DEFERRED_COMBAT or outcome == STATUS.DEFERRED_RESTRICTED
         end
       end
     end
   end
-  local configured = not self.transactionFailed and self:Configure(reason, allowReuse)
+  local configured, configureStatus = self:Configure(reason, allowReuse, outcomes)
+  local finalStatus = StrongerStatus(consumerStatus, configureStatus or STATUS.FAILURE)
+  for _, consumer in pairs(self.consumers) do
+    local outcome = consumer.status
+    if outcome == STATUS.DEFERRED_COMBAT or outcome == STATUS.DEFERRED_RESTRICTED then
+      self.deferredStatus = StrongerStatus(self.deferredStatus or STATUS.SUCCESS, outcome)
+    end
+  end
   if configured then
     -- A committed applied pack starts its own trace. Ordinary refreshes and
     -- combat recovery of that same pack must preserve evidence and manual off.
@@ -1149,6 +1342,14 @@ function Engine:Reconcile(reason, fromRegen, isRetry)
         self.auraTracePolicy = tracePolicy
       end
     end
+    local oldItemActionSignature = self.itemActionSignature
+    self.itemActionSignature = ItemActionSignature()
+    if oldItemActionSignature ~= self.itemActionSignature and type(ns.RefreshBandageOptions) == "function" then
+      pcall(ns.RefreshBandageOptions)
+    end
+    if type(ns.RefreshBandageLowStockReminder) == "function" then
+      pcall(ns.RefreshBandageLowStockReminder)
+    end
     self:ClearDirty()
     self.deferredStatus = nil
     self.retryAttempts = 0
@@ -1159,15 +1360,23 @@ function Engine:Reconcile(reason, fromRegen, isRetry)
     if fromRegen then
       self.regenReconcileGeneration = self.regenReconcileGeneration + 1
     end
-    self:SetState(STATES.READY, "reconciled")
-  elseif not self.failClosed then
-    self:FailClosed(consumersReady and "ASSIGNMENT_FAILED" or "TRANSACTION_FAILED", failedConsumer and {consumer = failedConsumer} or nil)
+    if self.capabilityRefreshPending then
+      self:MarkDirty("CAPABILITY_CHANGED")
+      self:SetState(STATES.RECOVERING, "capability change queued")
+    else
+      self:SetState(STATES.READY, "reconciled")
+    end
+  else
+    -- Retry continuity is independent of whether a previous pass quarantined
+    -- a bank: this pass may have invalidated that previous timer generation.
+    self:ScheduleRetry("TRANSACTION_INCOMPLETE")
+    self:SetState(LockedDown() and STATES.COMBAT_DEFERRED or STATES.RECOVERING, "reconcile incomplete")
   end
   self.reconciling = false
   if ns.DiagnosticRecord then
     ns.DiagnosticRecord("ENGINE_RECONCILE", {
       reason = reason or "NONE",
-      result = configured and "APPLIED" or "FAIL_CLOSED",
+      result = configured and "APPLIED" or finalStatus,
       fromRegen = fromRegen == true,
       carriers = #self.carriers,
       desiredGeneration = self.desiredGeneration,
@@ -1175,12 +1384,12 @@ function Engine:Reconcile(reason, fromRegen, isRetry)
       failClosed = self.failClosed == true,
     }, false)
   end
-  return configured, configured and STATUS.SUCCESS or STATUS.FAILURE
+  return configured, configured and STATUS.SUCCESS or finalStatus
 end
 
-function Engine:Refresh(reason)
+function Engine:Refresh(reason, isRetry)
   local fromRegen = self.pending and not MutationBlocked()
-  return self:Reconcile(reason or "REFRESH", fromRegen)
+  return self:Reconcile(reason or "REFRESH", fromRegen, isRetry == true)
 end
 
 function Engine:Recover(reason)
@@ -1218,6 +1427,10 @@ function Engine:Reset()
   self.retryAttempts = 0
   self.retryExhausted = false
   self.retryGeneration = self.retryGeneration + 1
+  self.capabilityRefreshPending = false
+  self.capabilityRefreshScheduled = false
+  self.capabilityRefreshToken = self.capabilityRefreshToken + 1
+  self.capabilityRefreshReasons = {}
   self.started = false
   self.startRequested = false
   self.pendingReasons = {}
@@ -1246,6 +1459,9 @@ function Engine:SetAuraTrace(enabled)
 end
 
 function Engine:OnEvent(event, arg1, arg2)
+  if event == "PLAYER_ENTERING_WORLD" and type(ns.MarkBandageInventoryDirty) == "function" then
+    ns.MarkBandageInventoryDirty()
+  end
   if event == "UNIT_AURA" then
     if not self.auraTraceEnabled then return end
     local unit = PublicUnitToken(arg1)
@@ -1264,6 +1480,7 @@ function Engine:OnEvent(event, arg1, arg2)
     return
   end
   if event == "PLAYER_REGEN_DISABLED" then
+    if type(ns.HideBandageLowStockReminder) == "function" then ns.HideBandageLowStockReminder() end
     self.combatEntryGeneration = self.combatEntryGeneration + 1
     self.nativeCombatGeneration = self.nativeCombatGeneration + 1
     self:Defer("COMBAT_ENTERED")
@@ -1301,17 +1518,33 @@ function Engine:OnEvent(event, arg1, arg2)
     end
     return
   end
-  if event == "BAG_UPDATE_DELAYED" or event == "ITEM_COUNT_CHANGED"
+  if event == "BAG_UPDATE_DELAYED" or event == "PLAYER_LEVEL_UP" or event == "SKILL_LINES_CHANGED" or event == "ITEM_COUNT_CHANGED"
     or event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_DATA_LOAD_RESULT" then
-    if (event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_DATA_LOAD_RESULT") and arg2 == false then
-      return
+    if event ~= "BAG_UPDATE_DELAYED" and event ~= "PLAYER_LEVEL_UP" and event ~= "SKILL_LINES_CHANGED" then
+      local itemID = PublicNumber(arg1)
+      if itemID == nil then return end
+      local soulLinkItem = type(ns.IsSoulLinkItemID) == "function" and ns.IsSoulLinkItemID(itemID)
+        or itemID == ns.SOUL_LINK_ITEM_ID
+      local bandageItem = type(ns.IsBandageInventoryEventItem) == "function" and ns.IsBandageInventoryEventItem(itemID, event)
+      if not soulLinkItem and not bandageItem then
+        return
+      end
     end
+    if event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_DATA_LOAD_RESULT" then
+      local bandageDataResult = type(ns.BandageItemDataResult) == "function" and ns.BandageItemDataResult(PublicNumber(arg1))
+      if PublicBoolean(arg2) == false and not bandageDataResult then return end
+    end
+    if type(ns.MarkBandageInventoryDirty) == "function" then ns.MarkBandageInventoryDirty() end
     if self.itemActionRefreshScheduled then
       return
     end
     self.itemActionRefreshScheduled = true
     local function refreshItemActions()
       Engine.itemActionRefreshScheduled = false
+      local signature = ItemActionSignature()
+      if signature ~= nil and signature == Engine.itemActionSignature then
+        return
+      end
       if ns.InvalidateDetection then
         ns.InvalidateDetection()
       elseif ns.InvalidateClickModel then
@@ -1326,13 +1559,14 @@ function Engine:OnEvent(event, arg1, arg2)
     end
     return
   end
-  if event == "SPELLS_CHANGED" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED" or event == "PLAYER_TALENT_UPDATE" then
-    if ns.InvalidateDetection then
-      ns.InvalidateDetection()
-    end
-    if ns.ScheduleFollowerRosterGuard then
-      ns.ScheduleFollowerRosterGuard()
-    end
+  if event == "SPELLS_CHANGED" or event == "TRAIT_CONFIG_UPDATED" or event == "PLAYER_TALENT_UPDATE" then
+    return self:QueueCapabilityRefresh(event)
+  end
+  -- Core owns specialization/profile routing and keeps that transition
+  -- immediate. It also subsumes any earlier capability event in this burst.
+  if event == "PLAYER_SPECIALIZATION_CHANGED" and not self:ConsumeCapabilityRefresh() then
+    if ns.InvalidateDetection then ns.InvalidateDetection() end
+    if ns.ScheduleFollowerRosterGuard then ns.ScheduleFollowerRosterGuard() end
   end
   if (event == "GROUP_ROSTER_UPDATE" or event == "UNIT_PET") and ns.addon and type(ns.addon.OnGroupRosterUpdate) == "function" then
     return
@@ -1367,6 +1601,8 @@ function Engine:RegisterEvents()
     "PLAYER_TALENT_UPDATE",
     "ADDON_RESTRICTION_STATE_CHANGED",
     "BAG_UPDATE_DELAYED",
+    "PLAYER_LEVEL_UP",
+    "SKILL_LINES_CHANGED",
     "ITEM_COUNT_CHANGED",
     "GET_ITEM_INFO_RECEIVED",
     "ITEM_DATA_LOAD_RESULT",
@@ -1509,6 +1745,8 @@ function Engine:GetDiagnostics()
     consumerStates[name] = {
       registered = consumer.registered == true,
       available = consumer.available ~= false,
+      status = consumer.status or STATUS.SUCCESS,
+      deferred = consumer.deferred == true,
       refreshes = consumer.refreshes or 0,
       failures = consumer.failures or 0,
       expectedCount = type(consumer.expectedCount) == "number" and consumer.expectedCount or 0,
@@ -1639,6 +1877,13 @@ if type(ns.Detection) == "table" then
   ns.Detection.Engine = Engine
   ns.Detection.Attach = ns.AttachDetector
   ns.Detection.ApplySlots = ns.ApplyDetectionSlots
+end
+
+if ns.RegisterPerformanceTarget then
+  ns.RegisterPerformanceTarget("engine.reconcile", function() return Engine.Reconcile end,
+    function(fn) Engine.Reconcile = fn end)
+  ns.RegisterPerformanceTarget("engine.consumers", function() return Engine.RefreshConsumers end,
+    function(fn) Engine.RefreshConsumers = fn end)
 end
 
 if ns.RegisterDiagnosticProvider then

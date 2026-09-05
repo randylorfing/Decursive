@@ -72,11 +72,12 @@ local classifier = core:sub(classifierStart, classifierEnd - 1)
 Check(not classifier:find('"SOLO"', 1, true), "context classifier must never return Solo")
 
 for _, token in ipairs({
-  'Addon():SetEnvironmentMode("multiple")',
-  'Addon():SetEnvironmentMode("solo")',
+  '{key = "multiple", label = "Multiple - follow content"}',
+  '{key = "solo", label = "Solo - use one settings pack"}',
+  'Addon():SetEnvironmentMode(row.key)',
   'ui.envCopyBtn:SetShown(environmentMode == "multiple")',
-  'environmentMode == "solo" and key == "SOLO"',
-  'environmentMode == "multiple" and ns.MULTIPLE_ENV_SET[key] == true',
+  'mode == "solo" and row.key == "SOLO"',
+  'mode == "multiple" and ns.MULTIPLE_ENV_SET[row.key]',
 }) do
   Check(options:find(token, 1, true), "missing environment mode UI contract: " .. token)
 end

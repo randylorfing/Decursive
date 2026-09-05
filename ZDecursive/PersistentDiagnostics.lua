@@ -258,6 +258,13 @@ local function Stamp()
 end
 
 local function Record(kind, fields, verbose)
+  -- Disabled verbose traffic must not allocate/sanitize a field table. Keep
+  -- pre-initialization records and all critical records on the original path.
+  if initialized and type(database) == "table" and verbose == true and database.enabled ~= true then
+    database.counters.verboseSeen = (tonumber(database.counters.verboseSeen) or 0) + 1
+    database.counters.verboseSuppressed = (tonumber(database.counters.verboseSuppressed) or 0) + 1
+    return false
+  end
   kind = PublicScalar(kind)
   if type(kind) ~= "string" or kind:sub(1, 1) == "<" then
     kind = "UNKNOWN"

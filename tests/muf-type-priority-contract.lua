@@ -111,6 +111,7 @@ local function NewFrame(parent)
   function frame:CreateTexture(_name, _layer, _template, sublevel)
     Check(sublevel >= -8 and sublevel <= 7, "texture sublevel remains valid")
     local texture = {sublevel = sublevel}
+    function texture:SetAlpha(value) self.alpha = value end
     function texture:SetAllPoints(target)
       self.bounds = target
     end

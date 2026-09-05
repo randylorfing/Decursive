@@ -131,10 +131,35 @@ local function HasTextContaining(expected)
   return false
 end
 
-local function AssertPlainEnvironmentLabels(message)
-  for _, label in ipairs({"Open World", "Dungeon", "Mythic+", "Raid", "PvP"}) do
-    Check(HasText(label), message .. ": missing exact label " .. label)
+local function AssertPlainEnvironmentLabels(message, expected)
+  local dropdown
+  for _, region in ipairs(regions) do
+    local handlers = rawget(region, "scripts")
+    if region.kind == "Button" and handlers and handlers.OnClick and region:GetText():find("Editing: ", 1, true) == 1 then
+      dropdown = region
+      break
+    end
   end
+  Check(dropdown, message .. ": editing dropdown exists")
+  local entries = {}
+  local savedMenuUtil = MenuUtil
+  MenuUtil = {CreateContextMenu = function(_, build)
+    build({}, {
+      CreateTitle = function() end,
+      CreateRadio = function(_, label, selected, pick) entries[label] = {selected = selected, pick = pick} end,
+    })
+  end}
+  dropdown.scripts.OnClick(dropdown)
+  MenuUtil = savedMenuUtil
+  local expectedCount = 0
+  for _, label in ipairs(expected or {"Open World", "Dungeon", "Mythic+", "Raid", "PvP"}) do
+    Check(entries[label], message .. ": missing exact dropdown label " .. label)
+    expectedCount = expectedCount + 1
+    Check(entries[label].selected() == (dropdown:GetText() == "Editing: " .. label), message .. ": dropdown checks editing rather than applied environment")
+  end
+  local actualCount = 0
+  for _ in pairs(entries) do actualCount = actualCount + 1 end
+  Check(actualCount == expectedCount, message .. ": dropdown excludes unavailable environment modes")
   for i = 1, #regions do
     local text = tostring(regions[i].text or "")
     Check(not text:find("|T", 1, true), message .. ": inline texture marker found")
@@ -315,6 +340,9 @@ Check(HasTextContaining("Detected Environment: Raid"), "detected environment rem
 local snapshot = ns.optionsDiagnosticProvider()
 Check(snapshot.defaultDestination == "STATUS", "Status is the runtime default destination")
 Check(snapshot.currentDestination == "STATUS", "Options initially opens Status")
+Check(snapshot.architectureVersion == 2, "diagnostics identify the redesigned options architecture")
+Check(snapshot.fullEnvironmentPageCount == 7, "sidebar exposes seven editor categories including Supplies")
+Check(not snapshot.simpleMode and not snapshot.simpleModeAvailable, "legacy saved Simple state cannot hide settings")
 Check(snapshot.environmentSubmenuCount == 6, "six environment submenu entries")
 Check(snapshot.multipleEnvironmentCount == 5, "Multiple mode has five environment packs")
 Check(snapshot.soloEnvironmentCount == 1, "Solo mode has one environment pack")
@@ -322,6 +350,12 @@ Check(snapshot.addonProfilesSeparate, "Addon Profiles is a separate destination"
 Check(snapshot.quickBindingCount == 6, "six safe quick binding actions")
 Check(snapshot.shortcutOnlyCount == 1, "full Cure settings remains shortcut-only")
 Check(snapshot.combatReadOnly == false, "out-of-combat dashboard is writable")
+addon:SetEnvironmentMode("solo")
+ns.RefreshOptions()
+AssertPlainEnvironmentLabels("Solo mode", {"Solo"})
+addon:SetEnvironmentMode("multiple")
+ns.RefreshOptions()
+AssertPlainEnvironmentLabels("restored Multiple mode")
 combat = true
 Check(ns.CloseOptionsForCombat("PLAYER_REGEN_DISABLED"), "combat entry closes an already-open Options frame")
 Check(not ns.IsOptionsShown(), "combat entry leaves Options hidden")

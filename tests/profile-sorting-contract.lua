@@ -243,7 +243,7 @@ Check(ok, "rename profile")
 Equal(ns.GetConfiguredMUFOrder(addon:GetEditingPack()), "PRIORITY", "rename retains order")
 ok = addon:ResetCurrentProfile()
 Check(ok, "reset profile")
-Equal(ns.GetConfiguredMUFOrder(addon:GetEditingPack()), "GROUP", "reset restores group default")
+Equal(ns.GetConfiguredMUFOrder(addon:GetEditingPack()), "AUTO", "reset restores automatic sorting default")
 
 for _ = 1, 3 do
   Check(addon:ActivateProfile("A"), "repeated switch A")

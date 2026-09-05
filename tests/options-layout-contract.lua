@@ -19,123 +19,75 @@
     along with ZDecursive. If not, see <https://www.gnu.org/licenses/>.
 --]]
 
-local function Check(value, message)
-  if not value then
-    error(message, 2)
-  end
-end
-
-local function Read(path)
-  local file = assert(io.open(path, "rb"))
-  local text = file:read("*a")
-  file:close()
-  return text
-end
-
-local source = Read("ZDecursive/Options.lua")
-
-Check(source:find('local WORKSPACE_GAP = 8', 1, true), "workspace chain owns one explicit gap")
-Check(source:find('local SIDEBAR_HEADING_WIDTH = 146', 1, true), "sidebar heading has an explicit allocation")
-Check(source:find('local PROFILE_MODE_LABEL_WIDTH = 96', 1, true), "Profile Mode has an explicit allocation")
-Check(source:find('local PROFILE_MODE_GAP = 12', 1, true), "Profile Mode and Multiple have a measured gap")
-Check(source:find('AnchorWorkspaceFrame(tabBar, envBar, envBar, WORKSPACE_GAP)', 1, true), "tabs follow the environment controls")
-Check(source:find('AnchorWorkspaceFrame(ui.body, ui.tabBar, ui.tabBar, WORKSPACE_GAP)', 1, true), "content follows the tab row")
-Check(source:find('AnchorWorkspaceFrame(ui.body, ui.profileBar, ui.profileBar, PROFILE_BODY_GAP)', 1, true), "profile content follows its own header")
-Check(not source:find('ui.body:SetPoint("TOPLEFT", 204, -218)', 1, true), "regressed overlapping body origin is absent")
-Check(source:find('ui.routingMultiple:SetText(environmentMode == "multiple"', 1, true), "Multiple mode is explicit")
-Check(source:find('ui.routingSolo:SetText(environmentMode == "solo"', 1, true), "Solo mode is explicit")
-Check(not source:find("OpenStaticEnvironmentMenu", 1, true), "obsolete static selector is absent")
-Check(source:find('for _, key in ipairs(EDITOR_PAGES) do', 1, true), "only valid environment editor pages become tabs")
-
-local pages = {"mufs", "sorting", "cure", "color", "alerts", "advanced", "assign"}
-for i = 1, #pages do
-  Check(source:find('ui.tabs[key] = tab', 1, true), "tab registry remains clickable")
-  Check(source:find('SetTab(key)', 1, true), "tab click routing remains intact")
-end
-
-local function Rect(top, height, scale)
-  local scaledTop = top * scale
-  local scaledHeight = height * scale
+-- Exercise actual workspace anchors and catalog reachability. The independent
+-- options-geometry-contract covers rendered widget geometry at multiple sizes.
+local function Check(value, message) assert(value, message) end
+local file = assert(io.open("ZDecursive/Options.lua", "rb"))
+local source = file:read("*a"):gsub("\r\n", "\n")
+file:close()
+local ns = {}
+assert(loadfile("ZDecursive/Defaults.lua"))("ZDecursive", ns)
+local environment = "OPEN_WORLD"
+ns.addon = {GetEditingEnvironment = function() return environment end}
+local Compile = loadstring or load
+local access = assert(Compile(source .. [[
+return {
+  ui = ui, layout = LayoutWorkspace, visible = RowVisible,
+  catalog = CATALOG, groups = GROUP_ORDER, pages = EDITOR_PAGES,
+  labels = PAGE_LABELS, collapsed = IsCollapsed,
+}
+]], "@Options-layout-under-test"))("ZDecursive", ns)
+local function Frame()
   return {
-    top = scaledTop,
-    bottom = scaledTop + scaledHeight,
+    points = {},
+    ClearAllPoints = function(self) self.points = {} end,
+    SetPoint = function(self, ...) self.points[#self.points + 1] = {...} end,
   }
 end
-
-local function Validate(width, height, scale, routingMode, simple, environment, page)
-  local sidebarLeft = 20 * scale
-  local sidebarRight = (20 + 170) * scale
-  local sidebarHeadingLeft = (20 + 12) * scale
-  local sidebarHeadingRight = sidebarHeadingLeft + 146 * scale
-  local workspaceLeft = 204 * scale
-  local workspaceRight = (width - 20) * scale
-  local profileModeLeft = workspaceLeft
-  local profileModeRight = profileModeLeft + 96 * scale
-  local multipleLeft = profileModeRight + 12 * scale
-  local multipleRight = multipleLeft + 118 * scale
-  local soloLeft = multipleRight + 6 * scale
-  local soloRight = soloLeft + 100 * scale
-  local header = Rect(3, 108, scale)
-  local environmentBar = Rect(116, 88, scale)
-  local tabBar = Rect(212, 34, scale)
-  local tabButton = Rect(215, 28, scale)
-  local contentTop = 254 * scale
-  local contentBottom = (height - 20) * scale
-  Check(header.bottom < environmentBar.top, "header and environment controls do not overlap")
-  Check(sidebarLeft < sidebarHeadingLeft and sidebarHeadingRight <= sidebarRight, "Environment Profiles heading remains wholly inside the sidebar")
-  Check(sidebarHeadingRight < workspaceLeft, "sidebar heading cannot overlap Profile Mode")
-  Check(profileModeLeft < profileModeRight and profileModeRight < multipleLeft, "Profile Mode has a measured nonoverlapping gap")
-  Check(multipleRight < soloLeft and soloRight <= workspaceRight, "Multiple and Solo hitboxes remain wholly in the workspace")
-  Check(environmentBar.bottom < tabBar.top, "Profile Mode controls and tabs have explicit spacing")
-  Check(tabButton.bottom < contentTop, "every tab remains fully above the content viewport")
-  Check(contentTop < contentBottom, "content viewport remains usable")
-  Check(width >= 1100 and height >= 580, "resize bounds preserve the supported viewport")
-  Check(routingMode == "solo" or routingMode == "multiple", "mode scenario is valid")
-  Check(type(simple) == "boolean", "simple/full scenario is represented")
-  Check(type(environment) == "string" and environment ~= "", "environment scenario is represented")
-  Check(type(page) == "string" and page ~= "", "page scenario is represented")
-end
-
-local sizes = {
-  {1100, 580},
-  {1207, 807},
-  {1800, 1400},
-}
-local scales = {0.64, 0.8, 1, 1.25}
-local reportedScreenshotCrops = {{460, 320}, {363, 167}}
-for i = 1, #reportedScreenshotCrops do
-  Check(reportedScreenshotCrops[i][1] > 0 and reportedScreenshotCrops[i][2] > 0, "reported screenshot crop is represented")
-end
-local environments = {"OPEN_WORLD", "DUNGEON", "MYTHIC_PLUS", "RAID", "PVP", "SOLO"}
-local editorPages = {"mufs", "sorting", "cure", "color", "alerts", "advanced"}
-for i = 1, #sizes do
-  for s = 1, #scales do
-    for r = 1, 2 do
-      for simpleIndex = 1, 2 do
-        for e = 1, #environments do
-          for p = 1, #editorPages do
-            Validate(
-              sizes[i][1],
-              sizes[i][2],
-              scales[s],
-              r == 1 and "multiple" or "solo",
-              simpleIndex == 1,
-              environments[e],
-              editorPages[p]
-            )
-          end
-        end
-      end
-    end
+access.ui.body, access.ui.tabBar, access.ui.profileBar = Frame(), Frame(), Frame()
+for _, destination in ipairs({"environment", "addon_profiles", "search", "environment"}) do
+  access.layout(destination)
+  local points = access.ui.body.points
+  Check(#points == 3, "switching workspace replaces previous anchors")
+  if destination == "environment" or destination == "addon_profiles" then
+    local header = destination == "environment" and access.ui.tabBar or access.ui.profileBar
+    Check(points[1][1] == "TOPLEFT" and points[1][2] == header and points[1][3] == "BOTTOMLEFT", "content starts below its own header")
+    Check(points[2][1] == "TOPRIGHT" and points[2][2] == header and points[2][3] == "BOTTOMRIGHT", "content tracks the header width")
+    Check(points[1][5] < 0 and points[2][5] == points[1][5], "content and header have a positive gap")
+  else
+    Check(type(points[1][2]) == "number" and points[1][2] > 0, "search uses the full workspace origin")
   end
+  Check(points[3][1] == "BOTTOMRIGHT" and points[3][2] < 0 and points[3][3] > 0, "workspace reserves right and footer margins")
 end
 
-Check(source:find('local destination = searching and "search" or ui.destination', 1, true), "search retains its separate content origin")
-Check(source:find('ui.statusPage:SetShown(destination == "status")', 1, true), "Status remains isolated")
-Check(source:find('ui.profileBar:SetShown(destination == "addon_profiles")', 1, true), "Decursive Profiles remains isolated")
-Check(source:find('profileModeLabel:SetWordWrap(false)', 1, true), "Profile Mode heading cannot wrap into controls")
-Check(source:find('environmentLabel:SetWordWrap(false)', 1, true), "Environment Profiles heading cannot wrap into navigation hitboxes")
-Check(source:find('f:SetScript("OnSizeChanged", function()', 1, true), "resize keeps scroll children synchronized")
-Check(source:find('LayoutScrollChildren()', 1, true), "scroll content width remains synchronized")
-
-print("options-layout-contract: ok")
+local expectedPages = {mufs = "Frames", sorting = "Roster", cure = "Actions", color = "Colors", alerts = "Alerts", items = "Supplies", advanced = "Advanced"}
+local pageSet = {}
+for _, page in ipairs(access.pages) do
+  Check(expectedPages[page] == access.labels[page], "editor category has a clear label")
+  Check(not pageSet[page], "editor category is unique")
+  pageSet[page] = true
+end
+for page in pairs(expectedPages) do Check(pageSet[page], "required editor category remains reachable: " .. page) end
+Check(not pageSet.assign, "addon-profile lifecycle remains a separate destination")
+local rowCount = 0
+for _, spec in ipairs(access.catalog) do
+  Check(pageSet[spec.page], "catalog row belongs to a reachable category: " .. spec.label)
+  local found
+  for _, group in ipairs(access.groups[spec.page] or {}) do if group == spec.group then found = true end end
+  Check(found, "catalog row belongs to a rendered section: " .. spec.label)
+  Check(not access.collapsed(spec.page, spec.group), "sections are expanded by default")
+  for _, env in ipairs(ns.ENVIRONMENTS) do
+    environment = env.key
+    local expected = not (spec.hideEnv and spec.hideEnv[environment])
+    Check(access.visible(spec) == expected, "every applicable setting is visible without a Simple filter: " .. spec.label)
+  end
+  rowCount = rowCount + 1
+end
+Check(rowCount >= 100, "redesign retains the complete configuration catalog")
+Check(source:find('ui.navButtons["page:" .. key], ui.tabs[key] = button, button', 1, true), "category registry routes the sidebar buttons")
+Check(source:find('SetTab(key)', 1, true), "sidebar routes into the environment editor")
+Check(not source:find('ui.envChips', 1, true), "environment selection has no duplicate chip row")
+Check(source:find('ui.profileBar:SetShown(destination == "addon_profiles")', 1, true), "profile lifecycle stays isolated")
+Check(source:find('f:SetScript("OnSizeChanged", function()', 1, true), "resizing synchronizes scroll children")
+Check(source:find('LayoutScrollChildren()', 1, true), "scroll content has a shared resize path")
+io.write("options-layout-contract: actual anchors and ", rowCount, " reachable rows passed\n")

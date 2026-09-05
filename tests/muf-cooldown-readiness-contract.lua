@@ -139,6 +139,21 @@ end
 local cases = {}
 local function Case(name, run) cases[#cases + 1] = {name = name, run = run} end
 
+Case("countdown without darkness", function()
+  local h = Harness()
+  local defaults = {}
+  assert(loadfile("ZDecursive/Defaults.lua"))("ZDecursive", defaults)
+  h.pack.alerts = defaults.MakePack("RAID").alerts
+  Check(h.pack.alerts.cooldownOpacity == 0, "Raid inherits zero darkness")
+  h.active = true
+  h:Begin()
+  h:Event()
+  Check(h:Visible(), "zero darkness keeps the real duration countdown active")
+  h.pack.alerts.cooldownNumbers = false
+  h:Event()
+  Check(not h:Visible(), "explicitly disabling numbers remains supported")
+end)
+
 Case("delayed cooldown event", function()
   local h = Harness()
   h:Begin()

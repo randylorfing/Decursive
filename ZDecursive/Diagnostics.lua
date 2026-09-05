@@ -1511,8 +1511,236 @@ local function TryInstallMenuButton()
   return true
 end
 
+-- Timing is opt-in. Only addon-owned Lua functions registered by their modules
+-- are replaced during a bounded capture; no native or secure handlers are hooked.
+local performanceTargets, performanceOrder = {}, {}
+local performanceCapture, lastPerformanceCapture
+local PerformanceStop
+local PerformanceUnpack = unpack or table.unpack
+
+local function PerformancePack(...)
+  return {n = select("#", ...), ...}
+end
+
+local function PerformanceClock()
+  if type(debugprofilestop) ~= "function" then return nil end
+  local ok, value = pcall(debugprofilestop)
+  value = ok and SafePublicNumber(value) or nil
+  if value and value == value and value >= 0 and value < math.huge then return value end
+end
+
+local function PerformanceFrames()
+  if type(ns.GetPerformanceAssignedFrameCount) ~= "function" then return nil end
+  local ok, value = pcall(ns.GetPerformanceAssignedFrameCount)
+  value = ok and SafePublicNumber(value) or nil
+  if value and value == value and value >= 0 and value <= 80 then return math.floor(value) end
+end
+
+local function PerformanceVersion()
+  local version = AddOnMetadata("Version")
+  if type(version) == "string" and #version <= 64
+    and (version:match("^v?%d+%.%d+%.%d+$")
+      or version:match("^v?%d+%.%d+%.%d+%-[A-Za-z0-9][A-Za-z0-9.%-]*$")) then
+    return version
+  end
+  return "unavailable"
+end
+
+function ns.RegisterPerformanceTarget(name, getter, setter)
+  if performanceCapture then return false, "CAPTURE_ACTIVE" end
+  if type(name) ~= "string" or #name > 64 or not name:match("^[A-Za-z][A-Za-z0-9_.]*$")
+    or type(getter) ~= "function" or type(setter) ~= "function" then
+    return false, "INVALID_TARGET"
+  end
+  if not performanceTargets[name] then performanceOrder[#performanceOrder + 1] = name end
+  performanceTargets[name] = {get = getter, set = setter}
+  return true
+end
+
+PerformanceStop = function(reason)
+  local capture = performanceCapture
+  if not capture then return false, "NOT_RECORDING" end
+  -- Disarm first: even a failed/restored setter cannot continue collecting.
+  performanceCapture = nil
+  capture.active = false
+  capture.reason = reason or "STOPPED"
+  capture.finished = PerformanceClock() or capture.started
+  capture.framesEnd = PerformanceFrames()
+  for _, entry in ipairs(capture.installed) do
+    local ok, current = pcall(entry.target.get)
+    if ok and current == entry.wrapper then
+      local restored = pcall(entry.target.set, entry.original)
+      local checked, final = pcall(entry.target.get)
+      if not restored or not checked or final ~= entry.original then
+        capture.failures[#capture.failures + 1] = entry.name .. ":RESTORE_FAILED"
+      end
+    elseif not ok then
+      -- Owned getters normally cannot fail. Still attempt cleanup if one does.
+      local restored = pcall(entry.target.set, entry.original)
+      if not restored then capture.failures[#capture.failures + 1] = entry.name .. ":RESTORE_FAILED" end
+      capture.failures[#capture.failures + 1] = entry.name .. ":GETTER_FAILED"
+    else
+      -- Preserve a legitimate replacement made during capture.
+      capture.failures[#capture.failures + 1] = entry.name .. ":TARGET_REPLACED"
+    end
+  end
+  if #capture.failures > 0 and (capture.reason == "COMPLETE" or capture.reason == "STOPPED") then
+    capture.reason = "CLEANUP_FAILED"
+  end
+  lastPerformanceCapture = capture
+  AppendLog("PERFORMANCE", "Capture " .. capture.reason .. "; use /zdperf report outside combat.")
+  if type(ns.RefreshPerformanceOptions) == "function" then pcall(ns.RefreshPerformanceOptions) end
+  return true, capture.reason
+end
+ns.StopPerformanceCapture = PerformanceStop
+
+local function PerformanceWrap(capture, entry)
+  return function(...)
+    if performanceCapture ~= capture then return entry.original(...) end
+    local started = PerformanceClock()
+    if not started then
+      capture.failures[#capture.failures + 1] = entry.name .. ":CLOCK_UNAVAILABLE"
+      PerformanceStop("CLOCK_UNAVAILABLE")
+      return entry.original(...)
+    end
+    local stack = capture.stack
+    local parent = stack[#stack]
+    local sample = {child = 0}
+    stack[#stack + 1] = sample
+    -- Preserve the exact return arity (including nil) and original error object.
+    local values = PerformancePack(pcall(entry.original, ...))
+    local finished = PerformanceClock()
+    stack[#stack] = nil
+    local row = capture.rows[entry.name]
+    row.calls = row.calls + 1
+    if finished and finished >= started then
+      local elapsed = finished - started
+      row.total = row.total + elapsed
+      row.self = row.self + math.max(0, elapsed - sample.child)
+      row.maximum = math.max(row.maximum, elapsed)
+      if parent then parent.child = parent.child + elapsed end
+    else
+      capture.failures[#capture.failures + 1] = entry.name .. ":CLOCK_UNAVAILABLE"
+      PerformanceStop("CLOCK_UNAVAILABLE")
+    end
+    if not values[1] then
+      row.errors = row.errors + 1
+      capture.failures[#capture.failures + 1] = entry.name .. ":TARGET_ERROR"
+      if performanceCapture == capture then PerformanceStop("TARGET_ERROR") end
+      error(values[2], 0)
+    end
+    return PerformanceUnpack(values, 2, values.n)
+  end
+end
+
+function ns.StartPerformanceCapture(seconds)
+  if performanceCapture then return false, "ALREADY_RECORDING" end
+  if seconds ~= 15 and seconds ~= 30 then return false, "USE_15_OR_30_SECONDS" end
+  if type(InCombatLockdown) ~= "function" then return false, "COMBAT_STATE_UNAVAILABLE" end
+  local ok, locked = pcall(InCombatLockdown)
+  if not ok or SafePublicBoolean(locked) ~= false then return false, "COMBAT" end
+  local started = PerformanceClock()
+  if not started then return false, "CLOCK_UNAVAILABLE" end
+  if not C_Timer or type(C_Timer.After) ~= "function" then return false, "TIMER_UNAVAILABLE" end
+  local capture = {active = true, started = started, seconds = seconds, version = PerformanceVersion(), framesStart = PerformanceFrames(),
+    installed = {}, unavailable = {}, failures = {}, rows = {}, order = {}, stack = {}}
+  performanceCapture = capture
+  for _, name in ipairs(performanceOrder) do
+    local target = performanceTargets[name]
+    local resolved, original = pcall(target.get)
+    if resolved and type(original) == "function" then
+      local entry = {name = name, target = target, original = original}
+      entry.wrapper = PerformanceWrap(capture, entry)
+      capture.rows[name] = {calls = 0, total = 0, self = 0, maximum = 0, errors = 0}
+      capture.order[#capture.order + 1] = name
+      -- Record before setting, so a setter which writes then throws is restored.
+      capture.installed[#capture.installed + 1] = entry
+      local installed = pcall(target.set, entry.wrapper)
+      local checked, current = pcall(target.get)
+      if not installed or not checked or current ~= entry.wrapper then
+        capture.failures[#capture.failures + 1] = name .. ":INSTALL_FAILED"
+        PerformanceStop("INSTALL_FAILED")
+        return false, "INSTALL_FAILED"
+      end
+    else
+      capture.unavailable[#capture.unavailable + 1] = name
+    end
+  end
+  if #capture.installed == 0 then
+    PerformanceStop("NO_TARGETS")
+    return false, "NO_TARGETS"
+  end
+  local scheduled = pcall(C_Timer.After, seconds, function()
+    if performanceCapture == capture then PerformanceStop("COMPLETE") end
+  end)
+  if not scheduled then
+    PerformanceStop("TIMER_FAILED")
+    return false, "TIMER_FAILED"
+  end
+  AppendLog("PERFORMANCE", "Capture started for " .. seconds .. " seconds.")
+  return true, "RECORDING"
+end
+
+function ns.GetPerformanceCaptureStatus()
+  local capture = performanceCapture or lastPerformanceCapture
+  return {active = performanceCapture ~= nil, available = capture ~= nil,
+    state = performanceCapture and "RECORDING" or (capture and capture.reason or "OFF"),
+    duration = capture and capture.seconds or 0, targets = capture and #capture.installed or 0,
+    unavailable = capture and #capture.unavailable or 0, failures = capture and #capture.failures or 0}
+end
+
+function ns.BuildPerformanceReport()
+  local capture = performanceCapture or lastPerformanceCapture
+  local lines = {"ZDecursive Performance Capture", "Addon version: " .. (capture and capture.version or PerformanceVersion()),
+    "Optional timing of addon-owned Lua callbacks; no aura contents or unit identities.",
+    "Timings include capture overhead. Self time subtracts only instrumented child calls; this is not FPS or total addon CPU."}
+  if not capture then
+    lines[#lines + 1] = "No capture. Start outside combat: /zdperf 15 or /zdperf 30. Stop: /zdperf stop."
+    return table.concat(lines, "\n")
+  end
+  local finish = capture.finished or PerformanceClock() or capture.started
+  lines[#lines + 1] = "State: " .. (capture.active and "RECORDING" or capture.reason)
+  lines[#lines + 1] = ("Requested: %ds; elapsed: %.2fs"):format(capture.seconds, math.max(0, finish - capture.started) / 1000)
+  lines[#lines + 1] = "Assigned MUFs at start/end: " .. tostring(capture.framesStart or "unavailable") .. "/" .. tostring(capture.framesEnd or "unavailable")
+  lines[#lines + 1] = "Target | calls | total ms | self ms | max ms | errors"
+  for _, name in ipairs(capture.order) do
+    local row = capture.rows[name]
+    lines[#lines + 1] = ("%s | %d | %.3f | %.3f | %.3f | %d"):format(name, row.calls, row.total, row.self, row.maximum, row.errors)
+  end
+  lines[#lines + 1] = "Unavailable targets: " .. (#capture.unavailable > 0 and table.concat(capture.unavailable, ", ") or "none")
+  lines[#lines + 1] = "Capture/cleanup failures: " .. (#capture.failures > 0 and table.concat(capture.failures, ", ") or "none")
+  return table.concat(lines, "\n")
+end
+
+function ns.ShowPerformanceReport()
+  local ok, locked = pcall(InCombatLockdown or function() return true end)
+  if not ok or SafePublicBoolean(locked) ~= false then return false, "COMBAT" end
+  return ShowText(ns.BuildPerformanceReport())
+end
+
+function ns.HandlePerformanceCommand(message)
+  local command = type(message) == "string" and message:match("^%s*(.-)%s*$"):lower() or ""
+  local ok, reason
+  if command == "15" or command == "30" then
+    ok, reason = ns.StartPerformanceCapture(tonumber(command))
+  elseif command == "stop" then
+    ok, reason = PerformanceStop("STOPPED")
+  else
+    return ns.ShowPerformanceReport()
+  end
+  -- No automatic report window during combat. Results remain available later.
+  if UIErrorsFrame and type(UIErrorsFrame.AddMessage) == "function" then
+    UIErrorsFrame:AddMessage("ZDecursive performance: " .. reason .. ". /zdperf report to copy results.", 0.95, 0.72, 0.36)
+  end
+  return ok, reason
+end
+
+RegisterProvider("Performance", ns.GetPerformanceCaptureStatus)
+
 local function RegisterSlashCommands()
   SlashCmdList = SlashCmdList or {}
+  SLASH_ZDECURSIVEPERFORMANCE1 = "/zdperf"
+  SlashCmdList.ZDECURSIVEPERFORMANCE = ns.HandlePerformanceCommand
   SLASH_ZDECURSIVEDIAGNOSTICS1 = "/zdiag"
   SLASH_ZDECURSIVEDIAGNOSTICS2 = "/zdiagnostics"
   SlashCmdList.ZDECURSIVEDIAGNOSTICS = function(message)

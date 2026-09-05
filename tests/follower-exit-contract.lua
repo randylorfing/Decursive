@@ -219,7 +219,7 @@ Check(core:find('self:StartRosterConvergence(event or "GROUP_ROSTER_UPDATE")', 1
 Check(core:find('ROSTER_CONVERGENCE_DELAYS = {0.10, 0.35, 1.00, 2.00, 4.00, 7.00, 10.00}', 1, true), "roster convergence covers delayed public API settlement")
 Check(not core:find('SetScript("OnUpdate"', 1, true), "roster recovery does not poll OnUpdate")
 Check(mufs:find("ns.DetectionEngine:UnassignCarrier(btn)", 1, true), "unused MUFs unassign native carriers")
-Check(mufs:find('btn:SetAttribute("unit", nil)', 1, true), "unused MUFs clear secure unit state")
+Check(mufs:find('return CommitClickAttributes(btn, {})', 1, true), "unused MUFs clear the complete owned secure plan, including unit")
 Check(mufs:find("ClearClickAttributes(btn)", 1, true), "unused MUFs clear secure click actions")
 Check(mufs:find("DisableIdentityTooltip(btn, true)", 1, true), "unused MUFs clear tooltip state")
 Check(mufs:find("PaintManagedOverlays(btn, pack, nil)", 1, true), "unused MUFs clear skull, cooldown, range, and managed presentation")

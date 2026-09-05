@@ -611,7 +611,7 @@ function ns.RequestUnitSortRefresh(reason)
   sortState.pending = false
   sortState.refreshGeneration = sortState.refreshGeneration + 1
   if ns.RefreshMUFs then
-    ns.RefreshMUFs()
+    ns.RefreshMUFs(reason)
   end
   return true
 end
@@ -635,12 +635,13 @@ local function CurrentPackUsesDandersFrames()
     return false
   end
   local pack = addon:GetAppliedEnvironmentPack()
-  return type(pack) == "table" and type(pack.mufs) == "table" and pack.mufs.order == "DANDERSFRAMES"
+  local order = type(pack) == "table" and type(pack.mufs) == "table" and pack.mufs.order
+  return order == "AUTO" or order == "DANDERSFRAMES"
 end
 
 local function OnDandersFramesSorted(_event, sortType)
   sortType = PublicString(sortType)
-  if sortType ~= "party" and sortType ~= "raid" then
+  if sortType ~= "party" and sortType ~= "raid" and sortType ~= "arena" then
     return
   end
   if not CurrentPackUsesDandersFrames() then
@@ -684,7 +685,7 @@ end
 
 local function ConfiguredOrder(pack)
   local order = type(pack) == "table" and type(pack.mufs) == "table" and pack.mufs.order or nil
-  if order == "PRIORITY" or order == "DANDERSFRAMES" then
+  if order == "AUTO" or order == "PRIORITY" or order == "DANDERSFRAMES" then
     return order
   end
   return "GROUP"
@@ -692,10 +693,11 @@ end
 
 local function EffectiveOrder(pack)
   local configured = ConfiguredOrder(pack)
-  if configured == "DANDERSFRAMES" then
+  if configured == "AUTO" or configured == "DANDERSFRAMES" then
     if not DandersFramesReady() or sortState.dandersApplied == false then
       return "GROUP"
     end
+    return "DANDERSFRAMES"
   end
   return configured
 end
@@ -735,7 +737,7 @@ function ns.SetConfiguredMUFOrder(pack, value)
   if type(pack) ~= "table" or type(pack.mufs) ~= "table" then
     return false, "pack"
   end
-  if value ~= "GROUP" and value ~= "PRIORITY" and value ~= "DANDERSFRAMES" then
+  if value ~= "AUTO" and value ~= "GROUP" and value ~= "PRIORITY" and value ~= "DANDERSFRAMES" then
     value = "GROUP"
   end
   if SortLockedDown() then
@@ -802,8 +804,11 @@ end
 local function DandersFrameSlots()
   local slots = {}
   local nextSlot = 1
+  local inArena = PublicBoolean(CallGlobal("IsActiveBattlefieldArena")) == true
   local inRaid = PublicBoolean(CallGlobal("IsInRaid")) == true
-  if inRaid then
+  if inArena then
+    nextSlot = AddHeaderSlots(slots, CallGlobal("DandersFrames_GetArenaHeader"), 5, nextSlot)
+  elseif inRaid then
     local grouped = PublicBoolean(CallGlobal("DandersFrames_IsRaidGrouped"))
     if grouped then
       local headers = PublicTable(CallGlobal("DandersFrames_GetRaidGroupHeaders"))
@@ -822,8 +827,9 @@ local function DandersFrameSlots()
 end
 
 local function DandersHorizontalLayout()
+  local inArena = PublicBoolean(CallGlobal("IsActiveBattlefieldArena")) == true
   local inRaid = PublicBoolean(CallGlobal("IsInRaid")) == true
-  local configName = inRaid and "DandersFrames_GetRaidConfig" or "DandersFrames_GetPartyConfig"
+  local configName = inRaid and not inArena and "DandersFrames_GetRaidConfig" or "DandersFrames_GetPartyConfig"
   local config = PublicTable(CallGlobal(configName))
   if not config then
     return false

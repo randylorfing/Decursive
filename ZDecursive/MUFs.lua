@@ -29,9 +29,7 @@ local POOL_SIZE = 80
 local BORDER_PX = 2
 local WHITE = "Interface\\Buttons\\WHITE8x8"
 local MACRO_BYTE_LIMIT = 255
-local PVP_BANDAGE_SPELL = 212640
 local SOUL_LINK_ITEM_ID = 269586
-local SOUL_LINK_RANGE_SPELL = 1259646
 local SKULL_TEXTURE = 137008
 local COLOR_DEAD = {0, 0, 0, 1}
 local COLOR_DEAD_CLEAR = {0, 0, 0, 0}
@@ -76,6 +74,7 @@ local TARGET_GESTURE = "*%s3"
 local FOCUS_GESTURE = "ctrl-%s3"
 local PVP_BANDAGE_GESTURE = "*%s5"
 local PHYSICAL_LEFT = "*%s1"
+local ClickRowForButton
 
 local GESTURE_PREFIXES = {"", "*", "ctrl-", "shift-", "alt-", "ctrl-shift-", "alt-ctrl-", "alt-shift-", "alt-ctrl-shift-"}
 
@@ -134,9 +133,6 @@ local function GetEnv()
 end
 
 local function Accessible(value)
-  if value == nil then
-    return true
-  end
   if type(issecretvalue) == "function" and issecretvalue(value) then
     if type(canaccessvalue) == "function" then
       return canaccessvalue(value) == true
@@ -166,7 +162,7 @@ end
 
 local PASS_BUTTONS = {"LeftButton", "RightButton", "MiddleButton", "Button4", "Button5"}
 
-local function PassClicks(frame)
+local function PassClicks(frame, tooltipEnabled)
   if not frame then
     return
   end
@@ -188,7 +184,8 @@ local function PassClicks(frame)
     frame:EnableMouse(false)
   end
   if frame.SetMouseMotionEnabled then
-    frame:SetMouseMotionEnabled(false)
+    -- Native aura tooltips require motion; enabling motion alone leaves clicks off.
+    frame:SetMouseMotionEnabled(tooltipEnabled == true)
   end
 end
 
@@ -227,6 +224,52 @@ end
 
 ns.NormalizeMUFBooleanWidgetValue = NormalizeBooleanWidgetValue
 
+local function ManagedSet(region, method, ...)
+  if not region or type(region[method]) ~= "function" then return false end
+  local count = select("#", ...)
+  local public = true
+  for i = 1, count do
+    local value = select(i, ...)
+    if (type(issecretvalue) == "function" and issecretvalue(value)) or not Accessible(value) then
+      public = false
+      break
+    end
+  end
+  local key = (method == "Show" or method == "Hide") and "shown"
+    or ((method == "SetAlpha" or method == "SetAlphaFromBoolean") and "alpha")
+    or ((method == "SetVertexColor" or method == "SetVertexColorFromBoolean") and "vertex") or method
+  local cache = region.zdManagedVisual
+  local old = cache and cache[key]
+  if public and old and old.method == method and old.count == count then
+    local same = true
+    for i = 1, count do
+      if old[i] ~= select(i, ...) then
+        same = false
+        break
+      end
+    end
+    if same then return true end
+  end
+  -- Invalidate before calling: a throwing setter must never leave a cache hit.
+  if cache then cache[key] = nil end
+  region[method](region, ...)
+  if public then
+    cache = cache or {}
+    cache[key] = {method = method, count = count, ...}
+    region.zdManagedVisual = cache
+  end
+  return true
+end
+
+local function InvalidateManagedVisuals(btn)
+  if ns.InvalidateMUFRangeShade then ns.InvalidateMUFRangeShade(btn) end
+  for _, key in ipairs({"deadFill", "skullTex", "soulLinkFill", "stealthTex", "failTex",
+    "rangeOverlay", "rangeHost", "raidIcon", "statusLight", "statusLightRange"}) do
+    local region = btn[key]
+    if region then region.zdManagedVisual = nil end
+  end
+end
+
 local function ApplyBooleanVertex(tex, value, onColor, offColor)
   if not tex then
     return false
@@ -235,14 +278,14 @@ local function ApplyBooleanVertex(tex, value, onColor, offColor)
   local onObj = ColorObject(onColor)
   local offObj = ColorObject(offColor)
   if tex.SetVertexColorFromBoolean and onObj and offObj then
-    tex:SetVertexColorFromBoolean(value, onObj, offObj)
+    ManagedSet(tex, "SetVertexColorFromBoolean", value, onObj, offObj)
     return true
   end
   if Accessible(value) then
     local c = (value == true or value == 1) and onColor or offColor
     local r, g, b, a = ColorOf(c)
     if tex.SetVertexColor then
-      tex:SetVertexColor(r, g, b, a)
+      ManagedSet(tex, "SetVertexColor", r, g, b, a)
     end
     return true
   end
@@ -284,23 +327,29 @@ local function StealthedValue(unit)
   return UnitIsStealthed(unit)
 end
 
-local function SoulLinkRangeValue(unit)
-  if type(unit) ~= "string" or unit == "" then
-    return false
-  end
-  if C_Spell and C_Spell.IsSpellInRange then
-    local ok, result = pcall(C_Spell.IsSpellInRange, SOUL_LINK_RANGE_SPELL, unit)
-    if ok then
-      return result
-    end
-  end
-  if ns.SpellRangeState then
-    return ns.SpellRangeState(unit, nil, SOUL_LINK_RANGE_SPELL)
-  end
-  return false
+local function SmartRezPresentation(pack)
+  if not ns.GetSmartRezActions then return {} end
+  local _, _, combat, outOfCombat, _, spellId = ns.GetSmartRezActions(pack)
+  return {combat = combat == true, outOfCombat = outOfCombat == true, spellId = spellId}
 end
 
-local function SoulLinkFallbackApplies(unit)
+local function SoulLinkRangeValue(unit, prepared)
+  if type(unit) ~= "string" or unit == "" then
+    return nil, false
+  end
+  local spellId = (prepared or SmartRezPresentation(GetPack())).spellId
+  if type(spellId) ~= "number" then return nil, false end
+  if C_Spell and C_Spell.IsSpellInRange then
+    local ok, result = pcall(C_Spell.IsSpellInRange, spellId, unit)
+    if ok then
+      if Accessible(result) and result == nil then return nil, false end
+      return result, true
+    end
+  end
+  return nil, false
+end
+
+local function SoulLinkFallbackApplies(unit, prepared)
   if type(unit) ~= "string" then
     return false
   end
@@ -314,8 +363,11 @@ local function SoulLinkFallbackApplies(unit)
   if not ns.GetSmartRezActions then
     return false
   end
-  local _battle, _ooc, combatSoulLink, outOfCombatSoulLink = ns.GetSmartRezActions(GetPack())
-  return combatSoulLink == true or outOfCombatSoulLink == true
+  local state = prepared or SmartRezPresentation(GetPack())
+  if LockedDown() then
+    return state.combat
+  end
+  return state.outOfCombat
 end
 
 local function IsPubliclyDeadUnit(unit)
@@ -326,11 +378,16 @@ local function IsPubliclyDeadUnit(unit)
   return ok and IsTrue(dead)
 end
 
-local function ShouldBeginSoulLinkAttempt(unit)
-  -- The secure macro chooses rez/Soul Link only for a dead friendly mouseover.
-  -- Do not arm attribution for a normal living-unit cure: its range failure
-  -- belongs to the dispel, not to the Soul Link fallback.
-  return IsPubliclyDeadUnit(unit) and SoulLinkFallbackApplies(unit)
+local function ShouldBeginSoulLinkAttempt(btn, button)
+  -- This metadata describes the installed generated action, never a custom
+  -- macro or an editable profile. Observe clicks without changing secure state.
+  if not btn or btn.assigned ~= true or not IsPubliclyDeadUnit(btn.unit) then
+    return false
+  end
+  local row = ClickRowForButton(btn.soulLinkRows, button)
+  if not row then return false end
+  if LockedDown() then return row.combat == true end
+  return row.outOfCombat == true
 end
 
 ns.ShouldBeginSoulLinkAttemptForValidation = ShouldBeginSoulLinkAttempt
@@ -514,7 +571,9 @@ function ns.GetMUFVisualMetrics(baseSize, borderOn, unit)
   end
   local frameSize = baseSize
   if IsPetUnitToken(unit) then
-    frameSize = math.max(8, baseSize - 4)
+    -- Original Decursive uses 16-pixel pets beside 20-pixel player MUFs.
+    -- Preserve that ratio when our party or raid base size changes.
+    frameSize = math.max(8, baseSize * 0.80)
   end
   return frameSize, InnerMUFSize(frameSize, borderOn)
 end
@@ -770,28 +829,37 @@ end
 
 local function BindAuraSlot(slot, pack, cover, slotInfo)
   if not slot then
-    return
+    return false, "FAILURE"
+  end
+  if LockedDown() then
+    return false, "DEFERRED_COMBAT"
   end
   local host = cover
   if host and host.GetParent then
     host = host:GetParent() or host
   end
   local baseLevel = host and host.GetFrameLevel and host:GetFrameLevel() or 0
-  if ns.ConfigureMUFDispelPresentation then
-    ns.ConfigureMUFDispelPresentation(slot, pack, cover, baseLevel, host, slotInfo)
+  if type(ns.ConfigureMUFDispelPresentation) ~= "function" then
+    return false, "FAILURE"
   end
+  local _, _, presentationOK, presentationStatus = ns.ConfigureMUFDispelPresentation(slot, pack, cover, baseLevel, host, slotInfo)
   if slot.SetTooltipAnchorPoint then
     slot:SetTooltipAnchorPoint("ANCHOR_RIGHT", 8, 0)
   end
   if slot.SetHideTooltipInCombat then
     slot:SetHideTooltipInCombat(false)
   end
-  -- Managed AuraSlots must not take the mouse. Tooltip stays on the MUF button.
-  -- Do not re-enable mouse for slot tooltips after DisableInteraction (combat click eat).
-  PassClicks(slot)
+  -- Let Blizzard's slot show its aura tooltip without capturing cure clicks.
+  -- Never use EnableMouse(true): that also re-enables click interception.
+  local tooltipEnabled = pack and pack.mufs and pack.mufs.tooltip ~= false
+  PassClicks(slot, tooltipEnabled)
   if ns.ConfigureDispelAlertSlot then
     ns.ConfigureDispelAlertSlot(slot)
   end
+  if presentationOK ~= true then
+    return false, presentationStatus or "FAILURE"
+  end
+  return true, "SUCCESS"
 end
 
 local function CureActionKey(action)
@@ -851,10 +919,11 @@ function ns.GetKeyboardCureActions(pack)
 end
 
 local function BuildSmartRezMacroText(cureCommand, cureName, cureUsesPet)
-  local battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink
+  local battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink, soulLinkItemId
   if ns.GetSmartRezActions then
-    battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink = ns.GetSmartRezActions(GetPack())
+    battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink, soulLinkItemId = ns.GetSmartRezActions(GetPack())
   end
+  local soulLinkItem = " item:" .. tostring(soulLinkItemId or SOUL_LINK_ITEM_ID)
   local hasRezAction = battleRezName ~= nil or outOfCombatRezName ~= nil or combatSoulLink or outOfCombatSoulLink
   local combatClause = "[@mouseover,help,exists,dead,combat]"
   local outOfCombatClause = "[@mouseover,help,exists,dead,nocombat]"
@@ -877,13 +946,13 @@ local function BuildSmartRezMacroText(cureCommand, cureName, cureUsesPet)
         end
       end
       if combatSoulLink and outOfCombatSoulLink then
-        useActions[#useActions + 1] = combatClause .. outOfCombatClause .. " item:269586"
+        useActions[#useActions + 1] = combatClause .. outOfCombatClause .. soulLinkItem
       else
         if combatSoulLink then
-          useActions[#useActions + 1] = combatClause .. " item:269586"
+          useActions[#useActions + 1] = combatClause .. soulLinkItem
         end
         if outOfCombatSoulLink then
-          useActions[#useActions + 1] = outOfCombatClause .. " item:269586"
+          useActions[#useActions + 1] = outOfCombatClause .. soulLinkItem
         end
       end
     end
@@ -916,7 +985,8 @@ local function BuildSmartRezMacroText(cureCommand, cureName, cureUsesPet)
   local combined = build(true, cureName ~= nil)
   local cureOnly = build(false, cureName ~= nil)
   local rezOnly = build(true, false)
-  return combined, cureOnly, rezOnly, hasRezAction
+  return combined, cureOnly, rezOnly, hasRezAction,
+    {combat = combatSoulLink == true, outOfCombat = outOfCombatSoulLink == true}
 end
 
 local function MakeCureRow(action, binding, priority)
@@ -928,7 +998,7 @@ local function MakeCureRow(action, binding, priority)
   if type(spellId) == "number" and spellId > 0 then
     command = "cast"
   end
-  local combined, cureOnly, rezOnly, hasRez = BuildSmartRezMacroText(command, action.name, action.pet == true)
+  local combined, cureOnly, rezOnly, hasRez, soulLink = BuildSmartRezMacroText(command, action.name, action.pet == true)
   if type(cureOnly) ~= "string" or #cureOnly > MACRO_BYTE_LIMIT then
     return nil
   end
@@ -943,10 +1013,12 @@ local function MakeCureRow(action, binding, priority)
     spellName = action.name,
     spellId = spellId,
     baseId = action.baseId,
+    itemId = action.itemId,
     types = action.types,
     cureOnlyMacroText = cureOnly,
     rezOnlyMacroText = "",
     smartRezAvailable = false,
+    soulLink = soulLink,
     customMacro = false,
   }
   if type(combined) == "string" and #combined <= MACRO_BYTE_LIMIT then
@@ -964,53 +1036,155 @@ local function MakeCureRow(action, binding, priority)
   return row
 end
 
-local function ScanPvPBandage()
+-- Inventory is public, out-of-combat input to a preinstalled secure click.
+-- Never derive bandage choice from target health/auras, cooldowns, or range.
+-- Retail 12.1 ItemConstants: Consumable = 0, Bandage = 7. Classification
+-- covers the client's bandage category without localized names or spell lists.
+local BANDAGE_ITEM_CLASS, BANDAGE_ITEM_SUBCLASS = 0, 7
+local bandageInventory = {items = {}, byID = {}, carried = {}, waiting = {}, requested = {}, dirty = true, pending = false, complete = false, signature = "COLD"}
+
+local function BandageAccessible(value)
+  return type(issecretvalue) ~= "function" or not issecretvalue(value)
+end
+
+local function BandageNumber(value)
+  if not BandageAccessible(value) or type(value) ~= "number" or value ~= value or value < 0 or value >= math.huge then return nil end
+  return value
+end
+
+local function BandageItemID(value)
+  local number = BandageNumber(value)
+  if number and number > 0 and number == math.floor(number) then return number end
+  return nil
+end
+
+local function BandageMode(pack)
+  local cure = pack and pack.cure or {}
+  local mode = cure.bandageMode
+  if mode ~= "OFF" and mode ~= "SELECTED" then mode = "AUTO" end
+  return mode, BandageItemID(cure.bandageItemID)
+end
+
+local function BandageQuality(itemID)
+  if type(C_TradeSkillUI) ~= "table" then return nil end
+  -- Match Blizzard ItemButton's reagent-then-crafted quality lookup. Quality
+  -- labels are optional metadata, never an eligibility or combat decision.
+  for _, method in ipairs({"GetItemReagentQualityByItemInfo", "GetItemCraftedQualityByItemInfo"}) do
+    if type(C_TradeSkillUI[method]) == "function" then
+      local ok, value = pcall(C_TradeSkillUI[method], itemID)
+      value = ok and BandageItemID(value) or nil
+      if value then return value end
+    end
+  end
+end
+
+local function RequestBandageItemData(itemID, waiting, requested)
+  waiting[itemID] = true
+  local request = requested[itemID] or {attempts = 0, inFlight = false}
+  requested[itemID] = request
+  if request.inFlight or request.attempts >= 2 then return end
+  request.attempts = request.attempts + 1
+  if C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
+    request.inFlight = true
+    if not pcall(C_Item.RequestLoadItemDataByID, itemID) then request.inFlight = false end
+  end
+end
+
+function ns.BandageItemDataResult(itemID)
+  itemID = BandageItemID(itemID)
+  if not itemID or not bandageInventory.waiting[itemID] then return false end
+  local request = bandageInventory.requested[itemID]
+  if request then request.inFlight = false end
+  bandageInventory.dirty = true
+  if LockedDown() then bandageInventory.pending = true end
+  return true
+end
+
+function ns.MarkBandageInventoryDirty(itemID)
+  if itemID ~= nil and not BandageItemID(itemID) then return false end
+  bandageInventory.dirty = true
+  if LockedDown() then bandageInventory.pending = true end
+  return true
+end
+
+function ns.IsBandageInventoryEventItem(itemID, event)
+  itemID = BandageItemID(itemID)
+  if not itemID then return false end
+  -- A count event can be the first notification for an acquired bandage.
+  -- Cached item-info notifications matter only to items observed in our bags.
+  return event == "ITEM_COUNT_CHANGED" or bandageInventory.carried[itemID] == true
+    or bandageInventory.waiting[itemID] == true
+end
+
+function ns.RefreshBandageInventory(_reason)
+  if _reason == "OPTIONS_BANDAGES" then
+    bandageInventory.dirty = true
+    bandageInventory.requested = {}
+  end
   if LockedDown() then
-    return clickModel and clickModel.bandage or nil
+    bandageInventory.pending = bandageInventory.pending or bandageInventory.dirty
+    return false, false
   end
-  local itemAPI = C_Item
-  local containerAPI = C_Container
-  if type(itemAPI) ~= "table" or type(containerAPI) ~= "table" then
-    return nil
+  if not bandageInventory.dirty then return false, bandageInventory.complete end
+  local oldSignature = bandageInventory.signature
+  local itemAPI, containerAPI = C_Item, C_Container
+  if type(itemAPI) ~= "table" or type(containerAPI) ~= "table"
+    or type(itemAPI.GetItemInfoInstant) ~= "function" or type(itemAPI.GetItemCount) ~= "function"
+    or type(containerAPI.GetContainerNumSlots) ~= "function" or type(containerAPI.GetContainerItemInfo) ~= "function" then
+    bandageInventory = {items = {}, byID = {}, carried = {}, waiting = {}, requested = {}, dirty = false, pending = false, complete = false, signature = "UNAVAILABLE"}
+    return oldSignature ~= "UNAVAILABLE", false
   end
-  if type(itemAPI.GetItemSpell) ~= "function" or type(containerAPI.GetContainerNumSlots) ~= "function" then
-    return nil
-  end
-  local first = 0
-  local last = NUM_BAG_SLOTS or 4
-  local bagEnum = Enum and Enum.BagIndex
-  if bagEnum and type(bagEnum.Backpack) == "number" then
-    first = bagEnum.Backpack
-  end
-  local best
-  for bag = first, last do
-    local okSlots, nSlots = pcall(containerAPI.GetContainerNumSlots, bag)
-    if okSlots and type(nSlots) == "number" and nSlots > 0 then
-      for slot = 1, nSlots do
+  local items, byID, carried, waiting, requested = {}, {}, {}, {}, {}
+  local complete = true
+  local last = BandageNumber(NUM_TOTAL_EQUIPPED_BAG_SLOTS) or BandageNumber(NUM_BAG_SLOTS) or 4
+  last = math.min(math.floor(last), 5)
+  for bag = 0, last do
+    local okSlots, slots = pcall(containerAPI.GetContainerNumSlots, bag)
+    slots = okSlots and BandageNumber(slots) or nil
+    if not slots or slots ~= math.floor(slots) or slots > 100 then
+      complete = false
+    else
+      for slot = 1, slots do
         local okInfo, info = pcall(containerAPI.GetContainerItemInfo, bag, slot)
-        if okInfo and type(info) == "table" then
-          local itemID = info.itemID
-          if type(itemID) == "number" and Accessible(itemID) and itemID > 0 then
-            local okSpell, _name, useSpellID = pcall(itemAPI.GetItemSpell, itemID)
-            if okSpell and Accessible(useSpellID) and useSpellID == PVP_BANDAGE_SPELL then
-              local count = 0
-              if itemAPI.GetItemCount then
-                local okCount, c = pcall(itemAPI.GetItemCount, itemID, false, false, false, false)
-                if okCount and Accessible(c) and type(c) == "number" then
-                  count = c
-                end
-              end
-              if count > 0 then
-                local usable = true
-                if itemAPI.IsUsableItem then
-                  local okUse, u = pcall(itemAPI.IsUsableItem, itemID)
-                  if okUse and Accessible(u) then
-                    usable = u == true
+        if not okInfo or not BandageAccessible(info) then
+          complete = false
+        elseif type(info) == "table" then
+          local itemID = BandageItemID(info.itemID)
+          if not itemID then
+            complete = false
+          elseif not carried[itemID] then
+            carried[itemID] = true
+            requested[itemID] = bandageInventory.requested[itemID]
+            local okClass, _id, _type, _subtype, _equip, _icon, classID, subClassID = pcall(itemAPI.GetItemInfoInstant, itemID)
+            classID, subClassID = BandageNumber(classID), BandageNumber(subClassID)
+            if not okClass or classID == nil or subClassID == nil then
+              complete = false
+              RequestBandageItemData(itemID, waiting, requested)
+            elseif classID == BANDAGE_ITEM_CLASS and subClassID == BANDAGE_ITEM_SUBCLASS then
+              local okCount, count = pcall(itemAPI.GetItemCount, itemID, false, false, false, false)
+              count = okCount and BandageNumber(count) or nil
+              if count == nil or count > 0 then
+                local name, itemLevel
+                if type(itemAPI.GetItemInfo) == "function" then
+                  local okData, n, _link, _quality, level = pcall(itemAPI.GetItemInfo, itemID)
+                  if okData then
+                    if BandageAccessible(n) and type(n) == "string" and n ~= "" then name = n end
+                    itemLevel = BandageNumber(level)
                   end
                 end
-                if usable then
-                  best = {itemID = itemID, actionKey = "pvp-bandage:item:" .. tostring(itemID)}
+                local usable
+                if type(itemAPI.IsUsableItem) == "function" then
+                  local okUse, value = pcall(itemAPI.IsUsableItem, itemID)
+                  if okUse and BandageAccessible(value) and type(value) == "boolean" then usable = value end
                 end
+                local status = "READY"
+                if usable == false then status = "UNUSABLE"
+                elseif count == nil or usable == nil then status = "UNKNOWN"
+                elseif not name or itemLevel == nil then status = "LOADING" end
+                if not name or itemLevel == nil then RequestBandageItemData(itemID, waiting, requested) end
+                if status == "UNKNOWN" or status == "LOADING" then complete = false end
+                local row = {itemID = itemID, name = name or ("Item " .. tostring(itemID)), count = count, itemLevel = itemLevel, quality = BandageQuality(itemID), usable = usable, status = status}
+                items[#items + 1], byID[itemID] = row, row
               end
             end
           end
@@ -1018,7 +1192,177 @@ local function ScanPvPBandage()
       end
     end
   end
-  return best
+  table.sort(items, function(left, right)
+    local leftLevel, rightLevel = left.itemLevel or -1, right.itemLevel or -1
+    if leftLevel ~= rightLevel then return leftLevel > rightLevel end
+    return left.itemID > right.itemID
+  end)
+  local bits = {complete and "COMPLETE" or "PARTIAL"}
+  for _, row in ipairs(items) do
+    bits[#bits + 1] = table.concat({row.itemID, row.count or "?", row.itemLevel or "?", row.quality or "?", row.status, row.name}, ":")
+  end
+  local waitingIDs = {}
+  for itemID in pairs(waiting) do waitingIDs[#waitingIDs + 1] = itemID end
+  table.sort(waitingIDs)
+  bits[#bits + 1] = table.concat(waitingIDs, ",")
+  local signature = table.concat(bits, "|")
+  bandageInventory = {items = items, byID = byID, carried = carried, waiting = waiting, requested = requested, dirty = false, pending = false, complete = complete, signature = signature}
+  return oldSignature ~= signature, complete
+end
+
+function ns.GetBandageInventorySignature()
+  ns.RefreshBandageInventory("SIGNATURE")
+  if LockedDown() and bandageInventory.dirty then return nil end
+  return bandageInventory.signature
+end
+
+local function SelectedBandage(pack)
+  local mode, selectedItemID = BandageMode(pack)
+  if mode == "OFF" then return nil, "OFF", selectedItemID end
+  if mode == "SELECTED" then
+    local row = selectedItemID and bandageInventory.byID[selectedItemID]
+    if not row then return nil, bandageInventory.complete and "SELECTED_MISSING" or "UNKNOWN", selectedItemID end
+    if row.usable == false then return nil, "SELECTED_UNUSABLE", selectedItemID end
+    if row.status ~= "READY" then return nil, row.status, selectedItemID end
+    return row, "READY", selectedItemID
+  end
+  -- A partial scan must not silently choose another item before its metadata
+  -- is available. Explicit selection also never falls back to another item.
+  if not bandageInventory.complete then return nil, next(bandageInventory.waiting) and "LOADING" or "UNKNOWN" end
+  for _, row in ipairs(bandageInventory.items) do
+    if row.status == "READY" then return row, "READY", row.itemID end
+  end
+  return nil, "NO_BANDAGES"
+end
+
+function ns.GetBandageActionSignature(pack)
+  local mode, itemID = BandageMode(pack)
+  return mode .. ":" .. tostring(itemID or 0) .. ":" .. (ns.GetBandageInventorySignature() or "PENDING")
+end
+
+function ns.GetBandageInventoryStatus(pack)
+  pack = pack or GetPack()
+  ns.RefreshBandageInventory("STATUS")
+  local row, status, selectedItemID = SelectedBandage(pack)
+  local mode = BandageMode(pack)
+  local result = {mode = mode, itemID = row and row.itemID or nil, selectedItemID = selectedItemID,
+    selectedName = row and row.name or selectedItemID and ("Item " .. tostring(selectedItemID)) or nil,
+    status = bandageInventory.pending and "DEFERRED_COMBAT" or status, pending = bandageInventory.pending == true,
+    complete = bandageInventory.complete, binding = "Button 5", items = {}}
+  for i, item in ipairs(bandageInventory.items) do
+    result.items[i] = {itemID = item.itemID, name = item.name, count = item.count, itemLevel = item.itemLevel, quality = item.quality, usable = item.usable, status = item.status}
+  end
+  return result
+end
+
+-- The reminder observes the same public inventory used for the next secure
+-- binding. It never uses target state and cannot scan or choose during combat.
+function ns.GetBandageLowStockStatus(pack)
+  pack = pack or GetPack()
+  local cure = pack and pack.cure or {}
+  local threshold = BandageNumber(cure.bandageLowStockThreshold) or 5
+  threshold = math.max(1, math.min(200, math.floor(threshold)))
+  local result = {enabled = cure.bandageLowStockEnabled == true, threshold = threshold, low = false, status = "DISABLED"}
+  if not result.enabled then return result end
+  local mode, selectedItemID = BandageMode(pack)
+  if mode == "OFF" then
+    result.status = "OFF"
+    return result
+  end
+  if LockedDown() then
+    result.status = "DEFERRED_COMBAT"
+    return result
+  end
+  ns.RefreshBandageInventory("LOW_STOCK")
+  local row, status = SelectedBandage(pack)
+  result.status = status
+  if row then
+    result.itemID, result.count = row.itemID, BandageNumber(row.count)
+    if result.count and result.count ~= math.floor(result.count) then
+      result.count = nil
+      result.status = "UNKNOWN"
+    end
+  elseif status == "SELECTED_MISSING" and selectedItemID and bandageInventory.complete then
+    -- A persisted pin with no stock still has to be a publicly identified,
+    -- usable bandage. Unknown metadata or level restrictions are not depletion.
+    local itemAPI = C_Item
+    if type(itemAPI) ~= "table" or type(itemAPI.GetItemInfoInstant) ~= "function"
+      or type(itemAPI.IsUsableItem) ~= "function" then
+      result.status = "UNKNOWN"
+      return result
+    end
+    local ok, _id, _type, _subtype, _equip, _icon, classID, subClassID = pcall(itemAPI.GetItemInfoInstant, selectedItemID)
+    classID, subClassID = BandageNumber(classID), BandageNumber(subClassID)
+    if not ok or classID == nil or subClassID == nil then
+      result.status = "UNKNOWN"
+      return result
+    end
+    if classID ~= BANDAGE_ITEM_CLASS or subClassID ~= BANDAGE_ITEM_SUBCLASS then
+      result.status = "UNUSABLE"
+      return result
+    end
+    local usableOK, usable = pcall(itemAPI.IsUsableItem, selectedItemID)
+    if not usableOK or not BandageAccessible(usable) or type(usable) ~= "boolean" then
+      result.status = "UNKNOWN"
+      return result
+    end
+    if not usable then
+      result.status = "UNUSABLE"
+      return result
+    end
+    result.itemID, result.count = selectedItemID, 0
+  elseif status == "SELECTED_UNUSABLE" then
+    result.status = "UNUSABLE"
+  end
+  if result.count ~= nil then
+    result.low = result.count <= threshold
+    result.status = result.count == 0 and "EMPTY" or result.low and "LOW" or "READY"
+  end
+  return result
+end
+
+local bandageReminderEpisodes = setmetatable({}, {__mode = "k"})
+local bandageReminderPack
+
+function ns.RefreshBandageLowStockReminder()
+  local pack = GetPack()
+  if bandageReminderPack ~= pack then
+    if ns.HideBandageLowStockReminder then ns.HideBandageLowStockReminder() end
+    bandageReminderPack = pack
+  end
+  local status = ns.GetBandageLowStockStatus(pack)
+  if not status.low then
+    if ns.HideBandageLowStockReminder then ns.HideBandageLowStockReminder() end
+    -- Provisional metadata and combat retain the episode, so a delayed cache
+    -- result cannot repeatedly warn about an unchanged low inventory.
+    if pack and (status.status == "DISABLED" or status.status == "OFF" or status.status == "READY") then
+      bandageReminderEpisodes[pack] = nil
+    end
+    return false, status
+  end
+  local previous = bandageReminderEpisodes[pack]
+  if previous and previous.itemID == status.itemID and previous.empty and status.count > 0 then
+    if ns.HideBandageLowStockReminder then ns.HideBandageLowStockReminder() end
+    previous.empty = false
+  end
+  if previous and previous.itemID == status.itemID and previous.threshold == status.threshold
+    and (previous.empty or status.status ~= "EMPTY") then return false, status end
+  if type(ns.ShowBandageLowStockReminder) ~= "function" or ns.ShowBandageLowStockReminder(status) ~= true then
+    return false, status
+  end
+  bandageReminderEpisodes[pack] = {itemID = status.itemID, threshold = status.threshold, empty = status.status == "EMPTY"}
+  if ns.DiagnosticRecord then
+    ns.DiagnosticRecord("BANDAGE_LOW_STOCK", {result = status.status, count = status.count, threshold = status.threshold}, false)
+  end
+  return true, status
+end
+
+local function ScanPvPBandage(pack)
+  if LockedDown() then return clickModel and clickModel.bandage or nil end
+  ns.RefreshBandageInventory("CLICK_MODEL")
+  local row = SelectedBandage(pack)
+  if not row then return nil end
+  return {itemID = row.itemID, name = row.name, actionKey = "pvp-bandage:item:" .. tostring(row.itemID)}
 end
 
 local function CustomMacroText()
@@ -1040,6 +1384,7 @@ end
 
 local function ClickSignature(pack)
   local bits = {}
+  bits[#bits + 1] = ns.GetBandageActionSignature(pack)
   bits[#bits + 1] = pack.cure and pack.cure.mode or "AUTO"
   for _, gesture in ipairs(ns.ClickBindingGestures or {}) do
     bits[#bits + 1] = tostring(ns.GetClickBindingOverride(pack, gesture.key))
@@ -1076,11 +1421,12 @@ local function ClickSignature(pack)
   local mufs = pack.mufs
   bits[#bits + 1] = tostring(type(mufs) == "table" and mufs.soulLinkFallback ~= false)
   if ns.GetSmartRezActions then
-    local battleRez, outOfCombatRez, combatSoulLink, outOfCombatSoulLink = ns.GetSmartRezActions(pack)
+    local battleRez, outOfCombatRez, combatSoulLink, outOfCombatSoulLink, soulLinkItemId = ns.GetSmartRezActions(pack)
     bits[#bits + 1] = tostring(battleRez)
     bits[#bits + 1] = tostring(outOfCombatRez)
     bits[#bits + 1] = tostring(combatSoulLink == true)
     bits[#bits + 1] = tostring(outOfCombatSoulLink == true)
+    bits[#bits + 1] = tostring(soulLinkItemId)
   end
   return table.concat(bits, "|")
 end
@@ -1145,12 +1491,13 @@ end
 
 function ns.InvalidateClickModel(_reason)
   clickModelSig = nil
+  ns.MarkBandageInventoryDirty()
   if LockedDown() then
     pending = true
   end
 end
 
-local function ApplyBindingOverrides(rows, pack, cures)
+local function ApplyBindingOverrides(rows, pack, cures, bandage)
   -- Put default utility actions in the same model as every configurable click.
   rows[#rows + 1] = {binding = TARGET_GESTURE, secureType = "target", action = "Target", actionKind = "TARGET"}
   rows[#rows + 1] = {binding = FOCUS_GESTURE, secureType = "focus", action = "Focus", actionKind = "FOCUS"}
@@ -1159,7 +1506,14 @@ local function ApplyBindingOverrides(rows, pack, cures)
     if choice then
       local row
       local utility = SECURE_MOUSE_ACTIONS[choice]
-      if utility then
+      if choice == "BANDAGE" then
+        row = BandageRow(bandage)
+        if row then
+          row.binding = gesture.binding
+        else
+          row = {binding = gesture.binding, secureType = "", action = "Bandage unavailable", actionKind = "NONE"}
+        end
+      elseif utility then
         row = {binding = gesture.binding, secureType = utility.secureType, action = utility.action, actionKind = utility.kind}
       else
         local priority = tonumber(choice:match("^CURE([123])$"))
@@ -1210,7 +1564,7 @@ function ns.RebuildClickModel(pack)
     mode = "AUTO"
   end
   local cures = DistinctFriendlyCures(pack)
-  local bandage = ScanPvPBandage()
+  local bandage = ScanPvPBandage(pack)
   cooldownPriorityCount = math.max(cooldownPriorityCount, #cures)
   local rows = {}
   local used = {
@@ -1325,7 +1679,7 @@ function ns.RebuildClickModel(pack)
     end
   end
 
-  ApplyBindingOverrides(rows, pack, cures)
+  ApplyBindingOverrides(rows, pack, cures, bandage)
   clickModel = {
     mode = mode,
     rows = rows,
@@ -1383,7 +1737,7 @@ function ns.GetResolvedClickStatus()
         action = "Custom macro"
         kind = "CUSTOM_MACRO"
       elseif row.pvpBandage then
-        action = "PvP bandage"
+        action = model.bandage and model.bandage.name or "Bandage"
         kind = "PVP_BANDAGE"
       elseif type(action) ~= "string" or action == "" then
         action = "Unknown"
@@ -1414,24 +1768,44 @@ local function SetSecure(btn, attr, value)
   if LockedDown() then
     return false
   end
-  btn:SetAttribute(attr, value)
+  local ok, result = pcall(btn.SetAttribute, btn, attr, value)
+  return ok and result ~= false
+end
+
+local function CommitClickAttributes(btn, desired)
+  if LockedDown() then
+    return false
+  end
+  local previous = btn.clickAttributes
+  -- Sanitize once on initialization or after a partial write. Later passes
+  -- compare only our successfully installed values, never protected readback.
+  if not previous then
+    for i = 1, 5 do
+      for p = 1, #GESTURE_PREFIXES do
+        local prefix = GESTURE_PREFIXES[p]
+        for _, kind in ipairs({"type", "spell", "macro", "macrotext", "unit"}) do
+          if not SetSecure(btn, prefix .. kind .. i, nil) then return false end
+        end
+      end
+    end
+    if not SetSecure(btn, "unit", nil) then return false end
+    previous = {}
+  end
+  -- Invalid until the complete write succeeds. A failed attempt must retry
+  -- the full sanitization rather than trusting a partly installed map.
+  btn.clickAttributes = nil
+  for attr in pairs(previous) do
+    if desired[attr] == nil and not SetSecure(btn, attr, nil) then return false end
+  end
+  for attr, value in pairs(desired) do
+    if previous[attr] ~= value and not SetSecure(btn, attr, value) then return false end
+  end
+  btn.clickAttributes = desired
   return true
 end
 
 local function ClearClickAttributes(btn)
-  if LockedDown() then
-    return
-  end
-  for i = 1, 5 do
-    for p = 1, #GESTURE_PREFIXES do
-      local prefix = GESTURE_PREFIXES[p]
-      btn:SetAttribute(prefix .. "type" .. i, nil)
-      btn:SetAttribute(prefix .. "spell" .. i, nil)
-      btn:SetAttribute(prefix .. "macro" .. i, nil)
-      btn:SetAttribute(prefix .. "macrotext" .. i, nil)
-      btn:SetAttribute(prefix .. "unit" .. i, nil)
-    end
-  end
+  return CommitClickAttributes(btn, {})
 end
 
 local function RezEligible(unit)
@@ -1444,18 +1818,18 @@ local function RezEligible(unit)
   return not unit:lower():find("pet", 1, true)
 end
 
-local function ApplyClickAttributes(btn, pack, unit)
+local function ApplyClickAttributes(btn, pack, unit, preparedModel)
   if LockedDown() then
     pending = true
     return false
   end
-  ClearClickAttributes(btn)
-  btn.cureRows = {}
-  SetSecure(btn, "unit", unit)
-  local model = ns.RebuildClickModel(pack)
+  local model = preparedModel or ns.RebuildClickModel(pack)
   if not model then
     return false
   end
+  local desired = {unit = unit}
+  local cureRows, soulLinkRows = {}, {}
+  local function Want(attr, value) desired[attr] = value end
 
   local installed = {}
   local rezOk = RezEligible(unit)
@@ -1465,10 +1839,11 @@ local function ApplyClickAttributes(btn, pack, unit)
   for i = 1, #model.rows do
     local row = model.rows[i]
     local binding = row.binding
-    if binding then btn.cureRows[binding] = false end
+    if binding then cureRows[binding] = false end
+    if binding then soulLinkRows[binding] = false end
     if binding and row.secureType and not installed[binding] then
-      SetSecure(btn, binding:format("type"), row.secureType)
-      SetSecure(btn, binding:format("unit"), unit)
+      Want(binding:format("type"), row.secureType)
+      Want(binding:format("unit"), unit)
       installed[binding] = true
       if binding == PHYSICAL_LEFT then
         leftAssigned = true
@@ -1485,11 +1860,14 @@ local function ApplyClickAttributes(btn, pack, unit)
         macroText = row.cureOnlyMacroText or row.macroText
       end
       if type(macroText) == "string" and macroText ~= "" and #macroText <= MACRO_BYTE_LIMIT then
-        SetSecure(btn, binding:format("type"), "macro")
-        SetSecure(btn, binding:format("macrotext"), macroText)
+        Want(binding:format("type"), "macro")
+        Want(binding:format("macrotext"), macroText)
         installed[binding] = true
+        if binding == PHYSICAL_LEFT and rezOk and row.smartRezAvailable and not row.customMacro then
+          soulLinkRows[binding] = row.soulLink or false
+        end
         if not row.customMacro and type(row.priority) == "number" and type(row.spellId) == "number" and row.spellId > 0 then
-          btn.cureRows[binding] = row
+          cureRows[binding] = row
         end
         if binding == PHYSICAL_LEFT then
           leftAssigned = true
@@ -1500,25 +1878,35 @@ local function ApplyClickAttributes(btn, pack, unit)
 
   if rezOk and not leftReserved and not leftAssigned then
     local leftover
+    local leftoverSoulLink
     for i = 1, #model.rows do
       local rezOnly = model.rows[i].rezOnlyMacroText
       if type(rezOnly) == "string" and rezOnly ~= "" and #rezOnly <= MACRO_BYTE_LIMIT then
         leftover = rezOnly
+        leftoverSoulLink = model.rows[i].soulLink
         break
       end
     end
     if leftover == nil then
-      local _combined, _cure, rezOnly = BuildSmartRezMacroText("cast", nil, false)
+      local _combined, _cure, rezOnly, _hasRez, soulLink = BuildSmartRezMacroText("cast", nil, false)
       leftover = rezOnly
+      leftoverSoulLink = soulLink
     end
     if leftover ~= "" and type(leftover) == "string" and #leftover <= MACRO_BYTE_LIMIT then
-      SetSecure(btn, PHYSICAL_LEFT:format("type"), "macro")
-      SetSecure(btn, PHYSICAL_LEFT:format("macrotext"), leftover)
+      Want(PHYSICAL_LEFT:format("type"), "macro")
+      Want(PHYSICAL_LEFT:format("macrotext"), leftover)
+      soulLinkRows[PHYSICAL_LEFT] = leftoverSoulLink or false
       leftAssigned = true
       installed[PHYSICAL_LEFT] = true
     end
   end
 
+  if not CommitClickAttributes(btn, desired) then
+    btn.cureRows, btn.soulLinkRows = {}, {}
+    pending = true
+    return false
+  end
+  btn.cureRows, btn.soulLinkRows = cureRows, soulLinkRows
   return true
 end
 
@@ -1537,9 +1925,8 @@ local function IdentitySlotOptions(btn)
       if slot.SetHideTooltipInCombat then
         slot:SetHideTooltipInCombat(false)
       end
-      -- Pass clicks through so combat cure still hits the SecureUnitButton.
-      -- Do not EnableMouse(true) on identity: that ate LeftButton in combat.
-      PassClicks(slot)
+      -- Native hover and secure click-through are independent input settings.
+      PassClicks(slot, true)
     end,
   }
 end
@@ -1687,7 +2074,7 @@ local function AttachPaint(btn, pack, unit)
     return false
   end
   local function initFn(frame, _key, slotInfo, configuredPack)
-    BindAuraSlot(frame, configuredPack or GetPack(), btn.fillTex, slotInfo)
+    return BindAuraSlot(frame, configuredPack or GetPack(), btn.fillTex, slotInfo)
   end
   local engine = ns.DetectionEngine
   if engine and type(engine.BindCarrier) == "function" then
@@ -1706,7 +2093,10 @@ local function AttachPaint(btn, pack, unit)
   end
   DisableIdentityTooltip(btn, true)
   if AttachCooldownGates then
-    AttachCooldownGates(btn, pack, unit)
+    if not AttachCooldownGates(btn, pack, unit) then
+      pending = true
+      return false, DisplayMutationBlocked() and "DEFERRED_COMBAT" or "FAILURE"
+    end
   end
   return true, "SUCCESS"
 end
@@ -1721,11 +2111,11 @@ local function PaintRaidIcon(btn, unit)
     index = Public(GetRaidTargetIndex(unit))
   end
   if type(index) == "number" and index >= 1 and index <= 8 then
-    icon:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcon_" .. tostring(index))
-    icon:Show()
+    ManagedSet(icon, "SetTexture", "Interface\\TargetingFrame\\UI-RaidTargetingIcon_" .. tostring(index))
+    ManagedSet(icon, "Show")
   else
-    icon:SetTexture(nil)
-    icon:Hide()
+    ManagedSet(icon, "SetTexture", nil)
+    ManagedSet(icon, "Hide")
   end
 end
 
@@ -1733,14 +2123,28 @@ local function PrimaryCureRangeState(unit, pack)
   if IsPlayerToken(unit) then
     return true
   end
-  if not ns.SpellRangeState then
+  if not ns.CureSpellRangeValue then
     return true
   end
-  local spell, spellId
+  local spellId
   if ns.GetPrimaryCure then
-    spell, spellId = ns.GetPrimaryCure(pack)
+    local _
+    _, spellId = ns.GetPrimaryCure(pack)
   end
-  return ns.SpellRangeState(unit, spell, spellId)
+  local inRange = ns.CureSpellRangeValue(unit, spellId)
+  if not Accessible(inRange) then return inRange end
+  return inRange ~= false
+end
+
+local function UpdateMUFRange(owner, pack, unit)
+  local mufs = type(pack) == "table" and pack.mufs or nil
+  local enabled = type(mufs) == "table" and mufs.dimOutOfRange == true and type(unit) == "string"
+  local inRange = true
+  if enabled then inRange = PrimaryCureRangeState(unit, pack) end
+  if ns.ApplyMUFRangeShade then
+    ns.ApplyMUFRangeShade(owner, inRange, enabled == true, mufs and mufs.dimAmount)
+  end
+  return inRange, true
 end
 
 local function ResolveMUFBaseAppearance(pack, unit)
@@ -1779,7 +2183,7 @@ local function ResolveMUFRangePresentation(pack, inRange, isPlayer)
   end
   local alpha = type(mufs) == "table" and mufs.dimAmount or nil
   if type(alpha) ~= "number" then
-    alpha = 0.60
+    alpha = 0.50
   end
   if alpha < 0 then
     alpha = 0
@@ -1798,7 +2202,7 @@ local function ResolveMUFRangePresentation(pack, inRange, isPlayer)
     color = color,
     alpha = alpha,
     reason = reason,
-    precedence = "BELOW_DISPEL_FILL",
+    precedence = "WHOLE_MUF_SHADE_ABOVE_CONTENT",
     stateSource = "PRIMARY_CURE_PUBLIC_RANGE",
   }
 end
@@ -1812,37 +2216,37 @@ local function ApplyMUFRangePresentation(texture, range, holder)
   holder = holder or texture
   if not range.enabled then
     if texture.SetAlpha then
-      texture:SetAlpha(1)
+      ManagedSet(texture, "SetAlpha", 1)
     end
     if holder.SetAlpha then
-      holder:SetAlpha(0)
+      ManagedSet(holder, "SetAlpha", 0)
     end
     if holder.Hide then
-      holder:Hide()
+      ManagedSet(holder, "Hide")
     end
     return true
   end
   local color = type(range.color) == "table" and range.color or COLOR_RANGE_OVERLAY
-  local dimAmount = type(range.alpha) == "number" and range.alpha or 0.60
   if texture.SetColorTexture then
-    texture:SetColorTexture((color[1] or 0) * dimAmount, (color[2] or 0) * dimAmount, (color[3] or 0) * dimAmount, 1)
+    -- The range color stays full strength underneath the one whole-MUF shade.
+    ManagedSet(texture, "SetColorTexture", color[1] or 0, color[2] or 0, color[3] or 0, 1)
   end
   if texture.SetAlpha then
-    texture:SetAlpha(1)
+    ManagedSet(texture, "SetAlpha", 1)
   end
   if texture.Show then
-    texture:Show()
+    ManagedSet(texture, "Show")
   end
   if holder.Show then
-    holder:Show()
+    ManagedSet(holder, "Show")
   end
   local inRange = range.inRange
   if holder.SetAlphaFromBoolean then
-    holder:SetAlphaFromBoolean(NormalizeBooleanWidgetValue(inRange), 0, 1)
+    ManagedSet(holder, "SetAlphaFromBoolean", NormalizeBooleanWidgetValue(inRange), 0, 1)
   elseif Accessible(inRange) and holder.SetAlpha then
-    holder:SetAlpha((inRange == true or inRange == 1) and 0 or 1)
+    ManagedSet(holder, "SetAlpha", (inRange == true or inRange == 1) and 0 or 1)
   elseif holder.SetAlpha then
-    holder:SetAlpha(0)
+    ManagedSet(holder, "SetAlpha", 0)
   end
   return true
 end
@@ -1926,13 +2330,18 @@ end
 
 ns.ApplyMUFCooldownVisibility = ApplyMUFCooldownVisibility
 
-local function ResolveMUFManagedAppearance(pack, unit)
+local function ResolveMUFManagedAppearance(pack, unit, preparedRange, rangePrepared)
   local mufs = pack and pack.mufs or {}
   local player = IsPlayerToken(unit)
   local rangeEnabled = mufs.dimOutOfRange == true and not player
   local inRange = true
   if rangeEnabled then
-    inRange = PrimaryCureRangeState(unit, pack)
+    if rangePrepared then
+      inRange = preparedRange
+      if Accessible(inRange) then inRange = inRange ~= false end
+    else
+      inRange = PrimaryCureRangeState(unit, pack)
+    end
   end
   local range = ResolveMUFRangePresentation(pack, inRange, player)
   return {
@@ -1945,7 +2354,7 @@ local function ResolveMUFManagedAppearance(pack, unit)
     rangeReason = range.reason,
     rangeStateSource = range.stateSource,
     afflictionAuthority = "AURA_CONTAINER",
-    rangeAboveAffliction = false,
+    rangeAboveAffliction = true,
     afflictionAboveManaged = true,
   }
 end
@@ -1953,9 +2362,10 @@ end
 ns.ResolveMUFBaseAppearance = ResolveMUFBaseAppearance
 ns.ResolveMUFManagedAppearance = ResolveMUFManagedAppearance
 
-local function PaintManagedOverlays(btn, pack, unit)
+local function PaintManagedOverlays(btn, pack, unit, preparedRez)
   if not btn or not btn.assigned or type(unit) ~= "string" then
     if btn then
+      UpdateMUFRange(btn, pack, nil)
       if btn.deadFill then
         ApplyBooleanVertex(btn.deadFill, false, COLOR_DEAD, COLOR_DEAD_CLEAR)
       end
@@ -1969,14 +2379,14 @@ local function PaintManagedOverlays(btn, pack, unit)
         ApplyBooleanVertex(btn.stealthTex, false, pack and pack.colors and pack.colors.stealth or COLOR_CLEAR, COLOR_DEAD_CLEAR)
       end
       if btn.failTex then
-        btn.failTex:Hide()
+        ManagedSet(btn.failTex, "Hide")
       end
       if btn.rangeHost then
-        btn.rangeHost:SetAlpha(0)
-        btn.rangeHost:Hide()
+        ManagedSet(btn.rangeHost, "SetAlpha", 0)
+        ManagedSet(btn.rangeHost, "Hide")
       end
       if btn.raidIcon then
-        btn.raidIcon:Hide()
+        ManagedSet(btn.raidIcon, "Hide")
       end
       btn.deadStateUnit = nil
       btn.deadStateGUID = nil
@@ -1993,6 +2403,7 @@ local function PaintManagedOverlays(btn, pack, unit)
   end
   local colors = pack and pack.colors or {}
   if btn.deadStateUnit ~= unit then
+    InvalidateManagedVisuals(btn)
     btn.deadStateUnit = unit
     btn.deadStateGUID = nil
     btn.deadStatePublic = false
@@ -2001,11 +2412,13 @@ local function PaintManagedOverlays(btn, pack, unit)
     local ok, guid = pcall(UnitGUID, unit)
     if ok and Accessible(guid) and type(guid) == "string" then
       if btn.deadStateGUID and btn.deadStateGUID ~= guid then
+        InvalidateManagedVisuals(btn)
         btn.deadStatePublic = false
       end
       btn.deadStateGUID = guid
     end
   end
+  local cureRange, rangePrepared = UpdateMUFRange(btn, pack, unit)
   local deadValue, deadStateSource = ReadDeathValue(unit)
   local death = ResolveMUFDeathPresentation(pack, deadValue, btn.deadStatePublic, deadStateSource)
   local wasSuppressed = btn.cooldownSuppressedBySkull == true
@@ -2021,16 +2434,21 @@ local function PaintManagedOverlays(btn, pack, unit)
     end
   end
   if btn.soulLinkFill then
-    if SoulLinkFallbackApplies(unit) then
-      ApplyBooleanVertex(btn.soulLinkFill, SoulLinkRangeValue(unit), COLOR_SL_IN, COLOR_SL_OUT)
+    if SoulLinkFallbackApplies(unit, preparedRez) then
+      local inRange, rangeAvailable = SoulLinkRangeValue(unit, preparedRez)
+      if rangeAvailable then
+        ApplyBooleanVertex(btn.soulLinkFill, inRange, COLOR_SL_IN, COLOR_SL_OUT)
+      else
+        ApplyBooleanVertex(btn.soulLinkFill, false, COLOR_SL_IN, COLOR_DEAD_CLEAR)
+      end
       if btn.soulLinkFill.SetAlphaFromBoolean then
-        btn.soulLinkFill:SetAlphaFromBoolean(NormalizeBooleanWidgetValue(death.nativeValue), 1, 0)
+        ManagedSet(btn.soulLinkFill, "SetAlphaFromBoolean", NormalizeBooleanWidgetValue(death.nativeValue), 1, 0)
       elseif Accessible(deadValue) then
-        btn.soulLinkFill:SetAlpha(death.publicState and 1 or 0)
+        ManagedSet(btn.soulLinkFill, "SetAlpha", death.publicState and 1 or 0)
       end
     else
       ApplyBooleanVertex(btn.soulLinkFill, false, COLOR_SL_IN, COLOR_DEAD_CLEAR)
-      btn.soulLinkFill:SetAlpha(0)
+      ManagedSet(btn.soulLinkFill, "SetAlpha", 0)
     end
   end
   if btn.stealthTex then
@@ -2041,11 +2459,11 @@ local function PaintManagedOverlays(btn, pack, unit)
       ApplyBooleanVertex(btn.stealthTex, false, colors.stealth or COLOR_CLEAR, COLOR_DEAD_CLEAR)
     end
   end
-  local managed = ResolveMUFManagedAppearance(pack, unit)
+  local managed = ResolveMUFManagedAppearance(pack, unit, cureRange, rangePrepared)
   if btn.failTex then
     -- The working MUF never paints addon restrictions as a full-square failure.
     -- Restriction/failure state belongs to the optional status light instead.
-    btn.failTex:Hide()
+    ManagedSet(btn.failTex, "Hide")
   end
   if btn.rangeOverlay then
     ApplyMUFRangePresentation(btn.rangeOverlay, {
@@ -2058,7 +2476,8 @@ local function PaintManagedOverlays(btn, pack, unit)
   PaintRaidIcon(btn, unit)
 end
 
-local function PaintSquare(btn, pack, unit)
+local function PaintSquare(btn, pack, unit, preparedRez)
+  InvalidateManagedVisuals(btn)
   local borderOn = pack.mufs.border ~= false
   local appearance = ResolveMUFBaseAppearance(pack, unit)
   local fill = appearance.fill
@@ -2103,9 +2522,9 @@ local function PaintSquare(btn, pack, unit)
       btn.playerMark:Hide()
     end
   end
-  PaintManagedOverlays(btn, pack, unit)
+  PaintManagedOverlays(btn, pack, unit, preparedRez)
 end
-local function PlaceStatusLight(btn, size, enabled)
+local function PlaceStatusLight(btn, size, enabled, borderOn)
   local lightSize, gap = ns.GetMUFStatusLightMetrics(size, enabled)
   local layers = {btn.statusLight, btn.statusLightRange}
   for i = 1, #layers do
@@ -2121,6 +2540,7 @@ local function PlaceStatusLight(btn, size, enabled)
       end
     end
   end
+  if ns.ConfigureMUFRangeShade then ns.ConfigureMUFRangeShade(btn, enabled, borderOn) end
 end
 
 local function UpdateStatusLights()
@@ -2129,17 +2549,17 @@ local function UpdateStatusLights()
   end
   local pack = GetPack()
   local enabled = pack.mufs.statusLight
+  local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
+  local now = GetTime and GetTime() or 0
   for i = 1, #pool do
     local btn = pool[i]
     if btn.assigned and enabled then
       if btn.statusLight then
-        btn.statusLight:Show()
+        ManagedSet(btn.statusLight, "Show")
       end
       if btn.statusLightRange then
-        btn.statusLightRange:Show()
+        ManagedSet(btn.statusLightRange, "Show")
       end
-      local restricted = ns.HasActiveAddonRestriction and ns.HasActiveAddonRestriction()
-      local now = GetTime and GetTime() or 0
       local resultOn = COLOR_STATUS_READY
       if restricted then
         resultOn = COLOR_FAIL
@@ -2155,10 +2575,10 @@ local function UpdateStatusLights()
       ApplyBooleanVertex(btn.statusLightRange, inRange, COLOR_CLEAR, COLOR_RANGE_YELLOW)
     else
       if btn.statusLight then
-        btn.statusLight:Hide()
+        ManagedSet(btn.statusLight, "Hide")
       end
       if btn.statusLightRange then
-        btn.statusLightRange:Hide()
+        ManagedSet(btn.statusLightRange, "Hide")
       end
     end
   end
@@ -2459,10 +2879,26 @@ ReconcileCooldowns = function()
   end
 end
 
+local cooldownReconcileQueued = false
+local function RequestCooldownReconcile()
+  if cooldownReconcileQueued then return end
+  if not C_Timer or type(C_Timer.After) ~= "function" then
+    ReconcileCooldowns()
+    return
+  end
+  cooldownReconcileQueued = true
+  C_Timer.After(0, function()
+    -- Reset before the work so an event raised during reconciliation owns the
+    -- next frame's pass rather than being lost or recursively refreshing.
+    cooldownReconcileQueued = false
+    ReconcileCooldowns()
+  end)
+end
+
 local function CooldownGateVisualSignature(btn, pack, action, priority)
   local innerSize = btn and btn.cooldownInnerSize or 1
   local r, g, b = CooldownColor(pack, action)
-  local alpha = pack and pack.alerts and pack.alerts.cooldownOpacity or 0.62
+  local alpha = pack and pack.alerts and pack.alerts.cooldownOpacity or 0
   local actionKey = action and action.spellId or 0
   return table.concat({
     tostring(priority or 0),
@@ -2514,10 +2950,13 @@ local function ConfigureGateSlot(gate, key, filter, include, pack, action)
         pcall(slot.SetAllPoints, slot, gate.holder)
       end
       PassClicks(slot)
+      -- This is the owned slot handed to our initializer, not native child
+      -- discovery. Countdown text created below must stay under range dimming.
+      if ns.RaiseMUFRangeShade then ns.RaiseMUFRangeShade(gate.owner, slot) end
       local shade = slot:CreateTexture(nil, "OVERLAY")
       shade:SetAllPoints(slot)
       local r, g, b = CooldownColor(pack, action)
-      local alpha = pack.alerts.cooldownOpacity or 0.62
+      local alpha = pack.alerts.cooldownOpacity or 0
       shade:SetColorTexture(r * 0.45, g * 0.45, b * 0.45, alpha)
       if C_DurationUtil and C_DurationUtil.CreateDurationTextBinding then
         local textFrame = slot:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
@@ -2547,14 +2986,14 @@ local function ConfigureGateSlot(gate, key, filter, include, pack, action)
   }
   if gate.keys[key] then
     if container.SetAuraSlotFilterString then
-      local filterOK = pcall(container.SetAuraSlotFilterString, container, key, filter)
-      if not filterOK then
+      local filterOK, applied = pcall(container.SetAuraSlotFilterString, container, key, filter)
+      if not filterOK or applied == false then
         return false
       end
     end
     if container.SetAuraSlotCandidateFilters then
-      local candidatesOK = pcall(container.SetAuraSlotCandidateFilters, container, key, options.candidateFilters)
-      if not candidatesOK then
+      local candidatesOK, applied = pcall(container.SetAuraSlotCandidateFilters, container, key, options.candidateFilters)
+      if not candidatesOK or applied == false then
         return false
       end
     end
@@ -2620,6 +3059,8 @@ AttachCooldownGates = function(btn, pack, unit)
         btn.cooldownGates[priority] = gate
       else
         holder:SetAlpha(0)
+        pending = true
+        return false
       end
     end
     if gate then
@@ -2661,9 +3102,9 @@ local BUTTON_INDEX = {
   Button5 = 5,
 }
 
-local function CureRowForClick(btn, button)
+ClickRowForButton = function(rows, button)
   local index = BUTTON_INDEX[button]
-  if not index or type(btn.cureRows) ~= "table" then
+  if not index or type(rows) ~= "table" then
     return nil
   end
   local suffix = "%s" .. tostring(index)
@@ -2672,9 +3113,39 @@ local function CureRowForClick(btn, button)
   if IsShiftKeyDown and IsShiftKeyDown() then prefix = "shift-" .. prefix end
   if IsControlKeyDown and IsControlKeyDown() then prefix = "ctrl-" .. prefix end
   if IsAltKeyDown and IsAltKeyDown() then prefix = "alt-" .. prefix end
-  local exact = btn.cureRows[prefix .. suffix]
+  local exact = rows[prefix .. suffix]
   if exact ~= nil then return exact or nil end
-  return btn.cureRows["*" .. suffix] or nil
+  return rows["*" .. suffix] or nil
+end
+
+local function CureRowForClick(btn, button)
+  return ClickRowForButton(btn.cureRows, button)
+end
+
+local function WarnCureOutOfRange(row, btn)
+  if not btn or btn.assigned ~= true or type(row) ~= "table" then return false end
+  if type(row.itemId) == "number" and row.itemId > 0 then return false end
+  if type(row.actionKey) == "string" and row.actionKey:find("item:", 1, true) == 1 then return false end
+  local unit = Public(btn.unit)
+  if type(unit) ~= "string" or unit == "" then return false end
+  -- This observes the installed cure, not a generic UI error or the editable
+  -- profile. Unknown friendliness/life state cannot prove a cure was intended.
+  local function PublicUnitState(api, expected, ...)
+    if type(api) ~= "function" then return false end
+    local ok, value = pcall(api, ...)
+    return ok and Accessible(value) and value == expected
+  end
+  if not PublicUnitState(UnitExists, true, unit)
+    or not PublicUnitState(UnitCanAssist, true, "player", unit)
+    or not PublicUnitState(UnitIsConnected, true, unit)
+    or not PublicUnitState(UnitIsDeadOrGhost, false, unit) then return false end
+  local spellId = Public(row.spellId)
+  if type(spellId) ~= "number" or spellId <= 0 then spellId = Public(row.baseId) end
+  if type(spellId) ~= "number" or spellId <= 0 or not ns.CureSpellRangeValue or not ns.NotifyCureOutOfRange then return false end
+  local inRange = ns.CureSpellRangeValue(unit, spellId)
+  if not Accessible(inRange) or inRange ~= false then return false end
+  local _, soundPlayed = ns.NotifyCureOutOfRange()
+  return soundPlayed == true
 end
 
 local function RecordCureAttempt(row, btn)
@@ -2692,6 +3163,7 @@ local function RecordCureAttempt(row, btn)
     actionKey = row.actionKey,
     aliasSpellIDs = aliases,
     startedAt = GetTime and GetTime() or 0,
+    outOfRangeSoundPlayed = WarnCureOutOfRange(row, btn),
   }
 end
 
@@ -2705,6 +3177,8 @@ local function BeginCureAttempt(btn, button)
 end
 
 function ns.BeginKeyboardCureAttempt(binding)
+  cureAttempt = nil
+  if ns.BeginSoulLinkAttempt then ns.BeginSoulLinkAttempt(nil) end
   if type(binding) ~= "table" or type(binding.index) ~= "number"
     or binding.index < 1 or binding.index > 3 or binding.index ~= math.floor(binding.index) then return end
   local targetBtn
@@ -2723,7 +3197,7 @@ function ns.BeginKeyboardCureAttempt(binding)
     end
   end
   RecordCureAttempt({priority = binding.index, actionKey = binding.actionKey,
-    spellId = binding.spellId, baseId = binding.baseId}, targetBtn)
+    spellId = binding.spellId, baseId = binding.baseId, itemId = binding.itemId}, targetBtn)
 end
 
 local function OnPlayerSpellResult(event, unit, spellId)
@@ -2753,7 +3227,7 @@ local function OnPlayerSpellResult(event, unit, spellId)
       return
     end
     MarkButtonStatus(attempt.targetBtn, false)
-    if ns.PlayCureFailureSound then
+    if ns.PlayCureFailureSound and not attempt.outOfRangeSoundPlayed then
       ns.PlayCureFailureSound()
     end
   end
@@ -2896,17 +3370,23 @@ local function CreateMUF(parent)
   btn.raidIcon:SetSize(8, 8)
   btn.raidIcon:Hide()
 
+  if ns.ConfigureMUFRangeShade then ns.ConfigureMUFRangeShade(btn, false, true) end
+
   WireTooltip(btn)
   btn:SetScript("PreClick", function(self, button)
-    if button == "LeftButton" and ns.BeginSoulLinkAttempt and ShouldBeginSoulLinkAttempt(self.unit) then
-      ns.BeginSoulLinkAttempt(self.unit)
+    if ns.BeginSoulLinkAttempt then
+      -- Every new MUF action supersedes prior range-error attribution.
+      ns.BeginSoulLinkAttempt(nil)
+      if ShouldBeginSoulLinkAttempt(self, button) then
+        ns.BeginSoulLinkAttempt(self.unit)
+      end
     end
     BeginCureAttempt(self, button)
   end)
   local engine = ns.DetectionEngine
   if engine and type(engine.CreateCarrier) == "function" then
-    local function initFn(frame, _key, slotInfo)
-      BindAuraSlot(frame, GetPack(), btn.fillTex, slotInfo)
+    local function initFn(frame, _key, slotInfo, configuredPack)
+      return BindAuraSlot(frame, configuredPack or GetPack(), btn.fillTex, slotInfo)
     end
     btn.auraContainer = engine:CreateCarrier("MUFs", btn.inner, initFn, btn)
   end
@@ -2935,6 +3415,16 @@ local function EnsurePool()
   return true
 end
 
+local function PaintManagedPass(pack)
+  if not poolReady then return end
+  pack = pack or GetPack()
+  local preparedRez = SmartRezPresentation(pack)
+  for i = 1, #pool do
+    local btn = pool[i]
+    if btn.assigned then PaintManagedOverlays(btn, pack, btn.unit, preparedRez) end
+  end
+end
+
 local function OnHeaderUpdate(_self, elapsed)
   local pack = GetPack()
   rangeElapsed = rangeElapsed + (elapsed or 0)
@@ -2945,14 +3435,7 @@ local function OnHeaderUpdate(_self, elapsed)
   end
   if paintElapsed >= 0.20 then
     paintElapsed = 0
-    if poolReady then
-      for i = 1, #pool do
-        local btn = pool[i]
-        if btn.assigned then
-          PaintManagedOverlays(btn, pack, btn.unit)
-        end
-      end
-    end
+    PaintManagedPass(pack)
   end
 end
 
@@ -3056,8 +3539,7 @@ local function HideAll()
     btn.assigned = false
     btn.unit = nil
     PaintManagedOverlays(btn, GetPack(), nil)
-    btn:SetAttribute("unit", nil)
-    ClearClickAttributes(btn)
+    if not ClearClickAttributes(btn) then cleared = false end
     DisableIdentityTooltip(btn, true)
     btn:Hide()
   end
@@ -3090,7 +3572,58 @@ function ns.ResetMUFsForWorldTransition(reason)
   return cleared
 end
 
-function ns.LayoutMUFs()
+local lastMUFPlan
+
+local function CopyPublicSettings(value, seen, depth)
+  if (type(issecretvalue) == "function" and issecretvalue(value)) or not Accessible(value) then return nil, false end
+  local kind = type(value)
+  if kind ~= "table" then
+    return value, kind == "nil" or kind == "string" or kind == "number" or kind == "boolean"
+  end
+  seen, depth = seen or {}, depth or 0
+  if seen[value] or depth >= 12 then return nil, false end
+  seen[value] = true
+  local copy = {}
+  for key, child in pairs(value) do
+    if not Accessible(key) or (type(key) ~= "string" and type(key) ~= "number") then return nil, false end
+    local result, valid = CopyPublicSettings(child, seen, depth + 1)
+    if not valid then return nil, false end
+    copy[key] = result
+  end
+  seen[value] = nil
+  return copy, true
+end
+
+local function SamePublicSettings(value, snapshot, depth)
+  if (type(issecretvalue) == "function" and issecretvalue(value)) or not Accessible(value)
+    or type(value) ~= type(snapshot) then return false end
+  if type(value) ~= "table" then return value == snapshot end
+  depth = depth or 0
+  if depth >= 12 then return false end
+  for key, child in pairs(value) do
+    if not Accessible(key) or (type(key) ~= "string" and type(key) ~= "number")
+      or not SamePublicSettings(child, snapshot[key], depth + 1) then return false end
+  end
+  for key in pairs(snapshot) do if value[key] == nil then return false end end
+  return true
+end
+
+local function CanReuseMUFPlan(reason, pack, units, model, env, verticalLayout)
+  if reason ~= "danders-callback" or pending or not mufsConfigured or not lastMUFPlan then return false end
+  local engine, addon = ns.DetectionEngine, Addon()
+  if engine and (engine.state ~= "READY" or engine.pending or engine.failClosed or engine.reconciling) then return false end
+  if addon and (addon.fullWorldRecoveryPending or addon.rosterRecoveryPending or addon.pendingEnvironment) then return false end
+  if lastMUFPlan.model ~= model or lastMUFPlan.env ~= env or lastMUFPlan.vertical ~= verticalLayout
+    or not SamePublicSettings(pack, lastMUFPlan.pack) or #units ~= #lastMUFPlan.units then return false end
+  for i = 1, #units do
+    if units[i] ~= lastMUFPlan.units[i] or not pool[i].assigned or pool[i].unit ~= units[i] then return false end
+  end
+  for i = #units + 1, #pool do if pool[i].assigned then return false end end
+  if header and header.IsShown and not header:IsShown() then return false end
+  return true
+end
+
+function ns.LayoutMUFs(reason)
   if LockedDown() then
     pending = true
     mufsConfigured = false
@@ -3111,7 +3644,11 @@ function ns.LayoutMUFs()
   end
 
   local pack = GetPack()
-  ns.RebuildClickModel(pack)
+  local preparedModel = ns.RebuildClickModel(pack)
+  if not preparedModel then
+    pending, mufsConfigured = true, false
+    return false, "FAILURE", 0
+  end
   local env = GetEnv()
   if not ShouldShowHeader(pack) then
     local hidden = HideAll() == true
@@ -3135,11 +3672,17 @@ function ns.LayoutMUFs()
   end
   local growUp = pack.mufs.growUp
   local growFromRight = pack.mufs.growFromRight
+  local addon = Addon()
   local verticalLayout = addon and addon.GetMUFVerticalLayout and addon:GetMUFVerticalLayout()
   if verticalLayout == nil then
     verticalLayout = pack.mufs.verticalLayout == true
   end
   local n = #units
+  if CanReuseMUFPlan(reason, pack, units, preparedModel, env, verticalLayout) then
+    return true, "SUCCESS", n
+  end
+  lastMUFPlan = nil
+  local preparedRez = SmartRezPresentation(pack)
   local layoutOK = true
   local layoutStatus = "SUCCESS"
   local layout = ns.CalculateMUFLayout(
@@ -3175,23 +3718,36 @@ function ns.LayoutMUFs()
       btn:SetPoint(layout.anchor, header, layout.anchor, position.x, position.y)
       local mufSize = ns.GetMUFVisualMetrics(size, pack.mufs.border ~= false, unit)
       btn:SetSize(mufSize, mufSize)
-      btn.unit = unit
-      btn.assigned = true
-      ApplyClickAttributes(btn, pack, unit)
-      PaintSquare(btn, pack, unit)
-      PlaceStatusLight(btn, size, pack.mufs.statusLight)
-      local paintOK, paintStatus = AttachPaint(btn, pack, unit)
-      if not paintOK then
-        layoutOK = false
-        layoutStatus = paintStatus or "FAILURE"
-      end
-      if not ns.DetectionEngine and btn.auraContainer and btn.auraContainer.SetUnit and not DisplayMutationBlocked() then
-        local assigned = ns.SafeNativeSetUnit(btn.auraContainer, unit)
-        if not assigned then
-          layoutOK = false
+      if not ApplyClickAttributes(btn, pack, unit, preparedModel) then
+        layoutOK, layoutStatus = false, "FAILURE"
+        -- A partial attribute map must not stay clickable with a new visual
+        -- unit. Retire this owner before any paint/rebind; a successful retry
+        -- performs full attribute sanitization and is the only re-show path.
+        if not LockedDown() then
+          btn:Hide()
+          btn.assigned, btn.unit = false, nil
+          InvalidateManagedVisuals(btn)
+          DisableIdentityTooltip(btn, true)
+          if ns.DetectionEngine and type(ns.DetectionEngine.UnassignCarrier) == "function" then
+            ns.DetectionEngine:UnassignCarrier(btn)
+          end
         end
+      else
+        btn.unit = unit
+        btn.assigned = true
+        PaintSquare(btn, pack, unit, preparedRez)
+        PlaceStatusLight(btn, size, pack.mufs.statusLight, pack.mufs.border ~= false)
+        local paintOK, paintStatus = AttachPaint(btn, pack, unit)
+        if not paintOK then
+          layoutOK = false
+          if layoutStatus ~= "FAILURE" then layoutStatus = paintStatus or "FAILURE" end
+        end
+        if not ns.DetectionEngine and btn.auraContainer and btn.auraContainer.SetUnit and not DisplayMutationBlocked() then
+          local assigned = ns.SafeNativeSetUnit(btn.auraContainer, unit)
+          if not assigned then layoutOK = false end
+        end
+        btn:Show()
       end
-      btn:Show()
     else
       if ns.DetectionEngine and type(ns.DetectionEngine.UnassignCarrier) == "function" then
         if not ns.DetectionEngine:UnassignCarrier(btn) then
@@ -3204,8 +3760,7 @@ function ns.LayoutMUFs()
       btn.deadStateGUID = nil
       btn.deadStatePublic = false
       PaintManagedOverlays(btn, pack, nil)
-      btn:SetAttribute("unit", nil)
-      ClearClickAttributes(btn)
+      if not ClearClickAttributes(btn) then layoutOK, layoutStatus = false, "FAILURE" end
       DisableIdentityTooltip(btn, true)
       btn:Hide()
     end
@@ -3236,6 +3791,14 @@ function ns.LayoutMUFs()
     RefreshCooldownPriority(priority)
   end
   mufsConfigured = layoutOK
+  if layoutOK then
+    local snapshot, valid = CopyPublicSettings(pack)
+    if valid then
+      local roster = {}
+      for i = 1, #units do roster[i] = units[i] end
+      lastMUFPlan = {pack = snapshot, units = roster, model = preparedModel, env = env, vertical = verticalLayout}
+    end
+  end
   if ns.DiagnosticRecord then
     ns.DiagnosticRecord("MUF_LAYOUT", {
       result = layoutOK and "APPLIED" or "FAIL_CLOSED",
@@ -3250,7 +3813,7 @@ function ns.LayoutMUFs()
   return layoutOK, layoutStatus, n
 end
 
-function ns.RefreshMUFs()
+function ns.RefreshMUFs(reason)
   if ns.DiagnosticModuleRefresh then
     ns.DiagnosticModuleRefresh("MUFs")
   end
@@ -3259,8 +3822,11 @@ function ns.RefreshMUFs()
     mufsConfigured = false
     return
   end
+  -- A queued/failed prior pass forces recovery even when the next callback's
+  -- order happens to match the last successful layout.
+  if pending then reason = nil end
   pending = false
-  return ns.LayoutMUFs()
+  return ns.LayoutMUFs(reason)
 end
 
 function ns.RecoverMUFsAfterCombat()
@@ -3316,7 +3882,7 @@ local function RegisterExtraEvents()
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
       OnPlayerSpellResult(event, arg1, arg3)
     elseif event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" then
-      ReconcileCooldowns()
+      RequestCooldownReconcile()
     elseif event == "UNIT_PET" then
       if LockedDown() then
         pending = true
@@ -3350,9 +3916,13 @@ local function RegisterExtraEvents()
     eventFrame:RegisterEvent("UNIT_PET")
   end
   eventFrame:RegisterEvent("RAID_TARGET_UPDATE")
-  eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-  eventFrame:RegisterEvent("UNIT_SPELLCAST_FAILED")
-  eventFrame:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+  for _, event in ipairs({"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED"}) do
+    local ok, registered = false, false
+    if type(eventFrame.RegisterUnitEvent) == "function" then
+      ok, registered = pcall(eventFrame.RegisterUnitEvent, eventFrame, event, "player", "pet")
+    end
+    if not ok or registered == false then eventFrame:RegisterEvent(event) end
+  end
   eventFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
   eventFrame:RegisterEvent("SPELL_UPDATE_CHARGES")
   local restrictionOk = true
@@ -3470,26 +4040,39 @@ if ns.RegisterDiagnosticProvider then
 		presentationPaletteRefreshGeneration = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteRefreshGeneration or 0,
 		presentationPaletteRefreshFailureCount = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.paletteRefreshFailureCount or 0,
       nativeChildrenUntouched = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.nativeChildrenUntouched == true,
-      rangePresentationMode = "CONFIGURED_COLOR_OVERLAY",
-      rangePresentationPrecedence = "BELOW_DISPEL_FILL",
+      rangePresentationMode = "CONFIGURED_COLOR_WITH_WHOLE_MUF_SHADE",
+      rangePresentationPrecedence = "WHOLE_MUF_SHADE_ABOVE_CONTENT",
       rangeColorPickerMode = "RGB_ONLY_OPAQUE",
       rangeTextureIntrinsicAlpha = 1,
-      rangeDimMode = "RGB_BRIGHTNESS_MULTIPLIER",
-      rangeVisibilityAlpha = "OPAQUE_ZERO_OR_ONE",
-      rangeAlphaComposition = "OPAQUE_TEXTURE_TIMES_OPAQUE_VISIBLE_HOST",
-      rangeParentAlphaPolicy = "NORMAL_INHERITANCE",
+      rangeDimMode = "SINGLE_TOP_BLACK_SHADE",
+      rangeVisibilityAlpha = "ZERO_IN_RANGE_ONE_MINUS_BRIGHTNESS_OUT",
+      rangeAlphaComposition = "OPAQUE_CONTENT_THEN_SINGLE_BLACK_SHADE",
+      rangeParentAlphaPolicy = "SHADE_HOST_IGNORE_PARENT_ALPHA",
       afflictionPresentationPrecedence = ns.MUF_PRESENTATION and ns.MUF_PRESENTATION.afflictionPrecedence or "UNAVAILABLE",
       rangeStateSource = "PRIMARY_CURE_PUBLIC_RANGE",
       deathPresentationMode = "CONFIGURED_COLOR_WITH_SKULL",
-      deathPresentationPrecedence = "ABOVE_RANGE_AFFLICTION_SOUL_LINK",
+      deathPresentationPrecedence = "ABOVE_FILL_BELOW_WHOLE_MUF_SHADE",
       deathStateSource = "UNIT_DEATH_OR_CONNECTION",
       deathStatePersistence = "UNTIL_PUBLIC_ALIVE_OR_UNIT_CHANGE",
-      deathSkullLayer = "READABILITY_ABOVE_COOLDOWN",
+      deathSkullLayer = "READABILITY_BELOW_WHOLE_MUF_SHADE",
       deathBorderVisibility = "OUTSIDE_INNER_FILL",
       cooldownSuppressedBySkullCount = cooldownSuppressedBySkullCount,
       cooldownSuppressionReason = "suppressedBySkull",
     }
   end)
+end
+
+function ns.GetPerformanceAssignedFrameCount()
+  local count = 0
+  for i = 1, #pool do if pool[i].assigned then count = count + 1 end end
+  return count
+end
+
+if ns.RegisterPerformanceTarget then
+  ns.RegisterPerformanceTarget("MUFs.ManagedPaintPass", function() return PaintManagedPass end, function(fn) PaintManagedPass = fn end)
+  ns.RegisterPerformanceTarget("MUFs.StatusLights", function() return UpdateStatusLights end, function(fn) UpdateStatusLights = fn end)
+  ns.RegisterPerformanceTarget("MUFs.CooldownReconcile", function() return ReconcileCooldowns end, function(fn) ReconcileCooldowns = fn end)
+  ns.RegisterPerformanceTarget("MUFs.Layout", function() return ns.LayoutMUFs end, function(fn) ns.LayoutMUFs = fn end)
 end
 
 if ns.DiagnosticModuleLoaded then

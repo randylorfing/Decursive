@@ -96,7 +96,7 @@ ns.PACK = {
   mufs = {
     show = true,
     locked = false,
-    order = "GROUP",
+    order = "AUTO",
     partySize = 20,
     raidSize = 20,
     horizontalSpacing = 2,
@@ -118,7 +118,8 @@ ns.PACK = {
     stealthStatus = true,
     scale = 1.5,
     dimOutOfRange = true,
-    dimAmount = 0.60,
+    dimAmount = 0.50,
+    dimAfflictedOutOfRange = true,
     secondaryAffliction = true,
     pulseSecondary = false,
     shareCooldown = true,
@@ -142,6 +143,10 @@ ns.PACK = {
   },
   cure = {
     mode = "AUTO",
+    bandageMode = "AUTO",
+    bandageItemID = 0,
+    bandageLowStockEnabled = false,
+    bandageLowStockThreshold = 5,
     manual = {},
     clickBindings = {},
     keyboardEnabled = false,
@@ -182,6 +187,7 @@ ns.PACK = {
   alerts = {
     dispelEnabled = true,
     successfulDispelText = false,
+    outOfRangeDispel = true,
     dispelMode = "TIMED",
     dispelDuration = 2,
     dispelFontSize = 48,
@@ -202,7 +208,7 @@ ns.PACK = {
     learnSpellIds = true,
     cooldown = true,
     cooldownNumbers = true,
-    cooldownOpacity = 0.62,
+    cooldownOpacity = 0,
     range = true,
     soulLinkAlert = true,
     liveList = false,
@@ -231,6 +237,8 @@ ns.PACK = {
 }
 
 ns.PREVIOUS_PVP_ALERT_DEFAULTS = DeepCopy(ns.PACK.alerts)
+-- Keep the historical signature independent of newly introduced defaults.
+ns.PREVIOUS_PVP_ALERT_DEFAULTS.outOfRangeDispel = nil
 ns.PREVIOUS_PVP_ALERT_DEFAULTS.range = true
 ns.PREVIOUS_PVP_ALERT_DEFAULTS.text = false
 ns.PREVIOUS_PVP_ALERT_DEFAULTS.chat = false
@@ -274,18 +282,18 @@ end
 
 ns.ENV_OVERRIDES = {
   OPEN_WORLD = {
-    mufs = {dimOutOfRange = false},
-    alerts = {range = false, text = true, chat = true, pvpText = false, cooldownOpacity = 0.62},
+    mufs = {dimOutOfRange = true},
+    alerts = {range = false, text = true, chat = true, pvpText = false},
   },
   DUNGEON = {
-    alerts = {range = true, text = true, chat = true, cooldownOpacity = 0.60},
+    alerts = {range = true, text = true, chat = true},
   },
   MYTHIC_PLUS = {
-    alerts = {range = true, text = true, chat = true, cooldownOpacity = 0.70},
+    alerts = {range = true, text = true, chat = true},
   },
   RAID = {
     mufs = {maxUnits = ns.DEFAULT_RAID_MUF_DISPLAY_CAP},
-    alerts = {range = true, text = true, chat = true, cooldownNumbers = false, cooldownOpacity = 0.50},
+    alerts = {range = true, text = true, chat = true},
   },
   PVP = {
     mufs = {maxUnits = ns.DEFAULT_PVP_MUF_DISPLAY_CAP},
@@ -296,12 +304,11 @@ ns.ENV_OVERRIDES = {
       chat = false,
       pvpText = false,
       sound = false,
-      cooldownOpacity = 0.60,
     },
   },
 }
 
-ns.MUF_APPEARANCE_SCHEMA = 8
+ns.MUF_APPEARANCE_SCHEMA = 9
 
 local function ColorEquals(color, red, green, blue, alpha)
   return type(color) == "table"

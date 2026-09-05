@@ -42,7 +42,7 @@ end
 
 local function ValidAction(value)
   return type(value) == "string" and (value == "NONE" or value == "TARGET"
-    or value == "FOCUS" or value == "ASSIST" or value:match("^CURE[123]$")
+    or value == "FOCUS" or value == "ASSIST" or value == "BANDAGE" or value:match("^CURE[123]$")
     or value:match("^spell:%d+$") or value:match("^item:%d+$"))
 end
 

@@ -19,6 +19,7 @@
 ## DefaultState: enabled
 ## X-License: GNU GPL V3
 ## X-Website: https://github.com/randylorfing/Decursive
+## X-Curse-Project-ID: 1659159
 ## X-Zhaohu-Source-Commit: @project-hash@
 
 embeds.xml

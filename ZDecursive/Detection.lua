@@ -78,8 +78,10 @@ local SPELL_TYPES = {
 
 local BATTLE_REZ = {20484, 61999, 391054}
 local NORMAL_REZ = {50769, 7328, 2006, 2008, 115178, 361227}
-local SOUL_LINK_SPELL_ID = 1259646
 local SOUL_LINK_ITEM_ID = 269586
+-- Higher quality first. Item spell IDs are resolved through the client because
+-- crafting recipe IDs are not the use spell and cannot supply item range.
+local SOUL_LINK_ITEM_IDS = {269586, 248486}
 local POISON_CLEANSING_TOTEM = 383013
 local BY_ME_FILTER = "HARMFUL|RAID_PLAYER_DISPELLABLE"
 local ALL_FILTER = "HARMFUL|DISPELLABLE"
@@ -702,16 +704,51 @@ end
 
 local function PublicItemCount(itemId)
   if type(itemId) ~= "number" then
-    return 0
+    return nil
   end
   local count
   if C_Item and type(C_Item.GetItemCount) == "function" then
-    count = Public(C_Item.GetItemCount(itemId, false, false, false, false))
+    local ok, value = pcall(C_Item.GetItemCount, itemId, false, false, false, false)
+    count = ok and Public(value) or nil
   end
-  if type(count) == "number" and count > 0 then
+  if type(count) == "number" and count == count and count >= 0 and count < math.huge and count == math.floor(count) then
     return count
   end
-  return 0
+  return nil
+end
+
+local function PublicItemUseSpell(itemId)
+  if C_Item and type(C_Item.GetItemSpell) == "function" then
+    local ok, name, spellId = pcall(C_Item.GetItemSpell, itemId)
+    if ok then
+      name, spellId = Public(name), Public(spellId)
+      if type(spellId) == "number" and spellId > 0 and spellId < math.huge and spellId == math.floor(spellId) then
+        return type(name) == "string" and name or nil, spellId
+      end
+    end
+  end
+end
+
+function ns.IsSoulLinkItemID(itemId)
+  itemId = Public(itemId)
+  return itemId == SOUL_LINK_ITEM_IDS[1] or itemId == SOUL_LINK_ITEM_IDS[2]
+end
+
+-- Include both qualities and data readiness; a successful item-cache event
+-- must refresh an unknown use spell even when carried counts did not change.
+function ns.GetDetectionItemActionSignature()
+  if not C_Item or type(C_Item.GetItemCount) ~= "function" then
+    return nil
+  end
+  local bits = {}
+  for _, itemId in ipairs(SOUL_LINK_ITEM_IDS) do
+    local ok, count = pcall(C_Item.GetItemCount, itemId, false, false, false, false)
+    count = ok and Public(count) or nil
+    if type(count) ~= "number" or count ~= count or count < 0 or count >= math.huge or count ~= math.floor(count) then return nil end
+    local _name, spellId = PublicItemUseSpell(itemId)
+    bits[#bits + 1] = tostring(itemId) .. ":" .. tostring(count) .. ":" .. tostring(spellId or 0)
+  end
+  return table.concat(bits, "|")
 end
 
 function ns.HasClassBattleRez()
@@ -726,20 +763,43 @@ end
 local function SoulLinkState(pack)
   local enabled = pack and pack.mufs and pack.mufs.soulLinkFallback ~= false
   local hasBR = ns.HasClassBattleRez()
-  local name = SpellName(SOUL_LINK_SPELL_ID)
-  local count = PublicItemCount(SOUL_LINK_ITEM_ID)
-  local knows = SpellInBook(SOUL_LINK_SPELL_ID, true)
-  local carried = count > 0 or knows
+  local count, itemId, selectedCount = 0, nil, 0
+  local inventoryKnown, preferenceKnown = true, true
+  for _, candidate in ipairs(SOUL_LINK_ITEM_IDS) do
+    local carriedCount = PublicItemCount(candidate)
+    if carriedCount == nil then
+      inventoryKnown = false
+      if not itemId then preferenceKnown = false end
+    else
+      count = count + carriedCount
+      if carriedCount > 0 and not itemId and preferenceKnown then
+        itemId, selectedCount = candidate, carriedCount
+      end
+    end
+  end
+  if not inventoryKnown then count = nil end
+  local name, spellId
+  if itemId then
+    name, spellId = PublicItemUseSpell(itemId)
+    if not spellId and not (InCombatLockdown and InCombatLockdown())
+      and C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then
+      pcall(C_Item.RequestLoadItemDataByID, itemId)
+    end
+  end
+  local knows = spellId and SpellInBook(spellId, true) or false
+  local carried = itemId ~= nil and selectedCount > 0
   local available = enabled and (not hasBR) and carried
   return {
     enabled = enabled == true,
     available = available == true,
     hasClassBattleRez = hasBR,
     knows = knows,
-    spellId = SOUL_LINK_SPELL_ID,
-    itemId = SOUL_LINK_ITEM_ID,
+    spellId = spellId,
+    itemId = itemId,
     name = name,
     count = count,
+    selectedCount = selectedCount,
+    inventoryKnown = inventoryKnown,
   }
 end
 
@@ -894,6 +954,7 @@ end
 
 local function Signature(pack)
   local bits = {}
+  bits[#bits + 1] = tostring(pack and pack.mufs and pack.mufs.soulLinkFallback ~= false)
   local enabled = ns.GetEnabledTypes(pack)
   bits[#bits + 1] = table.concat(enabled, ",")
   local order = ns.EnsureCureOrder(pack)
@@ -1017,7 +1078,8 @@ end
 function ns.GetSmartRezActions(pack)
   if InCombatLockdown and InCombatLockdown() then
     if type(smartRezCache) == "table" then
-      return smartRezCache.battleRezName, smartRezCache.outOfCombatRezName, smartRezCache.combatSoulLink, smartRezCache.outOfCombatSoulLink
+      return smartRezCache.battleRezName, smartRezCache.outOfCombatRezName, smartRezCache.combatSoulLink, smartRezCache.outOfCombatSoulLink,
+        smartRezCache.soulLinkItemId, smartRezCache.soulLinkSpellId
     end
     return nil, nil, false, false
   end
@@ -1026,7 +1088,7 @@ function ns.GetSmartRezActions(pack)
   local outOfCombatRezName = normalRezName or battleRezName
   local soul = ns.GetSoulLinkFallback(pack)
   local soulEnabled = soul and soul.enabled == true
-  local carried = soul and type(soul.count) == "number" and soul.count > 0
+  local carried = soul and type(soul.selectedCount) == "number" and soul.selectedCount > 0
   local hasCarriedSoulLink = soulEnabled and carried
   local combatSoulLink = hasCarriedSoulLink and not battleRezName
   local outOfCombatSoulLink = hasCarriedSoulLink and not outOfCombatRezName
@@ -1035,8 +1097,11 @@ function ns.GetSmartRezActions(pack)
     outOfCombatRezName = outOfCombatRezName,
     combatSoulLink = combatSoulLink,
     outOfCombatSoulLink = outOfCombatSoulLink,
+    soulLinkItemId = soul and soul.itemId,
+    soulLinkSpellId = soul and soul.spellId,
   }
-  return battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink
+  return battleRezName, outOfCombatRezName, combatSoulLink, outOfCombatSoulLink,
+    smartRezCache.soulLinkItemId, smartRezCache.soulLinkSpellId
 end
 
 function ns.IsMUFRezEligibleUnitToken(unit)
@@ -1132,6 +1197,29 @@ local function KnownProbe(spellId)
   end
   if SpellInBook(spellId, true) then
     return spellId
+  end
+  return nil
+end
+
+-- Actual cure range for attempted-cure warnings and native presentation sinks.
+-- Do not substitute a healing probe or turn an invalid check into out of range.
+function ns.CureSpellRangeValue(unit, spellId)
+  if not Accessible(unit) or type(unit) ~= "string" or unit == ""
+    or not Accessible(spellId) or type(spellId) ~= "number"
+    or spellId <= 0 or spellId >= math.huge or spellId ~= math.floor(spellId)
+    or not C_Spell or type(C_Spell.IsSpellInRange) ~= "function" then
+    return nil
+  end
+  local ok, value = pcall(C_Spell.IsSpellInRange, spellId, unit)
+  if not ok then
+    return nil
+  end
+  if not Accessible(value) then
+    -- The caller may only forward this value to a secret-safe widget setter.
+    return value
+  end
+  if type(value) == "boolean" then
+    return value
   end
   return nil
 end
@@ -1868,7 +1956,7 @@ local function AppendPet(units, seen, owner, pack)
   end
 end
 
-function ns.BuildRoster(pack)
+local function BuildRosterNow(pack)
   pack = pack or GetPack()
   activeRosterAudit = {}
   local units = {}
@@ -1919,6 +2007,54 @@ function ns.BuildRoster(pack)
     ns.DiagnosticRecord("ROSTER_BUILD", audit, true)
   end
   return result
+end
+
+-- A consumer transaction shares one uncapped, ordered roster. Keep its backing
+-- array private: MUFs and LiveList apply different limits to their own copies.
+-- Nothing survives the transaction, including a failed or incomplete build.
+local rosterTransaction
+
+function ns.BeginRosterTransaction(pack)
+  if rosterTransaction then
+    error("ROSTER_TRANSACTION_ALREADY_ACTIVE")
+  end
+  local token = {}
+  rosterTransaction = {token = token, pack = pack or GetPack()}
+  return token
+end
+
+function ns.EndRosterTransaction(token)
+  if not rosterTransaction or rosterTransaction.token ~= token then
+    return false
+  end
+  rosterTransaction = nil
+  return true
+end
+
+function ns.BuildRoster(pack)
+  pack = pack or GetPack()
+  local transaction = rosterTransaction
+  if not transaction or transaction.pack ~= pack then
+    return BuildRosterNow(pack)
+  end
+  if transaction.failed or transaction.building then
+    error("ROSTER_TRANSACTION_BUILD_FAILED")
+  end
+  if not transaction.units then
+    transaction.building = true
+    local ok, units = pcall(BuildRosterNow, pack)
+    transaction.building = false
+    if not ok or type(units) ~= "table" then
+      transaction.failed = true
+      error("ROSTER_TRANSACTION_BUILD_FAILED")
+    end
+    transaction.units = units
+  end
+  local copy = {}
+  for i = 1, #transaction.units do
+    copy[i] = transaction.units[i]
+  end
+  return copy
 end
 
 function ns.GetLastRosterBuildDiagnostics()
@@ -2153,8 +2289,8 @@ ns.BY_ME_DISPEL_FILTER = BY_ME_FILTER
 ns.ALL_DISPEL_FILTER = ALL_FILTER
 ns.NATIVE_DISPEL_FILTER = ALL_FILTER
 ns.GAP_DISPEL_FILTER = GAP_FILTER
-ns.SOUL_LINK_SPELL_ID = SOUL_LINK_SPELL_ID
 ns.SOUL_LINK_ITEM_ID = SOUL_LINK_ITEM_ID
+ns.SOUL_LINK_ITEM_IDS = SOUL_LINK_ITEM_IDS
 ns.POISON_CLEANSING_TOTEM = POISON_CLEANSING_TOTEM
 
 -- USER_NOTIFICATION_SINK_BEGIN
@@ -2539,7 +2675,7 @@ function ns.PrintSoulLinkStatus()
   local sl = ns.GetSoulLinkState()
   local lines = {
     "toggle: " .. (sl.enabled and "on" or "off"),
-    "carried count: " .. tostring(sl.count),
+    "carried count: " .. (sl.inventoryKnown == false and "unknown" or tostring(sl.count)),
     "spellbook state: " .. (sl.knows and "known" or "not publicly known"),
     "class battle-rez: " .. (sl.hasClassBattleRez and "yes" or "no"),
     "available: " .. (sl.available and "yes" or "no"),

@@ -1,45 +1,81 @@
 # Zhaohu's Decursive (ZDecursive)
 
 ZDecursive is an independently maintained rebuild of Zhaohu's Decursive for
-WoW Retail 12.1. The `v13.1.2-Alpha` line is packaged as one installable addon
-folder and is prepared for publication from the `zdecursive` branch of
-`randylorfing/Decursive`.
+WoW Retail 12.1. Production release **v13.1.2** provides clickable Micro Unit
+Frames (MUFs), native aura presentation, configurable cure actions, environment
+profiles, and diagnostics. Source and releases are maintained at
+[`randylorfing/Decursive`](https://github.com/randylorfing/Decursive).
 
-## Current slice
+## Installation and setup
 
-Priority and skip lists with slash commands (`/dcrpr`, `/dcrsk` and the alpha `add`/`show`/`clear` aliases). Skip-list units are never shown on MUFs or the live list. Priority order applies when MUF order is Decursive priority. Lists persist in `DecursiveRebuildDB` on the AceDB profile (not per environment).
+**Upgrading from the older two-folder Zhaohu's Decursive build:** the addon now
+installs as `ZDecursive`, replacing this project's `Decursive` and
+`Decursive_Options` folders. Exit WoW completely before switching. After the
+CurseForge update, check `Interface/AddOns`; if that old copy's two folders
+remain, remove them before launching WoW. Do not run both builds together.
+For a manual installation, remove that old copy before extracting this release.
+Keep your `WTF` folder and any settings backups. Folder cleanup does not import
+settings: this rebuild uses `DecursiveRebuildDB`, so legacy `DecursiveDB`
+profiles are not migrated. Existing **ZDecursive** settings are retained.
+
+CurseForge project ID remains **1659159**. Automatic cleanup across folder-name
+changes has not been verified; the upgrade instructions above also cover
+manually installed or locally modified copies.
+
+If the rebuild detects this project's old addon running alongside it, it opens
+a copyable upgrade warning outside combat. The warning does not disable addons,
+delete files, or change saved settings.
 
 - One addon folder: `ZDecursive`
 - Interface: `120100`
 - SavedVariables: `DecursiveRebuildDB` for settings and `ZDecursiveDiagnosticsDB` for bounded, sanitized diagnostics (does not read `DecursiveDB`)
-- Six complete, independent packs per logical profile: Open World, Dungeon, Mythic+, Raid, PvP, and Solo
-- Account / character / spec assignment with resolver: spec (if enabled and mapped) else character else account else Default
-- Multiple mode routes only the five detected contexts; Solo mode always applies the Solo pack while detection remains diagnostic
-- Actionable friendly cure types are Magic, Curse, Poison, and Disease; Enrage, Bleed, and legacy Charm flags are ignored
-- Slash: `/dcr` also listed under Esc > Options > AddOns
 
-AUTO click mode assigns up to three cures in priority order to the first free
-gestures: Left, Right, Ctrl+Left, Ctrl+Right, then Shift+Left. Configured Target,
-Focus, and Assist actions reserve their unmodified buttons. With the default
-mouse settings, cures remain on Left, Right, and Ctrl+Left. The click-status
-display shows the resolved assignments. Middle Target and Ctrl+Middle Focus
-remain fixed.
+Extract the release into the Retail `Interface/AddOns` directory so that the TOC
+is at `Interface/AddOns/ZDecursive/ZDecursive.toc`, then restart the client or
+use `/reload` after an update. Open settings with `/dcr`, `/zd`, or
+`/zdecursive`, or through Esc > Options > AddOns.
 
-MANUAL mode shows Left, Right, Button 4, and Button 5 spell menus even in Simple
-view. Choose a known cure spell or a Target, Focus, or Assist action for each
-button. Choosing a spell moves its saved assignment to that button and replaces
-the button's previous assignment. An explicit Button 5 spell takes precedence
-over the automatic PvP bandage. Automatic cure restores assignment from the
-remaining cures; Button 5 also permits the bandage fallback. Changes belong to
-the editing environment and become active when that environment is applied.
+The redesigned menu groups settings into **Frames, Roster, Actions, Colors,
+Alerts, Supplies, and Advanced**, with Status, Decursive Profiles, and
+Diagnostics alongside them. Settings have descriptions, search, and a frame
+layout preview. The header distinguishes the environment being edited from
+the environment currently applied. Options and protected configuration changes
+are guarded during combat.
 
-## v13.1.2 Alpha changes
+## Profiles, frames, and actions
 
-- Adds an optional per-environment automatic aura diagnostics trace, enabled by default, with a documented Advanced toggle and `/zdiag auraon` / `/zdiag auraoff`.
-- Refreshes only the native aura provider that changed and records bounded recovery diagnostics when combat events need attention.
-- Uses the native dispel color curve when available while retaining the compatible map fallback.
-- Adds hover descriptions to all environment options and keeps the diagnostics report visible when ordinary runtime notices arrive.
-- Prevents living, out-of-range dispel attempts from being misreported as Battle Resurrection Soul Link failures.
+- Each logical profile contains six environment packs: Open World, Dungeon, Mythic+, Raid, PvP, and Solo. Multiple mode follows the detected environment; Solo mode applies the Solo pack. Account, character, and optional specialization assignments select the logical profile. Shared orientation and priority/skip lists remain profile-wide.
+- AUTO assigns available cures in priority order. MANUAL and explicit mouse/modifier assignments let you choose cures, utility actions, or a selected bandage. Optional keyboard mouseover casting has its own controls. Editing an inactive environment takes effect when that environment is applied.
+- Native friendly dispel presentation covers Magic, Curse, Poison, and Disease. Aura tooltips use Blizzard's native display interfaces, with improvements to poison hover behavior and cooldown readiness/recovery.
+- Automatic roster order follows DandersFrames when available and falls back to group order. Explicit Group, Decursive priority, or DandersFrames choices remain selected per environment. Priority and skip lists are available through `/dcrpr` and `/dcrsk`; skipped units are excluded from MUFs and the live list.
+- Party and raid frame sizes remain configurable. Pet MUFs use **80% of player-frame size** and share the group scale, matching the original Decursive proportion.
+
+## Alerts and supplies
+
+- A confirmed out-of-range dispel attempt can show **OUT OF RANGE**. The message uses the configured alert appearance, expands or wraps to fit, and follows the text and failure-sound controls. Soul Link battle-rez warnings are attributed separately from living-target dispel attempts.
+- **Colors > Range** controls whole-MUF dimming. Out-of-range frames default to **50% brightness**, including affliction colors, borders, icons, status lights, and cooldown numbers. Unknown range keeps normal brightness. One brightness control applies to afflicted and unafflicted frames; the underlying unafflicted range color remains configurable.
+- Countdown numbers are enabled by default, with cooldown overlay darkness at **0**. Landing DISPEL text, successful-dispel text, Soul Link warnings, and sounds have their own controls.
+- **Supplies** lists carried bandages, including tailoring ranks, with counts, item tooltips, selection, and click assignment. Automatic selection uses usable item level and item ID; a specific selection stays selected when empty. Blizzard determines item eligibility and PvP restrictions when you click.
+- An optional low-stock reminder is **off by default**, has a configurable threshold, and appears outside combat. Soul Link fallback and its battle-rez warning have separate settings.
+
+## Performance and troubleshooting
+
+This release reduces repeated layout, secure-binding, and visual updates,
+combines related event bursts, and reuses roster information within each engine
+update. Failed profile or environment applications retain recovery state and
+use bounded retries. These changes reduce redundant work without promising a
+particular FPS improvement.
+
+Use `/zdiag` for the copyable diagnostics report. Automatic aura-event tracing
+is enabled by default per environment and can be toggled in Advanced or paused
+with `/zdiag auraoff`. Ordinary runtime notices append to the bounded report
+without opening it over gameplay.
+
+Optional performance captures are available in Diagnostics or through
+`/zdperf 15` and `/zdperf 30`. Start outside combat; a capture may continue
+during combat. Use `/zdperf stop` to finish early and `/zdperf report` to copy
+the result. Capture is off by default and reports timed addon-owned functions,
+including the build version, rather than total addon CPU or FPS.
 
 ## Licensing and attribution
 

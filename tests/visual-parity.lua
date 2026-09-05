@@ -96,7 +96,7 @@ for _, row in ipairs(ns.ENVIRONMENTS) do
 	local expectedCap = (row.key == "RAID" or row.key == "PVP") and 40 or 5
 	Equal(ns.MakePack(row.key).mufs.maxUnits, expectedCap, row.label .. " fresh display cap")
 end
-Equal(openWorld.mufs.dimOutOfRange, false, "working-source Open World range default")
+Equal(openWorld.mufs.dimOutOfRange, true, "current Open World range default is enabled")
 Equal(openWorld.colors.healthy[1], 0, "legacy healthy red")
 Equal(openWorld.colors.healthy[2], 0.3, "legacy healthy green")
 Equal(openWorld.colors.healthy[3], 0.1, "legacy healthy blue")
@@ -200,6 +200,12 @@ Equal(ownerInner, 16, "owner inner size")
 local petSize, petInner = ns.GetMUFVisualMetrics(20, true, "pet")
 Equal(petSize, 16, "pet frame size")
 Equal(petInner, 12, "pet inner size")
+local largeOwnerSize = ns.GetMUFVisualMetrics(40, true, "party1")
+Equal(largeOwnerSize, 40, "larger configured party frames retain their size")
+for _, unit in ipairs({"pet", "partypet1", "raidpet1"}) do
+  local largerPet = ns.GetMUFVisualMetrics(40, true, unit)
+  Equal(largerPet, 32, unit .. " retains original Decursive's 16-to-20 proportion at larger sizes")
+end
 
 local solo = ns.ResolveMUFBaseAppearance(openWorld, "player")
 Equal(solo.fillAlpha, 0.315, "solo idle effective healthy alpha")
@@ -232,11 +238,11 @@ local restricted = ns.ResolveMUFManagedAppearance(openWorld, "player")
 Check(restricted.restrictionStatusLight, "restriction remains available to status light")
 Check(not restricted.restrictionFailureFill, "restriction never paints full-square red")
 Equal(restricted.afflictionAuthority, "AURA_CONTAINER", "AuraContainer remains affliction authority")
-Check(not restricted.rangeAboveAffliction, "range overlay remains below afflicted fill")
+Check(restricted.rangeAboveAffliction, "whole-MUF range shade is above afflicted fill")
 Check(restricted.afflictionAboveManaged, "affliction wins over ordinary managed state")
 
 local dungeon = ns.MakePack("DUNGEON")
-ns.SpellRangeState = function()
+ns.CureSpellRangeValue = function()
   return false
 end
 local outOfRange = ns.ResolveMUFManagedAppearance(dungeon, "party1")
@@ -263,7 +269,7 @@ Equal(profileARange.color[1], 0.12, "assigned profile A range color")
 Equal(profileARange.alpha, 0.75, "assigned profile A range dim")
 Equal(profileBRange.color[1], 0.80, "assigned profile B range color")
 Equal(profileBRange.alpha, 0.40, "assigned profile B range dim")
-Check(profileARange.precedence == "BELOW_DISPEL_FILL", "explicit affliction precedence keeps range below an active dispel fill")
+Check(profileARange.precedence == "WHOLE_MUF_SHADE_ABOVE_CONTENT", "one top shade dims affliction and readable content together")
 
 assignedProfileA.colors.dead = {0.11, 0.22, 0.33, 0.44}
 assignedProfileB.colors.dead = {0.66, 0.55, 0.44, 1}
@@ -361,9 +367,9 @@ Equal(ownerRangeHost.alpha, 0, "in-range composition host clears configured tint
 ns.ApplyMUFRangePresentation(ownerRangeWidget, transitions[2], ownerRangeHost)
 Equal(ownerRangeWidget.alpha, 1, "out-of-range range texture remains locally opaque")
 Equal(ownerRangeHost.alpha, 1, "out-of-range composition host remains opaque")
-Equal(ownerRangeWidget.color[1], dungeon.colors.range[1] * dungeon.mufs.dimAmount, "range dim darkens configured red once")
-Equal(ownerRangeWidget.color[2], dungeon.colors.range[2] * dungeon.mufs.dimAmount, "range dim darkens configured green once")
-Equal(ownerRangeWidget.color[3], dungeon.colors.range[3] * dungeon.mufs.dimAmount, "range dim darkens configured blue once")
+Equal(ownerRangeWidget.color[1], dungeon.colors.range[1], "range red remains full below the top shade")
+Equal(ownerRangeWidget.color[2], dungeon.colors.range[2], "range green remains full below the top shade")
+Equal(ownerRangeWidget.color[3], dungeon.colors.range[3], "range blue remains full below the top shade")
 Equal(ownerRangeWidget.color[4], 1, "range texture intrinsic alpha is one")
 local contrastingBase = {0.95, 0.10, 0.75}
 local composed = {}
@@ -393,7 +399,7 @@ Check(not secretBorder.borderVisible, "secret class hides rather than invents a 
 classToken = "MONK"
 
 local secretRange = {secret = true}
-ns.SpellRangeState = function()
+ns.CureSpellRangeValue = function()
   return secretRange
 end
 local secretManaged = ns.ResolveMUFManagedAppearance(dungeon, "party1")

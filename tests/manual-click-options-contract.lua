@@ -279,6 +279,8 @@ ns.GetSmartRezActions = function() return nil, nil, false, false end
 local bandageCount = 1
 Enum = {BagIndex = {Backpack = 0}}
 C_Item = {
+  GetItemInfoInstant = function(id) return id, nil, nil, nil, nil, 0, 7 end,
+  GetItemInfo = function() return "Bandage", nil, 1, 10 end,
   GetItemSpell = function() return "Bandage", 212640 end,
   GetItemCount = function() return bandageCount end,
   IsUsableItem = function() return true end,
@@ -321,7 +323,7 @@ MenuUtil = {CreateContextMenu = function(_, build)
   menu = {}
   build(nil, {CreateRadio = function(_, label, selected, pick)
     menu[label] = {selected = selected, pick = pick}
-  end})
+  end, CreateTitle = function() end})
 end}
 local function Open(label)
   local widget = Binding(label).widget
@@ -338,15 +340,18 @@ local function MacroIncludes(attribute, spell)
   return type(value) == "string" and value:find(spell, 1, true) ~= nil
 end
 
-ui.navButtons["environment:DUNGEON"].scripts.OnClick()
 ui.tabs.cure.scripts.OnClick()
-Check(ui.simple, "the reproduced scenario must start in Simple mode")
-Check(not Row("Left click"):IsShown(), "AUTO keeps the existing Simple-mode layout")
+ui.environmentEditing.scripts.OnClick(ui.environmentEditing)
+Check(menu.Dungeon, "editing dropdown exposes Dungeon")
+menu.Dungeon.pick()
+ui.tabs.cure.scripts.OnClick()
+Check(not ui.simple, "old saved Simple mode cannot hide configuration in the redesigned editor")
+Check(Row("Left click"):IsShown(), "AUTO exposes click assignments without another visibility mode")
 Pick("Click mode", "MANUAL - per-button")
 Equal(environments.DUNGEON.cure.mode, "MANUAL", "mode changes the editing pack")
 Equal(environments.OPEN_WORLD.cure.mode, "AUTO", "mode does not change the applied Open World pack")
 for _, label in ipairs({"Left click", "Right click", "Middle click", "Button 4", "Button 5"}) do
-  Check(Row(label):IsShown(), "Manual exposes " .. label .. " in Simple mode")
+  Check(Row(label):IsShown(), "Manual exposes " .. label .. " in the Actions category")
 end
 local entries = Open("Left click")
 Check(entries["Remove Curse"] and entries.Cleanse, "manual menu lists known editing-pack spells")
@@ -384,7 +389,7 @@ local selected = Open("Left click")["Remove Curse"]
 Check(selected.selected(), "menu checks the stored spell")
 ui.simple = false
 ns.RefreshOptions()
-Check(Row("Left click"):IsShown(), "Manual spell controls are also reachable in All mode")
+Check(Row("Left click"):IsShown(), "Manual spell controls remain reachable after refresh")
 Pick("Click mode", "AUTO - priority bindings")
 Equal(environments.DUNGEON.cure.manual["spell:475"], "left", "AUTO preserves saved manual choices")
 Check(not Open("Left click")["Remove Curse"], "AUTO menus keep action choices separate from manual spells")
@@ -459,8 +464,8 @@ environmentStatus.appliedEnvironment = "DUNGEON"
 ui.tabs.cure.scripts.OnClick()
 ns.RefreshOptions()
 Pick("Click mode", "AUTO - priority bindings")
-Check(Row("Left click"):IsShown(), "extended binding editor is reachable in AUTO Simple mode")
-Check(Row("Keyboard mouseover casting"):IsShown(), "keyboard controls are reachable in Simple mode")
+Check(Row("Left click"):IsShown(), "extended binding editor is reachable in AUTO mode")
+Check(Row("Keyboard mouseover casting"):IsShown(), "keyboard controls are reachable in Actions")
 Pick("Mouse modifier", "Ctrl+Shift")
 Pick("Button 4", "Cleanse")
 Equal(savedDungeon.cure.clickBindings["ctrl-shift-button4"], "spell:4987", "combination persists in the editing pack")
@@ -490,6 +495,7 @@ combat = true
 combatPick()
 Equal(savedDungeon.cure.clickBindings.middle, nil, "extended menu rejects combat-time mutation")
 combat = false
+assert(ns.ShowOptions()) -- Combat closed the actual window; resume through its real open path.
 
 -- Use the real keyboard normalizer and status producer through the rendered
 -- widgets, including the Save callback, without manually refreshing labels.

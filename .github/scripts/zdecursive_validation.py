@@ -22,7 +22,7 @@ import zipfile
 
 
 ADDON = "ZDecursive"
-RELEASE_TAG = "v13.1.2-Alpha"
+RELEASE_TAG = "v13.1.2"
 UPLOAD_ARTIFACT_PIN = "ea165f8d65b6e75b540449e92b4886f43607fa02"
 TOC_LOAD_ORDER = [
     "embeds.xml",
@@ -353,7 +353,7 @@ def validate_first_party_lua_style(check: Validation, addon_root: Path) -> None:
 def validate_lua_syntax(check: Validation, addon_root: Path, extra_roots: list[Path] | None = None) -> None:
     files = sorted(addon_root.rglob("*.lua"))
     for root in extra_roots or []:
-        files.extend(sorted(root.glob("*.lua")))
+        files.extend(sorted(root.rglob("*.lua")))
     node = os.environ.get("NODE_BINARY") or shutil.which("node")
     parser = Path(__file__).with_name("parse-lua.cjs")
     if not node:
@@ -454,6 +454,33 @@ def validate_source_only_absent(check: Validation, addon_root: Path) -> None:
             check.fail(f"unapproved PowerShell support script in package: {relative}")
 
 
+def validate_manual_changelog(check: Validation, repo_root: Path) -> bool:
+    metadata = repo_root / ".pkgmeta"
+    text = read_text(metadata) if metadata.is_file() else ""
+    lines = text.splitlines()
+    declarations = [index for index, line in enumerate(lines) if re.match(r"^manual-changelog\s*:", line)]
+    if not declarations:
+        return False
+    children = []
+    for line in lines[declarations[0] + 1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith((" ", "\t")):
+            break
+        children.append(line.strip())
+    if (len(declarations) != 1 or lines[declarations[0]].strip() != "manual-changelog:"
+            or children != ["filename: .github/RELEASE_NOTES.md", "markup-type: markdown"]):
+        check.fail("manual changelog must use the single maintained Markdown notes mapping")
+        return True
+    notes = repo_root / ".github" / "RELEASE_NOTES.md"
+    exact_paths = {path.relative_to(repo_root).as_posix() for path in relative_files(repo_root / ".github")}
+    if ".github/RELEASE_NOTES.md" not in exact_paths or not notes.is_file():
+        check.fail("manual release notes are missing or have incorrect filename case")
+    elif read_text(notes).splitlines()[0:1] != [f"# Zhaohu's Decursive {RELEASE_TAG}"]:
+        check.fail("manual release notes must have the exact current release title")
+    return True
+
+
 def validate_pkgmeta(check: Validation, repo_root: Path) -> None:
     path = repo_root / ".pkgmeta"
     if not path.is_file():
@@ -477,6 +504,7 @@ def validate_pkgmeta(check: Validation, repo_root: Path) -> None:
             check.fail(f".pkgmeta is missing required one-folder/exclusion directive: {item}")
     if re.search(r"^externals\s*:", text, flags=re.MULTILINE):
         check.fail(".pkgmeta must not fetch duplicate externals; bundled libraries are committed")
+    validate_manual_changelog(check, repo_root)
 
 
 def validate_readme(check: Validation, repo_root: Path) -> None:
@@ -486,7 +514,7 @@ def validate_readme(check: Validation, repo_root: Path) -> None:
         return
     text = read_text(path)
     for marker in (
-        "v13.1.2-Alpha",
+        "v13.1.2",
         "One addon folder: `ZDecursive`",
         "randylorfing/Decursive",
         "DecursiveRebuildDB",
@@ -511,7 +539,7 @@ def validate_workflow(check: Validation, repo_root: Path) -> None:
         "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
         "36b4c3b7b7bd17c835ad8c83fed4976c067edfbe",
         "- zdecursive",
-        "- 'v13.1.2-Alpha'",
+        "- 'v13.1.2'",
         "contents: read",
         "luaparse@0.3.1",
         "validate-zdecursive-source.py",
@@ -676,7 +704,8 @@ def compare_source_to_package(
     source_addon = source_root / ADDON
     expected = {path.relative_to(source_addon).as_posix(): path for path in relative_files(source_addon)}
     actual = {path.relative_to(addon_root).as_posix(): path for path in relative_files(addon_root)}
-    generated = {"CHANGELOG.md"}
+    manual_changelog = validate_manual_changelog(check, source_root)
+    generated = set() if manual_changelog else {"CHANGELOG.md"}
     if set(expected) != set(actual) - generated or set(actual) - set(expected) - generated:
         check.fail(
             "source/package addon manifests differ: "
@@ -684,11 +713,15 @@ def compare_source_to_package(
             f"package-only={sorted(set(actual) - set(expected) - generated)!r}"
         )
         return
-    changelog = actual.get("CHANGELOG.md")
-    if changelog is None:
-        check.fail("BigWigs generated CHANGELOG.md is missing from the package")
-    elif not read_text(changelog).startswith("# Zhaohu's Decursive"):
-        check.fail("BigWigs generated CHANGELOG.md has an unexpected title")
+    if manual_changelog:
+        if "CHANGELOG.md" in actual:
+            check.fail("manual release notes must not ship a generated history changelog")
+    else:
+        changelog = actual.get("CHANGELOG.md")
+        if changelog is None:
+            check.fail("BigWigs generated CHANGELOG.md is missing from the package")
+        elif not read_text(changelog).startswith("# Zhaohu's Decursive"):
+            check.fail("BigWigs generated CHANGELOG.md has an unexpected title")
     for relative in sorted(expected):
         source_path = expected[relative]
         package_path = actual[relative]

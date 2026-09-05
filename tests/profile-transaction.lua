@@ -344,6 +344,27 @@ for _, row in ipairs(ns.ENVIRONMENTS) do
   Equal(db.profile.environments[row.key].mufs.maxUnits, expectedCap, row.label .. " fresh display cap")
 end
 
+local function CheckCooldownDefaults(pack, label)
+  Equal(pack.alerts.cooldown, true, label .. " keeps cooldown presentation enabled")
+  Equal(pack.alerts.cooldownOpacity, 0, label .. " adds no cooldown darkness")
+  Equal(pack.alerts.cooldownNumbers, true, label .. " shows countdown numbers")
+end
+for _, row in ipairs(ns.ENVIRONMENTS) do
+  CheckCooldownDefaults(db.profile.environments[row.key], row.key .. " fresh environment")
+  Equal(db.profile.environments[row.key].cure.bandageMode, "AUTO", row.key .. " fresh bandage selection")
+  Equal(db.profile.environments[row.key].cure.bandageItemID, 0, row.key .. " fresh bandage item")
+end
+-- Loading an existing profile must preserve explicit cooldown preferences.
+local savedCooldown = db.profile.environments.RAID.alerts
+savedCooldown.cooldownOpacity = 0.5
+savedCooldown.cooldownNumbers = false
+addon:EnsureEnvironments()
+Equal(savedCooldown.cooldownOpacity, 0.5, "loading retains saved darkness")
+Equal(savedCooldown.cooldownNumbers, false, "loading retains disabled countdown numbers")
+savedCooldown.cooldownOpacity, savedCooldown.cooldownNumbers = nil, nil
+addon:EnsureEnvironments()
+CheckCooldownDefaults(db.profile.environments.RAID, "missing saved cooldown fields")
+
 local modeProfile = db.profile
 local legacyStaticProfile = {
   routingMode = "static",
@@ -645,8 +666,8 @@ db.profile.environments.PVP.colors.range = {0.08, 0.08, 0.10, 0.25}
 db.profile.environments.MYTHIC_PLUS.mufs.dimAmount = 0.55
 db.profile.appearanceSchema = nil
 addon:EnsureEnvironments()
-Equal(db.profile.environments.OPEN_WORLD.mufs.dimOutOfRange, false, "known obsolete Open World range default migrates")
-Equal(db.profile.appearanceSchema, 8, "appearance migration is versioned")
+Equal(db.profile.environments.OPEN_WORLD.mufs.dimOutOfRange, true, "known obsolete Open World range default migrates through current defaults")
+Equal(db.profile.appearanceSchema, 9, "appearance migration is versioned")
 Equal(db.profile.environments.DUNGEON.colors.dead[1], 0, "old default death red migrates to black")
 Equal(db.profile.environments.DUNGEON.colors.dead[4], 1, "migrated death color remains opaque")
 Equal(db.profile.environments.RAID.colors.dead[1], 0.25, "custom death color is preserved exactly")
@@ -683,15 +704,15 @@ schemaFourEnvironments.PVP.colors.range = {0.08, 0.08, 0.10, 0.25}
 db.profile = {environments = schemaFourEnvironments, appearanceSchema = 4}
 ok, state = addon:MigrateAppearanceDefaults(schemaFourEnvironments)
 Check(ok, "schema-four migration succeeds")
-Equal(state, 3, "schema-four migration changes only exact prior defaults across six packs")
+Equal(state, 4, "schema-four migration changes exact prior colors and brightness across six packs")
 CheckDefaultRange(schemaFourEnvironments.OPEN_WORLD.colors.range, "schema-four normalized legacy default")
 CheckDefaultRange(schemaFourEnvironments.DUNGEON.colors.range, "schema-four narrow pre-normalized legacy default")
 Equal(schemaFourEnvironments.MYTHIC_PLUS.colors.range[4], 0.70, "schema-four old-alpha custom dim is preserved")
 Equal(schemaFourEnvironments.RAID.colors.range[1], 0.20, "schema-four custom RGB is preserved")
 Equal(schemaFourEnvironments.PVP.colors.range[4], 0.25, "schema-four custom alpha is preserved")
-Equal(db.profile.appearanceSchema, 8, "schema-four profile advances through schema eight")
+Equal(db.profile.appearanceSchema, 9, "schema-four profile advances through schema nine")
 ok, state = addon:MigrateAppearanceDefaults(schemaFourEnvironments)
-Check(ok and state == 0, "schema-eight migration rerun is a no-op")
+Check(ok and state == 0, "schema-nine migration rerun is a no-op")
 db.profile = activeProfile
 
 local schemaFiveEnvironments = ns.MakeEnvironments()
@@ -732,7 +753,7 @@ Check(schemaFiveEnvironments.SOLO.cure.order == customOrder, "custom cure order 
 Equal(table.concat(schemaFiveEnvironments.MYTHIC_PLUS.cure.order, ","), "magic,curse,poison,disease", "missing cure order is restored")
 Equal(schemaFiveEnvironments.PVP.colors.range[1], 0.31, "custom range red remains separate from cure migration")
 Equal(schemaFiveEnvironments.PVP.colors.range[4], 0.67, "custom range alpha remains separate from cure migration")
-Equal(db.profile.appearanceSchema, 8, "schema-five profile advances to schema eight")
+Equal(db.profile.appearanceSchema, 9, "schema-five profile advances to schema nine")
 local migratedMagic = schemaFiveEnvironments.DUNGEON.colors.magic
 ok, state = addon:MigrateAppearanceDefaults(schemaFiveEnvironments)
 Check(ok and state == 0, "canonical palette migration rerun is a no-op")
@@ -744,10 +765,10 @@ db.profile = {environments = schemaSevenEnvironments, appearanceSchema = 7}
 ok, state = addon:MigrateAppearanceDefaults(schemaSevenEnvironments)
 Check(ok and state == 1, "schema-seven migration changes only the exact prior PvP display cap")
 Equal(schemaSevenEnvironments.PVP.mufs.maxUnits, 40, "schema-seven PvP default migrates to battleground capacity")
-Equal(db.profile.appearanceSchema, 8, "schema-seven profile advances to schema eight")
+Equal(db.profile.appearanceSchema, 9, "schema-seven profile advances to schema nine")
 local migratedPvPCap = schemaSevenEnvironments.PVP.mufs.maxUnits
 ok, state = addon:MigrateAppearanceDefaults(schemaSevenEnvironments)
-Check(ok and state == 0, "schema-eight PvP display-cap migration rerun is a no-op")
+Check(ok and state == 0, "schema-nine PvP display-cap migration rerun is a no-op")
 Equal(schemaSevenEnvironments.PVP.mufs.maxUnits, migratedPvPCap, "PvP display-cap migration is idempotent")
 local missingPalettePack = {}
 Equal(ns.MigrateCanonicalCurePalette(missingPalettePack), 2, "missing color and cure tables restore as two bounded sections")
@@ -770,6 +791,7 @@ Equal(db.current, "Alpha", "create activates profile")
 Equal(db.global.accountProfile, "Alpha", "create updates active account scope")
 Check(type(db.profile.environments.RAID) == "table", "create materializes all environments")
 for _, row in ipairs(ns.ENVIRONMENTS) do
+  CheckCooldownDefaults(db.profile.environments[row.key], row.key .. " new profile")
   CheckDefaultRange(db.profile.environments[row.key].colors.range, row.key .. " new profile range default")
   CheckCanonicalCureColors(db.profile.environments[row.key], row.key .. " new profile canonical palette")
 end
@@ -788,9 +810,18 @@ db.profile.routingMode = "solo"
 db.profile.environments.SOLO.mufs.maxUnits = 13
 db.profile.environments.PVP.alerts.dispelEnabled = true
 db.profile.environments.PVP.alerts.sound = true
+db.profile.environments.DUNGEON.alerts.cooldownOpacity = 0.45
+db.profile.environments.DUNGEON.alerts.cooldownNumbers = false
+db.profile.environments.DUNGEON.cure.bandageMode = "SELECTED"
+db.profile.environments.DUNGEON.cure.bandageItemID = 239713
+db.profile.environments.DUNGEON.cure.clickBindings.button5 = "BANDAGE"
 ok, state = addon:CopyProfile("Beta")
 Check(ok and state == "copied", "copy profile succeeds")
 Equal(db.current, "Beta", "copy activates destination")
+Equal(db.profile.environments.DUNGEON.alerts.cooldownOpacity, 0.45, "profile copy retains custom darkness")
+Equal(db.profile.environments.DUNGEON.alerts.cooldownNumbers, false, "profile copy retains countdown preference")
+Equal(db.profile.environments.DUNGEON.cure.bandageItemID, 239713, "profile copy retains selected bandage")
+Equal(db.profile.environments.DUNGEON.cure.clickBindings.button5, "BANDAGE", "profile copy retains bandage click")
 Equal(db.global.accountProfile, "Beta", "copy updates active scope")
 Equal(db.profile.environments.DUNGEON.mufs.partySize, 37, "copy preserves environment data")
 Equal(db.profile.environments.DUNGEON.mufs.maxUnits, 9, "copy preserves custom display cap")
@@ -810,9 +841,19 @@ Equal(addon:GetAppliedEnvironment(), "OPEN_WORLD", "Ace profile switch reconcile
 db:SetProfile("Beta")
 addon:OnAceProfileUIChanged()
 Equal(addon:GetAppliedEnvironment(), "SOLO", "Ace profile switch reconciles destination Solo mode")
+Equal(db.profile.environments.DUNGEON.alerts.cooldownOpacity, 0.45, "profile switch retains custom darkness")
+Equal(db.profile.environments.DUNGEON.alerts.cooldownNumbers, false, "profile switch retains countdown preference")
+Equal(db.profile.environments.DUNGEON.cure.bandageMode, "SELECTED", "profile switch retains manual bandage selection")
+Equal(db.profile.environments.DUNGEON.cure.bandageItemID, 239713, "profile switch retains selected bandage")
 
 ok, state = addon:ResetCurrentProfile()
 Check(ok, "current profile reset succeeds")
+for _, row in ipairs(ns.ENVIRONMENTS) do
+  CheckCooldownDefaults(db.profile.environments[row.key], row.key .. " profile reset")
+  Equal(db.profile.environments[row.key].cure.bandageMode, "AUTO", row.key .. " reset bandage selection")
+  Equal(db.profile.environments[row.key].cure.bandageItemID, 0, row.key .. " reset bandage item")
+  Equal(db.profile.environments[row.key].cure.clickBindings.button5, nil, row.key .. " reset bandage binding")
+end
 Equal(db.profile.routingMode, "multiple", "current profile reset restores Multiple mode")
 Equal(db.profile.environmentModeSchema, 1, "current profile reset stamps the mode schema")
 Equal(db.profile.pvpAlertDefaultsSchema, 1, "current profile reset stamps the PvP alert schema")
@@ -826,14 +867,19 @@ ok, state = addon:SetEditingEnvironment("DUNGEON")
 Check(ok, "Dungeon editor can be selected after reset")
 ok, state = addon:ResetEditingPack()
 Check(ok, "environment reset succeeds")
+CheckCooldownDefaults(db.profile.environments.DUNGEON, "environment reset")
 Equal(db.profile.environments.DUNGEON.mufs.maxUnits, 5, "environment reset restores display cap five")
 CheckDefaultRange(db.profile.environments.DUNGEON.colors.range, "environment reset restores range default")
 CheckCanonicalCureColors(db.profile.environments.DUNGEON, "environment reset restores canonical palette")
 db.profile.environments.DUNGEON.mufs.maxUnits = 9
 local soloDispelBeforePvPCopy = db.profile.environments.SOLO.alerts.dispelEnabled
+db.profile.environments.DUNGEON.cure.bandageMode = "SELECTED"
+db.profile.environments.DUNGEON.cure.bandageItemID = 239711
 local soloSoundBeforePvPCopy = db.profile.environments.SOLO.alerts.sound
 ok, state = addon:CopyEditingPackTo("PVP")
 Check(ok, "environment copy succeeds")
+Equal(db.profile.environments.PVP.cure.bandageMode, "SELECTED", "environment copy retains bandage selection")
+Equal(db.profile.environments.PVP.cure.bandageItemID, 239711, "environment copy retains bandage item")
 Equal(db.profile.environments.PVP.mufs.maxUnits, 9, "environment copy preserves display cap")
 CheckDefaultRange(db.profile.environments.PVP.colors.range, "environment copy preserves range color")
 CheckCanonicalCureColors(db.profile.environments.PVP, "environment copy preserves canonical palette")
@@ -847,6 +893,9 @@ ok, state = addon:SetEditingEnvironment("PVP")
 Check(ok, "PvP editor can be selected after copy")
 ok, state = addon:ResetEditingPack()
 Check(ok, "PvP environment reset succeeds")
+CheckCooldownDefaults(db.profile.environments.PVP, "PvP environment reset")
+Equal(db.profile.environments.PVP.cure.bandageMode, "AUTO", "PvP reset restores automatic bandage selection")
+Equal(db.profile.environments.PVP.cure.bandageItemID, 0, "PvP reset clears pinned bandage")
 Equal(db.profile.environments.PVP.alerts.dispelEnabled, false, "PvP environment reset restores quiet landing text")
 Equal(db.profile.environments.PVP.alerts.sound, false, "PvP environment reset restores quiet sound")
 Equal(db.profile.environments.PVP.mufs.maxUnits, 40, "PvP environment reset restores battleground capacity")

@@ -74,7 +74,9 @@ C_Spell = {
   GetSpellName = function(id) return id == 475 and "Remove Curse" or "Soul Link" end,
 }
 C_Item = {
-  GetItemCount = function(id) return id == 269586 and soulCount or bandageCount end,
+  GetItemCount = function(id) if id == 248486 then return 0 end; return id == 269586 and soulCount or bandageCount end,
+  GetItemInfoInstant = function(id) return id, nil, nil, nil, nil, 0, 7 end,
+  GetItemInfo = function() return "Bandage", nil, 1, 10 end,
   GetItemSpell = function() return "Bandage", 212640 end,
   IsUsableItem = function() return true end,
 }

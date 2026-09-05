@@ -35,7 +35,7 @@ local function Read(path)
   local file = assert(io.open(path, "rb"))
   local text = file:read("*a")
   file:close()
-  return text
+  return text:gsub("\r\n", "\n")
 end
 
 local ns = {}

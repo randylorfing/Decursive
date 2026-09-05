@@ -7,11 +7,12 @@ on:
     branches:
       - zdecursive
     tags:
-      - 'v13.1.2-Alpha'
+      - 'v13.1.2'
   pull_request:
     branches:
       - zdecursive
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -25,16 +26,27 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify annotated release tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = v13.1.2
+          test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
+          test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{}")" = "$GITHUB_SHA"
 
       - name: Install pinned validation runtimes
         shell: bash
         run: |
           set -euo pipefail
           tools_dir="$RUNNER_TEMP/zdecursive-node"
-          npm install --no-save --ignore-scripts --prefix "$tools_dir" \
-            luaparse@0.3.1 \
-            fengari@0.1.5 \
-            fengari-interop@0.1.4
+          # luaparse@0.3.1, fengari@0.1.5, fengari-interop@0.1.4 and
+          # their transitive dependencies are integrity-locked in this tree.
+          mkdir -p "$tools_dir"
+          cp .github/validation/package.json .github/validation/package-lock.json "$tools_dir/"
+          npm ci --ignore-scripts --no-audit --no-fund --prefix "$tools_dir"
           echo "NODE_PATH=$tools_dir/node_modules" >> "$GITHUB_ENV"
 
       - name: Validate maintained source
@@ -54,6 +66,10 @@ jobs:
           for test_file in tests/*.lua; do
             node tests/run-fengari.cjs "$test_file"
           done
+
+      - name: Test release-note package boundaries
+        shell: bash
+        run: python3 .github/scripts/test-package-changelog.py
 
       - name: Run diagnostics exporter contract
         shell: pwsh

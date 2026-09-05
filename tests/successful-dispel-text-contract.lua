@@ -228,7 +228,7 @@ end
 local alertsSource = Read("ZDecursive/Alerts.lua")
 local mufsSource = Read("ZDecursive/MUFs.lua")
 local successStart = assert(alertsSource:find("function ns.NotifyCureSucceeded", 1, true))
-local successEnd = assert(alertsSource:find("local function SoulLinkSpellId", successStart, true))
+local successEnd = assert(alertsSource:find("local function ShowSoulLinkWarning", successStart, true))
 local successBody = alertsSource:sub(successStart, successEnd - 1)
 Check(not successBody:find("PrintLine", 1, true), "success callback has no chat route")
 Check(mufsSource:find('event == "UNIT_SPELLCAST_SUCCEEDED"', 1, true), "only confirmed cast success invokes the success route")

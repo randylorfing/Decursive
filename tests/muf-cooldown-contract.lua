@@ -139,6 +139,15 @@ Check(gate.keys["cooldown-main"], "successful native slot is registered")
 Equal(forbiddenChild.fontHeight, 14.4, "native child receives its final size during Blizzard initialization")
 Equal(#gate.bindings, 1, "native duration binding is retained")
 
+Equal(shade.color[4], 0.62, "custom overlay darkness is preserved")
+for _, settings in ipairs({{cooldownOpacity = 0}, {}}) do
+  local clearGate = {container = container, holder = {}, keys = {}, bindings = {}, innerSize = 16}
+  local clearPack = {alerts = settings, colors = pack.colors}
+  Check(ns.ConfigureMUFCooldownGateSlotForValidation(clearGate, "cooldown-clear", "HARMFUL|RAID_PLAYER_DISPELLABLE", {Magic = true}, clearPack, action), "transparent native slot initializes")
+  Equal(shade.color[4], 0, "zero or missing darkness does not tint the affliction")
+  Equal(#clearGate.bindings, 1, "transparent overlay retains its countdown binding")
+end
+
 local throwingContainer = {}
 function throwingContainer:AddAuraSlot()
   error("forbidden provider")
@@ -166,6 +175,7 @@ Check(not metricSource:find("GetText", 1, true), "countdown sizing never reads p
 Check(source:find("ResolveMUFCooldownPresentation(active, btn.skullNativeValue, btn.cooldownSuppressedBySkull)", 1, true), "larger countdown remains under the existing skull suppression gate")
 local toc = Read("ZDecursive/ZDecursive.toc")
 local packagedVersionToken = "@" .. "project-version" .. "@"
-Check(toc:find("## Version: " .. packagedVersionToken, 1, true), "release version remains owned by the packager token")
+local version = toc:match("## Version: ([^\r\n]+)")
+Check(version == packagedVersionToken or (version and version:match("^v%d+%.%d+%.%d+%-Alpha")), "TOC carries the packager token or a rendered alpha version")
 
 io.write("muf-cooldown-contract: ok\n")

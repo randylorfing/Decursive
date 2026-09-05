@@ -19,7 +19,6 @@ ignore:
     - .pkgmeta
     - .gitattributes
     - .editorconfig
-    - .cursor
     - .github
     - ".release-zdecursive-*"
     - docs
@@ -41,3 +40,7 @@ ignore:
 
 # Libs are committed. Do not add externals; that collides with move-folders.
 license-output: LICENSE.txt
+
+manual-changelog:
+    filename: .github/RELEASE_NOTES.md
+    markup-type: markdown

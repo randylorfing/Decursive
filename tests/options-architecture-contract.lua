@@ -23,7 +23,7 @@ local function Read(path)
   local file = assert(io.open(path, "rb"))
   local text = file:read("*a")
   file:close()
-  return text
+  return text:gsub("\r\n", "\n")
 end
 
 local function Check(value, message)
@@ -42,12 +42,13 @@ local required = {
   'local OPTIONS_DEFAULT_DESTINATION = "STATUS"',
   'local ENVIRONMENT_SUBMENU_ORDER = {"OPEN_WORLD", "DUNGEON", "MYTHIC_PLUS", "RAID", "PVP", "SOLO"}',
   'MakeButton(navigation, "Status"',
-  '"ENVIRONMENT PROFILES"',
+  'local OPTIONS_ARCHITECTURE_VERSION = 2',
+  '"ENVIRONMENT SETTINGS"',
   'MakeButton(navigation, "Decursive Profiles"',
   'MakeButton(navigation, "Diagnostics"',
   'MakeButton(card, "Run Health Check"',
   'OptionsAccessAllowed("DIAGNOSTICS_HEALTH")',
-  'SetDestination("environment", environment)',
+  'SetDestination("environment", row.key)',
   'local current = MakeCard(child, "Current setup")',
   'local capability = MakeCard(child, "Dispel capability")',
   'local mappings = MakeCard(child, "Click mappings")',
@@ -71,6 +72,8 @@ for i = 1, #required do
 end
 
 Check(options:find('assign = "Decursive Profiles"', 1, true), "Decursive Profiles terminology is distinct")
+Check(options:find('items = "Supplies"', 1, true), "support items have a dedicated editor category")
+Check(options:find('simpleModeAvailable = false', 1, true), "no global mode hides configuration controls")
 Check(options:find('row.searchSpec = spec', 1, true), "search results retain their environment destination")
 Check(options:find('ui.tab = spec.page', 1, true), "search results open the matching full settings page")
 Check(options:find('ui.profileBar:SetShown(destination == "addon_profiles")', 1, true), "profile lifecycle is isolated to Decursive Profiles")

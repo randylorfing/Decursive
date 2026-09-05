@@ -25,34 +25,34 @@ if ns.DiagnosticCheckpoint then
   ns.DiagnosticCheckpoint("module", "Options file start")
 end
 
-local GOLD = {0.32, 0.86, 0.82, 1}
-local GOLD_DIM = {0.32, 0.86, 0.82, 0.32}
-local TEXT = {0.88, 0.93, 0.96, 1}
-local MUTED = {0.50, 0.60, 0.66, 1}
-local BG = {0.045, 0.07, 0.095, 0.97}
-local HEADER = {0.07, 0.11, 0.15, 1}
-local CARD = {0.09, 0.13, 0.17, 1}
-local BORDER = {0.16, 0.34, 0.40, 0.85}
-local TAB_IDLE = {0.10, 0.14, 0.18, 1}
-local DANGER = {0.75, 0.28, 0.22, 1}
+local GOLD = {0.95, 0.72, 0.36, 1}
+local GOLD_DIM = {0.95, 0.72, 0.36, 0.22}
+local TEXT = {0.94, 0.93, 0.89, 1}
+local MUTED = {0.67, 0.70, 0.75, 1}
+local BG = {0.065, 0.075, 0.095, 1}
+local HEADER = {0.045, 0.052, 0.070, 1}
+local CARD = {0.090, 0.105, 0.130, 1}
+local BORDER = {0.22, 0.25, 0.30, 1}
+local TAB_IDLE = {0.13, 0.15, 0.185, 1}
+local DANGER = {0.90, 0.38, 0.36, 1}
 
 local ui = {
   tab = "mufs",
   destination = "status",
   frame = nil,
-  simple = true,
+  simple = false,
   collapsed = {},
 }
 
-local OPTIONS_ARCHITECTURE_VERSION = 1
+local OPTIONS_ARCHITECTURE_VERSION = 2
 local OPTIONS_DEFAULT_DESTINATION = "STATUS"
 local ENVIRONMENT_SUBMENU_ORDER = {"OPEN_WORLD", "DUNGEON", "MYTHIC_PLUS", "RAID", "PVP", "SOLO"}
 local QUICK_BINDING_COUNT = 6
 local SHORTCUT_ONLY_COUNT = 1
-local WORKSPACE_LEFT = 204
-local WORKSPACE_RIGHT = -20
-local WORKSPACE_TOP = -116
-local WORKSPACE_BOTTOM = 20
+local WORKSPACE_LEFT = 240
+local WORKSPACE_RIGHT = -26
+local WORKSPACE_TOP = -84
+local WORKSPACE_BOTTOM = 42
 local WORKSPACE_GAP = 8
 local PROFILE_BODY_GAP = 12
 local SIDEBAR_HEADING_WIDTH = 146
@@ -140,6 +140,41 @@ end
 
 ns.OptionsAccessAllowed = OptionsAccessAllowed
 
+local function CaptureOptionsContext()
+  local addon = Addon()
+  return {
+    addon = addon,
+    database = addon and addon.db,
+    profile = addon and addon.db and addon.db.profile,
+    profileName = addon and addon.GetCurrentProfileName and addon:GetCurrentProfileName(),
+    environment = addon and addon.GetEditingEnvironment and addon:GetEditingEnvironment(),
+    pack = addon and addon.GetEditingPack and addon:GetEditingPack(),
+  }
+end
+
+local function OptionsContextCurrent(context)
+  local current = CaptureOptionsContext()
+  return context and context.addon == current.addon
+    and context.database == current.database and context.profile == current.profile
+    and context.profileName == current.profileName and context.environment == current.environment
+    and context.pack == current.pack
+end
+
+local function CloseOptionsTransients()
+  local session = ui.colorPickerSession
+  ui.colorPickerSession = nil
+  if session and ColorPickerFrame and type(ColorPickerFrame.GetExtraInfo) == "function" then
+    local ok, owner = pcall(ColorPickerFrame.GetExtraInfo, ColorPickerFrame)
+    if ok and owner == session and type(ColorPickerFrame.Hide) == "function" then
+      ColorPickerFrame:Hide()
+    end
+  end
+  if ui.modal then
+    ui.modal.onAccept = nil
+    ui.modal:Hide()
+  end
+end
+
 local function ColorTex(tex, c, a)
   tex:SetColorTexture(c[1], c[2], c[3], a or c[4] or 1)
 end
@@ -164,6 +199,9 @@ end
 
 local function Font(parent, template, text, r, g, b)
   local fs = parent:CreateFontString(nil, "OVERLAY", template or "GameFontHighlight")
+  local size = template and template:find("Large", 1, true) and 20
+    or template and template:find("Small", 1, true) and 11 or 13
+  fs:SetFont("Fonts\\ARIALN.TTF", size, "")
   fs:SetText(text or "")
   if r then
     fs:SetTextColor(r, g, b)
@@ -176,11 +214,11 @@ end
 
 local function MakeButton(parent, label, width, kind)
   local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
-  btn:SetSize(width or 88, 28)
+  btn:SetSize(width or 88, 30)
   local fill = TAB_IDLE
   local border = BORDER
   if kind == "gold" then
-    fill = {0.07, 0.22, 0.22, 1}
+    fill = {0.23, 0.18, 0.11, 1}
     border = GOLD
   elseif kind == "danger" then
     fill = {0.18, 0.08, 0.07, 1}
@@ -189,6 +227,8 @@ local function MakeButton(parent, label, width, kind)
   Paint(btn, fill, border)
   local fs = Font(btn, "GameFontNormal", label)
   fs:SetPoint("CENTER")
+  fs:SetWidth((width or 88) - 16)
+  fs:SetWordWrap(false)
   if kind == "gold" then
     fs:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
   elseif kind == "danger" then
@@ -223,7 +263,7 @@ end
 
 local function MakeToggle(parent)
   local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
-  btn:SetSize(42, 22)
+  btn:SetSize(66, 24)
   btn:EnableMouse(true)
   btn:RegisterForClicks("LeftButtonUp")
   btn:SetFrameLevel((parent:GetFrameLevel() or 1) + 5)
@@ -233,19 +273,27 @@ local function MakeToggle(parent)
   knob:SetSize(16, 16)
   knob:SetPoint("LEFT", 3, 0)
   btn.knob = knob
+  btn.stateLabel = Font(btn, "GameFontNormalSmall", "Off")
+  btn.stateLabel:SetPoint("RIGHT", -7, 0)
   btn._on = false
   function btn:SetOn(on)
     self._on = not not on
     if self._on then
-      Paint(self, {0.07, 0.24, 0.24, 1}, GOLD)
+      Paint(self, {0.25, 0.19, 0.10, 1}, GOLD)
       self.knob:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
       self.knob:ClearAllPoints()
       self.knob:SetPoint("RIGHT", -3, 0)
+      self.stateLabel:ClearAllPoints()
+      self.stateLabel:SetPoint("LEFT", 7, 0)
+      self.stateLabel:SetText("On")
     else
       Paint(self, {0.18, 0.18, 0.2, 1}, {0.3, 0.3, 0.32, 1})
       self.knob:SetColorTexture(0.75, 0.75, 0.75, 1)
       self.knob:ClearAllPoints()
       self.knob:SetPoint("LEFT", 3, 0)
+      self.stateLabel:ClearAllPoints()
+      self.stateLabel:SetPoint("RIGHT", -7, 0)
+      self.stateLabel:SetText("Off")
     end
   end
   btn:SetScript("OnClick", function(self)
@@ -349,31 +397,72 @@ local function MakeColorSwatch(parent, hasOpacity)
     self:SetBackdropColor(c[1], c[2], c[3], alpha)
   end
   btn:SetScript("OnClick", function(self)
+    if not OptionsAccessAllowed("COLOR_PICKER") then
+      return
+    end
     local c = self._c or {1, 1, 1, 1}
     if not ColorPickerFrame or not ColorPickerFrame.SetupColorPickerAndShow then
       return
+    end
+    CloseOptionsTransients()
+    local context = CaptureOptionsContext()
+    local previous = {c[1], c[2], c[3], c[4] or 1}
+    local session = {initialized = false}
+    ui.colorPickerSession = session
+    local function CanApply()
+      if not session.initialized or ui.colorPickerSession ~= session or not OptionsContextCurrent(context)
+        or not OptionsAccessAllowed("COLOR_PICKER_APPLY") then
+        return false
+      end
+      if type(ColorPickerFrame.GetExtraInfo) == "function" then
+        local ok, owner = pcall(ColorPickerFrame.GetExtraInfo, ColorPickerFrame)
+        return ok and owner == session
+      end
+      return true
+    end
+    local function ApplyColor(color)
+      local current = self._c
+      if current and current[1] == color[1] and current[2] == color[2]
+        and current[3] == color[3] and current[4] == color[4] then
+        return
+      end
+      self:SetColor(color)
+      if self.OnValueChanged then
+        self:OnValueChanged(self._c)
+      end
+    end
+    local function ColorChanged()
+      if not CanApply() then
+        return
+      end
+      local r, g, b = ColorPickerFrame:GetColorRGB()
+      local a = 1
+      if alphaEnabled and ColorPickerFrame.GetColorAlpha then
+        a = ColorPickerFrame:GetColorAlpha()
+      end
+      ApplyColor({r, g, b, a})
     end
     local picker = {
       r = c[1],
       g = c[2],
       b = c[3],
       hasOpacity = alphaEnabled,
-      swatchFunc = function()
-        local r, g, b = ColorPickerFrame:GetColorRGB()
-        local a = 1
-        if alphaEnabled and ColorPickerFrame.GetColorAlpha then
-          a = ColorPickerFrame:GetColorAlpha()
+      extraInfo = session,
+      swatchFunc = ColorChanged,
+      opacityFunc = ColorChanged,
+      cancelFunc = function()
+        if CanApply() then
+          ApplyColor(previous)
         end
-        self:SetColor({r, g, b, a})
-        if self.OnValueChanged then
-          self:OnValueChanged(self._c)
-        end
+        if ui.colorPickerSession == session then ui.colorPickerSession = nil end
       end,
     }
     if alphaEnabled then
       picker.opacity = c[4] or 1
     end
+    -- Blizzard initializes RGB before OnShow initializes alpha; setup callbacks are not user edits.
     ColorPickerFrame:SetupColorPickerAndShow(picker)
+    session.initialized = true
   end)
   return btn
 end
@@ -571,6 +660,7 @@ local function MouseBindingChoices(button)
         DEFAULT = "Default (AUTO / MANUAL)", NONE = "No action",
         CURE1 = "First available cure", CURE2 = "Second available cure", CURE3 = "Third available cure",
         TARGET = "Target", FOCUS = "Focus", ASSIST = "Assist",
+        BANDAGE = "Selected bandage",
       }
       for _, action in ipairs(ManualClickActions()) do values[action.key] = action.name end
       local selected = GetMouseBinding(button)()
@@ -641,6 +731,170 @@ local function SetMouseBinding(button)
     end
     NotifyPack()
   end
+end
+
+local BANDAGE_STATUS_LABELS = {
+  READY = "Ready", OFF = "Off", NO_BANDAGES = "No carried bandages detected",
+  SELECTED_MISSING = "Selected bandage is not in your bags",
+  SELECTED_UNUSABLE = "Selected bandage is currently unusable",
+  UNKNOWN = "Item availability is unknown", LOADING = "Waiting for item data",
+  UNUSABLE = "Currently unusable",
+  DEFERRED_COMBAT = "Inventory update waits until combat ends",
+}
+
+local function BandageInventory()
+  if ns.GetBandageInventoryStatus then return ns.GetBandageInventoryStatus(Pack()) end
+  return {status = "UNKNOWN", items = {}}
+end
+
+local function GetBandageChoice()
+  local cure = Pack().cure
+  if cure.bandageMode == "OFF" then return "OFF" end
+  if cure.bandageMode == "SELECTED" then return "item:" .. tostring(cure.bandageItemID or 0) end
+  return "AUTO"
+end
+
+local function BandageItemLabel(item)
+  local name = item.name or ("Item " .. tostring(item.itemID))
+  if item.quality then name = name .. " - Quality " .. tostring(item.quality)
+  else name = name .. " [" .. tostring(item.itemID) .. "]" end
+  local label = name .. " (" .. tostring(item.count or "?") .. ")"
+  if item.itemLevel then label = label .. " - ilvl " .. tostring(item.itemLevel) end
+  if item.status and item.status ~= "READY" then
+    label = label .. " - " .. (BANDAGE_STATUS_LABELS[item.status] or "Unavailable")
+  end
+  return label
+end
+
+local function BandageSelectionLabel()
+  local selected = GetBandageChoice()
+  if selected == "AUTO" then return "Automatic (highest item level)" end
+  if selected == "OFF" then return "Off" end
+  for _, item in ipairs(BandageInventory().items or {}) do
+    if selected == "item:" .. tostring(item.itemID) then
+      return (item.name or ("Item " .. tostring(item.itemID)))
+        .. (item.quality and (" - Q" .. tostring(item.quality)) or (" [" .. tostring(item.itemID) .. "]"))
+    end
+  end
+  return "Item " .. tostring(Pack().cure.bandageItemID) .. " (not carried)"
+end
+
+local function BandageChoices()
+  local values = {AUTO = "Automatic (highest item level)", OFF = "Off"}
+  for _, item in ipairs(BandageInventory().items or {}) do
+    values["item:" .. tostring(item.itemID)] = BandageItemLabel(item)
+  end
+  local selected = GetBandageChoice()
+  if not values[selected] then values[selected] = "Selected item " .. tostring(Pack().cure.bandageItemID) .. " (not carried)" end
+  return values
+end
+
+local function SetBandageChoice(value)
+  if not OptionsAccessAllowed("BANDAGE_SELECTION") or not BandageChoices()[value] then return end
+  local cure = Pack().cure
+  if value == "AUTO" or value == "OFF" then
+    cure.bandageMode = value
+  else
+    local itemID = tonumber(value:match("^item:(%d+)$"))
+    if not itemID or itemID <= 0 then return end
+    cure.bandageMode, cure.bandageItemID = "SELECTED", itemID
+  end
+  NotifyPack()
+end
+
+local function RefreshBandages()
+  if not OptionsAccessAllowed("BANDAGE_REFRESH") then return end
+  local changed = ns.RefreshBandageInventory and ns.RefreshBandageInventory("OPTIONS_BANDAGES")
+  if changed then NotifyPack() end
+  if ns.RefreshOptions then ns.RefreshOptions() end
+end
+
+local function OpenBandageMenu(anchor)
+  if not OptionsAccessAllowed("BANDAGE_MENU") or not MenuUtil or not MenuUtil.CreateContextMenu then return false end
+  RefreshBandages()
+  local editingPack = Pack()
+  local inventory = BandageInventory()
+  local values, selected = BandageChoices(), GetBandageChoice()
+  MenuUtil.CreateContextMenu(anchor, function(_, root)
+    root:CreateTitle("Carried bandages")
+    local function AddChoice(key)
+      local entry = root:CreateRadio(values[key], function() return selected == key end, function()
+        if OptionsAccessAllowed("BANDAGE_MENU_SELECT") and Pack() == editingPack then
+          SetBandageChoice(key)
+          if ns.RefreshOptions then ns.RefreshOptions() end
+        end
+      end)
+      local itemID = tonumber(key:match("^item:(%d+)$"))
+      if itemID and entry and type(entry.SetTooltip) == "function" then
+        entry:SetTooltip(function(tooltip)
+          if not OptionsCombatReadOnly() and Pack() == editingPack and tooltip and type(tooltip.SetItemByID) == "function" then
+            tooltip:SetItemByID(itemID)
+          end
+        end)
+      end
+    end
+    AddChoice("AUTO")
+    AddChoice("OFF")
+    root:CreateDivider()
+    local foundSelected = selected == "AUTO" or selected == "OFF"
+    for _, item in ipairs(inventory.items or {}) do
+      local key = "item:" .. tostring(item.itemID)
+      AddChoice(key)
+      if selected == key then foundSelected = true end
+    end
+    if not foundSelected then AddChoice(selected) end
+    if #(inventory.items or {}) == 0 then root:CreateTitle(BANDAGE_STATUS_LABELS[inventory.status] or "No carried bandages detected") end
+  end)
+  return true
+end
+
+local function BandageStatusText()
+  local inventory = BandageInventory()
+  local text = BANDAGE_STATUS_LABELS[inventory.status] or "Item availability is unknown"
+  if inventory.selectedName then text = inventory.selectedName .. ": " .. text end
+  return tostring(#(inventory.items or {})) .. " detected - " .. text
+end
+
+local function BandageBindingText()
+  local bindings = {}
+  for _, gesture in ipairs(ns.ClickBindingGestures or {}) do
+    if ns.GetClickBindingOverride(Pack(), gesture.key) == "BANDAGE" then
+      local label = gesture.key:gsub("button5", "Button 5"):gsub("button4", "Button 4")
+        :gsub("left", "Left"):gsub("right", "Right"):gsub("middle", "Middle"):gsub("-", "+")
+      bindings[#bindings + 1] = label
+    end
+  end
+  if #bindings > 0 then return table.concat(bindings, ", ") end
+  return "Choose Selected bandage under Clicks, or assign Button 5 below"
+end
+
+local function AssignBandageButton5()
+  if not OptionsAccessAllowed("BANDAGE_BINDING") or not ns.SetClickBindingOverride then return end
+  if ns.SetClickBindingOverride(Pack(), "button5", "BANDAGE") then NotifyPack() end
+  if ns.RefreshOptions then ns.RefreshOptions() end
+end
+
+local function SetBandageReminderSetting(key)
+  return function(value)
+    if not OptionsAccessAllowed("BANDAGE_REMINDER") then return end
+    if key == "bandageLowStockEnabled" then value = value == true
+    else value = math.max(1, math.min(200, math.floor(tonumber(value) or 5))) end
+    Pack().cure[key] = value
+    NotifyPack()
+    if ns.RefreshBandageLowStockReminder then ns.RefreshBandageLowStockReminder() end
+    if ns.RefreshOptions then ns.RefreshOptions() end
+  end
+end
+
+local function BandageReminderStatusText()
+  if not ns.GetBandageLowStockStatus then return "Unavailable" end
+  local status = ns.GetBandageLowStockStatus(Pack())
+  if not status.enabled then return "Off - no stock reminders" end
+  if status.count == nil then
+    if status.status == "OFF" then return "Bandage use is off - no stock reminders" end
+    return BANDAGE_STATUS_LABELS[status.status] or "Waiting for a known selected bandage count"
+  end
+  return tostring(status.count) .. " carried / remind at " .. tostring(status.threshold) .. " or fewer"
 end
 
 local function SetKeyboardKey(raw)
@@ -887,19 +1141,31 @@ local function SetLinkedSpacing(key)
   end
 end
 
-local EDITOR_PAGES = {"mufs", "sorting", "cure", "color", "alerts", "advanced"}
-local PAGES = {"mufs", "sorting", "cure", "color", "alerts", "advanced", "assign"}
+local EDITOR_PAGES = {"mufs", "sorting", "cure", "color", "alerts", "items", "advanced"}
+local PAGES = {"mufs", "sorting", "cure", "color", "alerts", "items", "advanced", "assign"}
 local PAGE_LABELS = {
-  mufs = "MUFs",
-  sorting = "Sorting",
-  cure = "Cure",
-  color = "Color",
+  mufs = "Frames",
+  sorting = "Roster",
+  cure = "Actions",
+  color = "Colors",
   alerts = "Alerts",
+  items = "Supplies",
   advanced = "Advanced",
   assign = "Decursive Profiles",
 }
 
+local PAGE_SUMMARIES = {
+  mufs = "Preview your unit frames, then set their size and layout.",
+  sorting = "Choose who appears, how they are ordered, and your priority lists.",
+  cure = "Set detection rules and assign mouse, modifier, and keyboard actions.",
+  color = "Tune affliction colors, healthy frames, and range feedback.",
+  alerts = "Control text, sound, and cooldown feedback in one place.",
+  items = "Choose carried bandages, assign an action, and manage stock reminders.",
+  advanced = "Troubleshooting and optional custom behavior.",
+}
+
 local ORDER_LABELS = {
+  AUTO = "Automatic (prefer DandersFrames)",
   GROUP = "Group / roster",
   PRIORITY = "Decursive priority",
   DANDERSFRAMES = "DandersFrames",
@@ -931,6 +1197,14 @@ local SOUND_LABELS = {
 }
 
 local CATALOG = {
+  {page = "items", label = "Low-stock reminder", description = "Reminds you outside combat when selected bandages run low, with one extra notice if they run out. Turn off to dismiss the reminder and stop future stock notices for this environment. Dispel and Soul Link alerts are independent.", kind = "toggle", get = PathGet("cure", "bandageLowStockEnabled"), set = SetBandageReminderSetting("bandageLowStockEnabled")},
+  {page = "items", label = "Low-stock threshold", description = "Reminds you when the chosen bandage count is at or below this number. The reminder is optional and never changes your selected bandage, casts an item, or appears during combat.", kind = "slider", min = 1, max = 200, step = 1, get = PathGet("cure", "bandageLowStockThreshold"), set = SetBandageReminderSetting("bandageLowStockThreshold")},
+  {page = "items", label = "Stock reminder status", description = "Shows reminder settings and the selected bandage's known carried stock for the editing environment. Reminders use only the applied environment; unavailable item data does not trigger a low-stock warning.", kind = "readout", get = BandageReminderStatusText},
+  {page = "cure", label = "Bandage selection", description = "Lists all carried items Blizzard classifies as bandages, including tailoring ranks and older bandages. Automatic selects a usable bandage by highest item level, then item ID; this is not a healing-strength estimate. A specific choice never switches to another item when empty. Configure separately for each environment.", kind = "choice", width = 300, values = BandageChoices, get = GetBandageChoice, set = SetBandageChoice, menu = OpenBandageMenu, display = BandageSelectionLabel},
+  {page = "cure", label = "Bandage status", description = "Shows the detected carried bandage count and selected item's current availability. Bank, reagent-bank and account-bank stock is excluded. Loading or restricted data is reported as unknown. Blizzard decides target eligibility, cooldowns and PvP restrictions when you click.", kind = "readout", get = BandageStatusText},
+  {page = "cure", label = "Bandage click", description = "Lists explicit Selected bandage mouse bindings in this environment. Set any button and modifier under Clicks. Changing the selected item does not replace another click assignment. Item selection and protected binding updates wait until combat ends.", kind = "readout", get = BandageBindingText},
+  {page = "cure", label = "Assign bandage to Button 5", description = "Replaces this environment's unmodified Button 5 action with Selected bandage. Use Clicks to choose another button or modifier, or restore Default. Bandages are used only by your click on a living friendly MUF; the addon never uses one automatically.", kind = "button", width = 160, buttonLabel = "Use Button 5", run = AssignBandageButton5},
+  {page = "cure", label = "Refresh bandages", description = "Rescans carried bags and requests missing item data while out of combat. Bag and item-data events also refresh the inventory. During combat the installed item action remains stable until it can be safely updated.", kind = "button", buttonLabel = "Refresh", run = RefreshBandages},
   {page = "mufs", label = "Show MUFs", kind = "toggle", get = PathGet("mufs", "show"), set = PathSet("mufs", "show")},
   {page = "mufs", label = "Lock position", kind = "toggle", get = PathGet("mufs", "locked"), set = PathSet("mufs", "locked")},
   {page = "mufs", label = "MUF hover tooltip", kind = "toggle", get = PathGet("mufs", "tooltip"), set = PathSet("mufs", "tooltip")},
@@ -972,6 +1246,7 @@ local CATALOG = {
 
   {page = "alerts", label = "Dispel text alert", description = "Shows red 'DISPEL' when Blizzard's provider reports a dispellable aura landing. This is an opportunity alert, not confirmation of a cure.", kind = "toggle", get = PathGet("alerts", "dispelEnabled"), set = PathSet("alerts", "dispelEnabled")},
   {page = "alerts", label = "Show successful dispel text", description = "Shows 'Dispelled' on screen after ZDecursive confirms a successful cure. This is independent of the landing DISPEL and Soul Link alerts and never writes to chat.", kind = "toggle", get = PathGet("alerts", "successfulDispelText"), set = PathSet("alerts", "successfulDispelText")},
+  {page = "alerts", label = "Out-of-range dispel warning", description = "Shows 'OUT OF RANGE' after you attempt a dispel that is confirmed outside that spell's range. Text alerts must be enabled. Uses the alert text size, color, position and duration; Dispel sound and Cure-failure sound control its audio. Applies to this environment.", kind = "toggle", get = PathGet("alerts", "outOfRangeDispel"), set = PathSet("alerts", "outOfRangeDispel")},
   {page = "alerts", label = "Display mode", kind = "choice", values = {TIMED = "Timed", UNTIL_CLEARED = "Until cleared"}, get = PathGet("alerts", "dispelMode"), set = PathSet("alerts", "dispelMode")},
   {page = "alerts", label = "Display duration", kind = "slider", min = 0.5, max = 30, step = 0.5, get = PathGet("alerts", "dispelDuration"), set = PathSet("alerts", "dispelDuration")},
   {page = "alerts", label = "Text size", kind = "slider", min = 12, max = 96, step = 1, get = PathGet("alerts", "dispelFontSize"), set = PathSet("alerts", "dispelFontSize")},
@@ -1005,8 +1280,8 @@ local CATALOG = {
   {page = "mufs", label = "Center unit name", kind = "toggle", get = PathGet("mufs", "centerText"), set = PathSet("mufs", "centerText")},
   {page = "mufs", label = "Show stealth status", kind = "toggle", get = PathGet("mufs", "stealthStatus"), set = PathSet("mufs", "stealthStatus")},
   {page = "mufs", label = "MUF scale", kind = "slider", min = 0.5, max = 2, step = 0.05, get = PathGet("mufs", "scale"), set = PathSet("mufs", "scale")},
-  {page = "mufs", label = "Dim out of range", kind = "toggle", get = PathGet("mufs", "dimOutOfRange"), set = PathSet("mufs", "dimOutOfRange")},
-  {page = "mufs", label = "Out-of-range dim", kind = "slider", min = 0, max = 1, step = 0.05, get = PathGet("mufs", "dimAmount"), set = PathSet("mufs", "dimAmount")},
+  {page = "mufs", label = "Dim out-of-range MUFs", kind = "toggle", get = PathGet("mufs", "dimOutOfRange"), set = PathSet("mufs", "dimOutOfRange")},
+  {page = "mufs", label = "Out-of-range brightness", kind = "slider", min = 0, max = 1, step = 0.05, get = PathGet("mufs", "dimAmount"), set = PathSet("mufs", "dimAmount")},
   {page = "mufs", label = "Share cooldown with same-priority MUFs", kind = "toggle", get = PathGet("mufs", "shareCooldown"), set = PathSet("mufs", "shareCooldown")},
   {page = "mufs", label = "Clear cleansed target immediately", kind = "toggle", get = PathGet("mufs", "clearCleansedImmediately"), set = PathSet("mufs", "clearCleansedImmediately")},
   {page = "mufs", label = "Soul Link fallback", kind = "toggle", get = PathGet("mufs", "soulLinkFallback"), set = PathSet("mufs", "soulLinkFallback")},
@@ -1032,7 +1307,7 @@ local CATALOG = {
   {page = "cure", label = "Active keyboard binding", description = "Reports the applied environment's keyboard bindings. Changes to another editing environment take effect when that environment is applied.", kind = "readout", get = KeyboardStatusText},
 
   {page = "color", label = "Dead / ghost / offline", kind = "color", get = PathGet("colors", "dead"), set = PathSet("colors", "dead")},
-  {page = "color", label = "Out of range", description = "RGB color only. Out-of-range dim controls brightness exactly once.", kind = "color", hasOpacity = false, get = PathGet("colors", "range"), set = PathSet("colors", "range")},
+  {page = "color", label = "Out of range", description = "Underlying RGB color for unafflicted out-of-range squares. Out-of-range brightness dims the whole MUF once, including affliction colors, icons and countdown numbers.", kind = "color", hasOpacity = false, get = PathGet("colors", "range"), set = PathSet("colors", "range")},
   {page = "color", label = "Stealth", kind = "color", get = PathGet("colors", "stealth"), set = PathSet("colors", "stealth")},
 
   {page = "alerts", label = "Show in copyable diagnostics", kind = "toggle", get = PathGet("alerts", "printChat"), set = PathSet("alerts", "printChat")},
@@ -1059,8 +1334,8 @@ local OPTION_HELP = {
   ["Lock position"] = "Prevents moving the MUF group by dragging its handle. Unlock to reposition it outside combat.",
   ["MUF hover tooltip"] = "Requests the native aura tooltip on afflicted squares. Availability depends on native slot mouse-motion support; this does not change cure bindings.",
   ["Status indicator light"] = "Shows the MUF group's small status light to help identify its current operating state.",
-  ["Party MUF size"] = "Sets the width and height of each unit square in a party, before MUF scale is applied.",
-  ["Raid MUF size"] = "Sets the width and height of each unit square in a raid, before MUF scale is applied.",
+  ["Party MUF size"] = "Sets player-square width and height in a party, before MUF scale is applied. Pet squares automatically use 80% of this size; there is no separate pet-size setting.",
+  ["Raid MUF size"] = "Sets player-square width and height in a raid, before MUF scale is applied. Pet squares automatically use 80% of this size; there is no separate pet-size setting.",
   ["Link horizontal and vertical spacing"] = "Keeps both spacing values equal. Changing either spacing control updates the other while linked.",
   ["Horizontal spacing"] = "Sets the gap between neighboring MUF columns. Linked spacing also changes the vertical gap.",
   ["Vertical spacing"] = "Sets the gap between neighboring MUF rows. Linked spacing also changes the horizontal gap.",
@@ -1069,7 +1344,7 @@ local OPTION_HELP = {
   ["Units per line"] = "Sets how many unit squares fit before wrapping to the next row or column, according to orientation.",
   ["Show MUF border"] = "Displays borders around the unit squares. Border opacity is configured on the Color page.",
   ["Inactive opacity"] = "Sets the opacity used for inactive MUF presentation. Lower values make it more transparent.",
-  ["MUF order"] = "Chooses the ordering rule for displayed group members. Roster changes are applied outside combat.",
+  ["MUF order"] = "Automatic follows DandersFrames when it is ready, otherwise Group order. Choosing Group, Decursive priority, or DandersFrames keeps that choice for this environment. Roster changes wait until combat ends.",
   ["Include player"] = "Includes your own character among the displayed unit squares.",
   ["Include pets"] = "Includes eligible pets with their owners in the MUF roster. Cure pets separately controls pet curing.",
   ["Center on player"] = "Uses the player-centered sorting option when arranging the MUF roster.",
@@ -1081,13 +1356,13 @@ local OPTION_HELP = {
   ["Healthy center opacity"] = "Sets how opaque the center of a healthy square is. Zero is transparent; one is fully opaque.",
   ["Class border opacity"] = "Sets the opacity of class-colored MUF borders. Zero is transparent; one is fully opaque.",
   ["Display mode"] = "Timed hides the landing DISPEL text after its duration. Until cleared lets the native aura provider control how long it remains visible.",
-  ["Display duration"] = "Sets how many seconds a timed landing DISPEL alert stays visible. Until cleared uses native aura visibility instead.",
-  ["Text size"] = "Sets the font size of the landing DISPEL alert. Use Test Text to preview it.",
-  ["Text color"] = "Sets the landing DISPEL alert color. Use Test Text to preview the editing environment.",
+  ["Display duration"] = "Sets how many seconds timed landing DISPEL, successful-dispel and out-of-range dispel text stay visible. Until cleared applies only to native landing alerts.",
+  ["Text size"] = "Sets the font size used by dispel and range alerts. Use Test Text to preview it.",
+  ["Text color"] = "Sets the color used by dispel and range alerts. Use Test Text to preview the editing environment.",
   ["PvP text"] = "Controls PvP-specific text alert behavior. Landing DISPEL and successful-cure text have their own switches.",
-  ["Text alerts"] = "Enables general text alerts, including the landing DISPEL alert. Individual alert switches also determine which messages appear.",
+  ["Text alerts"] = "Enables landing DISPEL and out-of-range dispel text. Each also requires its own switch. Successful-dispel and Soul Link text use their separate switches; sounds are controlled below.",
   ["Chat status messages"] = "Enables ordinary status messages for the configured diagnostic/custom-window output routes. Error messages have a separate switch.",
-  ["Dispel sound"] = "Enables sounds for dispel opportunities. Choose the sound and playback channel below.",
+  ["Dispel sound"] = "Enables sounds for dispel opportunities and supported cure failures, including out-of-range attempts. Failure audio also requires Cure-failure sound. Choose the sound and playback channel below.",
   ["Sound"] = "Selects the sound preset used for dispel alerts. Test Sound previews the current selection.",
   ["Sound channel"] = "Selects the WoW audio channel used for alert playback. That channel's volume and mute settings affect what you hear.",
   ["Cure-failure sound"] = "Plays an error sound when a cure attempt reports a supported failure.",
@@ -1101,9 +1376,9 @@ local OPTION_HELP = {
   ["Show help text"] = "Displays MUF help text near the group. This does not control the settings descriptions shown on hover.",
   ["Center unit name"] = "Displays the unit's name in the center of its MUF when that information is available.",
   ["Show stealth status"] = "Shows supported stealth-state feedback on MUFs when the client exposes that state.",
-  ["MUF scale"] = "Scales the whole MUF group. One is normal size; larger values enlarge it.",
-  ["Dim out of range"] = "Dims unit squares when range information reports that they are outside cure range.",
-  ["Out-of-range dim"] = "Sets the brightness used for out-of-range squares. Lower values make them darker.",
+  ["MUF scale"] = "Scales the whole MUF group, including pets. One is normal size; larger values enlarge it. Pet squares retain 80% of the configured player-square size.",
+  ["Dim out-of-range MUFs"] = "Dims every MUF confirmed outside cure range, whether afflicted or unafflicted. The whole square dims together, including cooldown overlays, icons and countdown numbers. Default brightness is 50%. Unknown range keeps normal brightness.",
+  ["Out-of-range brightness"] = "Sets brightness for the whole out-of-range MUF, including cooldown overlays, icons and countdown numbers. The default is 50%; lower values make it darker. Applied once to afflicted and unafflicted squares. Unknown range keeps normal brightness.",
   ["Share cooldown with same-priority MUFs"] = "Shows the cure cooldown across MUFs using that same cure priority, rather than only the clicked square.",
   ["Clear cleansed target immediately"] = "Omits cooldown shading on the square you just cured. Other same-priority squares can still show it. Native aura updates decide whether an affliction remains.",
   ["Soul Link fallback"] = "Allows the supported Soul Link fallback in the generated click action when applicable to your character.",
@@ -1144,6 +1419,14 @@ for _, spec in ipairs(CATALOG) do
 end
 
 local ROW_META = {
+  ["items|Low-stock reminder"] = {group = "Stock reminders", simple = true},
+  ["items|Low-stock threshold"] = {group = "Stock reminders", simple = true},
+  ["items|Stock reminder status"] = {group = "Stock reminders", simple = true},
+  ["cure|Bandage selection"] = {group = "Bandages", simple = true},
+  ["cure|Bandage status"] = {group = "Bandages", simple = true},
+  ["cure|Bandage click"] = {group = "Bandages", simple = true},
+  ["cure|Assign bandage to Button 5"] = {group = "Bandages", simple = true},
+  ["cure|Refresh bandages"] = {group = "Bandages", simple = true},
   ["mufs|Show MUFs"] = {group = "Display", simple = true},
   ["mufs|Lock position"] = {group = "Display", simple = true},
   ["mufs|MUF hover tooltip"] = {group = "Display", simple = true},
@@ -1166,8 +1449,8 @@ local ROW_META = {
   ["mufs|Center unit name"] = {group = "Look"},
   ["mufs|Show stealth status"] = {group = "Look"},
   ["mufs|Status indicator light"] = {group = "Status"},
-  ["mufs|Dim out of range"] = {group = "Status"},
-  ["mufs|Out-of-range dim"] = {group = "Status"},
+  ["mufs|Dim out-of-range MUFs"] = {group = "Status"},
+  ["mufs|Out-of-range brightness"] = {group = "Status"},
   ["mufs|Share cooldown with same-priority MUFs"] = {group = "Status"},
   ["mufs|Clear cleansed target immediately"] = {group = "Status"},
   ["mufs|Soul Link fallback"] = {group = "Status"},
@@ -1178,7 +1461,7 @@ local ROW_META = {
   ["sorting|Center on player"] = {group = "Roster"},
   ["sorting|Skip dead and offline"] = {group = "Roster"},
   ["cure|Click mode"] = {group = "Clicks", simple = true},
-  ["cure|Detection filter"] = {group = "Clicks", simple = true},
+  ["cure|Detection filter"] = {group = "Types", simple = true},
   ["cure|Mouse modifier"] = {group = "Clicks", simple = true},
   ["cure|Keyboard mouseover casting"] = {group = "Keyboard", simple = true},
   ["cure|Keyboard key"] = {group = "Keyboard", simple = true},
@@ -1195,6 +1478,7 @@ local ROW_META = {
   ["cure|Disease"] = {group = "Types", simple = true},
   ["cure|Cure pets"] = {group = "Rules"},
   ["cure|Add custom dispel spell"] = {group = "Custom", simple = true},
+  ["cure|Custom spell type"] = {group = "Custom", simple = true},
   ["cure|Remove custom dispel spell"] = {group = "Custom", simple = true},
   ["color|Magic"] = {group = "Afflictions", simple = true},
   ["color|Curse"] = {group = "Afflictions", simple = true},
@@ -1210,6 +1494,7 @@ local ROW_META = {
   ["alerts|Dispel text alert"] = {group = "Text Alerts", simple = true},
   ["alerts|Soul Link battle-rez warning"] = {group = "Text Alerts", simple = true},
   ["alerts|Show successful dispel text"] = {group = "Text Alerts", simple = true},
+  ["alerts|Out-of-range dispel warning"] = {group = "Text Alerts", simple = true},
   ["alerts|Display mode"] = {group = "Text Alerts"},
   ["alerts|Display duration"] = {group = "Text Alerts"},
   ["alerts|Text size"] = {group = "Text Alerts"},
@@ -1247,10 +1532,27 @@ local ROW_META = {
 local GROUP_ORDER = {
   mufs = {"Display", "Size", "Spacing", "Layout", "Look", "Status"},
   sorting = {"Roster"},
-  cure = {"Types", "Clicks", "Keyboard", "Rules", "Custom"},
-  color = {"Afflictions", "Squares"},
+  cure = {"Types", "Clicks", "Bandages", "Keyboard", "Rules", "Custom"},
+  color = {"Afflictions", "Squares", "Range"},
   alerts = {"Text Alerts", "Sound", "Cooldown", "Chat", "Live list"},
   advanced = {"Diagnostics", "Engine"},
+  items = {"Bandages", "Stock reminders", "Resurrection"},
+}
+
+local OPTION_PLACEMENT = {
+  ["Bandage selection"] = {page = "items", group = "Bandages"},
+  ["Bandage status"] = {page = "items", group = "Bandages"},
+  ["Bandage click"] = {page = "items", group = "Bandages"},
+  ["Assign bandage to Button 5"] = {page = "items", group = "Bandages"},
+  ["Refresh bandages"] = {page = "items", group = "Bandages"},
+  ["Soul Link fallback"] = {page = "items", group = "Resurrection"},
+  ["Share cooldown with same-priority MUFs"] = {page = "alerts", group = "Cooldown"},
+  ["Clear cleansed target immediately"] = {page = "alerts", group = "Cooldown"},
+  ["Dim out-of-range MUFs"] = {page = "color", group = "Range"},
+  ["Out-of-range brightness"] = {page = "color", group = "Range"},
+  ["Out-of-range status"] = {page = "color", group = "Range"},
+  ["Out of range"] = {page = "color", group = "Range"},
+  ["Maximum displayed MUFs"] = {page = "sorting", group = "Roster"},
 }
 
 for _, spec in ipairs(CATALOG) do
@@ -1262,6 +1564,8 @@ for _, spec in ipairs(CATALOG) do
   else
     spec.group = spec.group or "More"
   end
+  local placement = OPTION_PLACEMENT[spec.label]
+  if placement then spec.page, spec.group = placement.page, placement.group end
 end
 
 local function EnsureCatalogRenderReachability()
@@ -1297,6 +1601,8 @@ local function ShowModal(title, defaultText, onAccept)
     return false
   end
   local f = ui.modal
+  CloseOptionsTransients()
+  local context = CaptureOptionsContext()
   f.title:SetText(title)
   f.edit:SetText(defaultText or "")
   f.edit:HighlightText()
@@ -1308,11 +1614,14 @@ local function ShowModal(title, defaultText, onAccept)
   if f.ok then
     f.ok:SetText("Save")
   end
-  f.onAccept = function(value)
-    if OptionsAccessAllowed("PROFILE_MODAL_ACCEPT") then
+  local accept
+  accept = function(value)
+    if f.onAccept == accept and OptionsContextCurrent(context) and OptionsAccessAllowed("PROFILE_MODAL_ACCEPT") then
+      f.onAccept = nil
       onAccept(value)
     end
   end
+  f.onAccept = accept
   f.confirmOnly = false
   f:Show()
   f.edit:SetFocus()
@@ -1324,6 +1633,8 @@ local function ShowConfirm(title, hint, onAccept)
     return false
   end
   local f = ui.modal
+  CloseOptionsTransients()
+  local context = CaptureOptionsContext()
   f.title:SetText(title)
   f.edit:SetText("")
   f.edit:Hide()
@@ -1334,17 +1645,21 @@ local function ShowConfirm(title, hint, onAccept)
   if f.ok then
     f.ok:SetText("Reset")
   end
-  f.onAccept = function()
-    if OptionsAccessAllowed("PROFILE_CONFIRM_ACCEPT") then
+  local accept
+  accept = function()
+    if f.onAccept == accept and OptionsContextCurrent(context) and OptionsAccessAllowed("PROFILE_CONFIRM_ACCEPT") then
+      f.onAccept = nil
       onAccept()
     end
   end
+  f.onAccept = accept
   f.confirmOnly = true
   f:Show()
   return true
 end
 
 local function HideModal()
+  ui.modal.onAccept = nil
   ui.modal:Hide()
 end
 
@@ -1358,9 +1673,16 @@ local function OpenChoiceMenu(anchor, values, get, set)
   local editingPack = Pack()
   local modifierAtOpen = editingModifier
   values = type(values) == "function" and values() or values
+  local ordered = {}
+  for key, label in pairs(values) do ordered[#ordered + 1] = {key = key, label = label} end
+  table.sort(ordered, function(a, b)
+    if a.label == b.label then return tostring(a.key) < tostring(b.key) end
+    return a.label < b.label
+  end)
   MenuUtil.CreateContextMenu(anchor, function(_, root)
     local current = get()
-    for key, label in pairs(values) do
+    for _, entry in ipairs(ordered) do
+      local key, label = entry.key, entry.label
       root:CreateRadio(label, function()
         return current == key
       end, function()
@@ -1374,19 +1696,22 @@ local function OpenChoiceMenu(anchor, values, get, set)
   return true
 end
 
-local function OpenProfileMenu(anchor, onPick, includeInherit)
+local function OpenProfileMenu(anchor, onPick, includeInherit, getCurrent)
   if not OptionsAccessAllowed("PROFILE_MENU") then
     return false
   end
   if not MenuUtil or not MenuUtil.CreateContextMenu then
     return false
   end
+  local context = CaptureOptionsContext()
   MenuUtil.CreateContextMenu(anchor, function(_, root)
     local status = Addon():GetUIProfileStatus()
     local actual = status and status.available and status.actualProfile or nil
+    local selected = actual
+    if getCurrent then selected = getCurrent() end
     if includeInherit then
-      root:CreateButton("Use account / Default", function()
-        if OptionsAccessAllowed("PROFILE_NAVIGATION") then
+      root:CreateRadio("Use account / Default", function() return selected == nil end, function()
+        if OptionsContextCurrent(context) and OptionsAccessAllowed("PROFILE_NAVIGATION") then
           onPick(nil)
         end
       end)
@@ -1394,9 +1719,9 @@ local function OpenProfileMenu(anchor, onPick, includeInherit)
     end
     for _, name in ipairs(Addon():GetProfileNames()) do
       root:CreateRadio(name, function()
-        return actual == name
+        return selected == name
       end, function()
-        if OptionsAccessAllowed("PROFILE_NAVIGATION") then
+        if OptionsContextCurrent(context) and OptionsAccessAllowed("PROFILE_NAVIGATION") then
           onPick(name)
         end
       end)
@@ -1416,12 +1741,13 @@ local function OpenEnvCopyMenu(anchor)
     return false
   end
   local src = Addon():GetEditingEnvironment()
+  local context = CaptureOptionsContext()
   MenuUtil.CreateContextMenu(anchor, function(_, root)
     root:CreateTitle("Copy " .. (ns.ENV_LABELS[src] or src) .. " to")
     for _, row in ipairs(ns.MULTIPLE_ENVIRONMENTS) do
       if row.key ~= src then
         root:CreateButton(row.label, function()
-          if OptionsAccessAllowed("ENVIRONMENT_COPY_SELECT") then
+          if OptionsContextCurrent(context) and OptionsAccessAllowed("ENVIRONMENT_COPY_SELECT") then
             local ok, state = Addon():CopyEditingPackTo(row.key)
             ReportProfileAction(ok, state, "Environment copied.")
           end
@@ -1443,34 +1769,12 @@ end
 
 local function RowVisible(spec)
   local env = Addon():GetEditingEnvironment()
-  if spec.hideEnv and spec.hideEnv[env] then
-    return false
-  end
-  if spec.manualBinding and (ns.ClickBindingModifiers or Pack().cure.mode == "MANUAL") then
-    return true
-  end
-  local searching = ui.search and ui.search ~= ""
-  if searching then
-    return true
-  end
-  if ui.simple and not spec.simple and PAGE_HAS_SIMPLE[spec.page] then
-    return false
-  end
-  return true
+  return not (spec.hideEnv and spec.hideEnv[env])
 end
 
 local function IsCollapsed(page, group)
-  if ui.simple then
-    return false
-  end
   local pageMap = ui.collapsed[page]
-  if not pageMap then
-    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Text Alerts" and group ~= "Clicks" and group ~= "Live list"
-  end
-  if pageMap[group] == nil then
-    return group ~= "Display" and group ~= "Size" and group ~= "Types" and group ~= "Roster" and group ~= "Afflictions" and group ~= "Text Alerts" and group ~= "Clicks" and group ~= "Live list"
-  end
-  return pageMap[group]
+  return pageMap and pageMap[group] == true or false
 end
 
 
@@ -1490,6 +1794,7 @@ local PREVIEW_STATES = {
   {key = "healthy"},
 }
 local LayoutCatalog
+local LayoutScrollChildren
 
 local function PreviewSize(pack, env)
   if env == "RAID" then
@@ -1846,7 +2151,7 @@ LayoutCatalog = function()
         local collapsed = IsCollapsed(page, section.group)
         local mark = collapsed and "+" or "-"
         section.header.label:SetText(mark .. "  " .. section.group)
-        y = y - 32
+        y = y - 44
         if collapsed then
           for _, item in ipairs(visibleRows) do
             item.row:Hide()
@@ -1855,11 +2160,13 @@ LayoutCatalog = function()
           for _, item in ipairs(visibleRows) do
             item.row:Show()
             item.row:ClearAllPoints()
-            item.row:SetPoint("TOPLEFT", 12, y)
-            item.row:SetPoint("TOPRIGHT", -12, y)
-            y = y - 40
+            item.row:SetPoint("TOPLEFT", 0, y)
+            item.row:SetPoint("TOPRIGHT", 0, y)
+            item.offset = -y
+            y = y - item.row:GetHeight()
           end
         end
+        y = y - 16
       end
     end
     if page == "sorting" and ui.listsHost then
@@ -1871,30 +2178,11 @@ LayoutCatalog = function()
       y = y - 236
       RefreshListPanel()
     end
-    local hint = ui.pageHints and ui.pageHints[page]
-    if hint then
-      if ui.simple then
-        hint:ClearAllPoints()
-        hint:SetPoint("TOPLEFT", 16, y - 8)
-        hint:SetPoint("TOPRIGHT", -16, y - 8)
-        hint:SetText("Click Simple (top right) to show all options for this environment.")
-        hint:Show()
-        y = y - 28
-      else
-        hint:Hide()
-      end
-    end
-    if child then
+    if child and page ~= "assign" then
       child:SetHeight(math.max(80, -y + 16))
     end
   end
-  if ui.simpleBtn then
-    if ui.simple then
-      ui.simpleBtn:SetText("Simple")
-    else
-      ui.simpleBtn:SetText("All")
-    end
-  end
+  if LayoutScrollChildren then LayoutScrollChildren() end
   ui.layoutCatalogActive = false
 end
 
@@ -1906,8 +2194,14 @@ local function Refresh()
     return false
   end
   if not ui.frame then
+    ui.needsRefresh = true
     return false
   end
+  if not ui.frame:IsShown() then
+    ui.needsRefresh = true
+    return false
+  end
+  ui.needsRefresh = false
   local addon = Addon()
   local statusOK, profileStatus = pcall(addon.GetUIProfileStatus, addon)
   local environmentOK, environmentStatus = pcall(addon.GetEnvironmentProfileStatus, addon)
@@ -1947,7 +2241,7 @@ local function Refresh()
   ui.profileValue:SetText(profile)
   ui.resolved:SetText("Active profile: " .. profile)
   ui.resolved:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
-  ui.envHint:SetText("Editing " .. (ns.ENV_LABELS[env] or env) .. " inside " .. profile)
+  ui.envHint:SetText("Saved automatically / Editing " .. (ns.ENV_LABELS[env] or env))
   if ui.environmentApplied then
     ui.environmentApplied:SetText("Applied: " .. appliedLabel)
     ui.environmentEditing:SetText("Editing: " .. editingLabel)
@@ -1973,53 +2267,10 @@ local function Refresh()
     RefreshStatusPage(profileStatus, environmentStatus)
   end
 
-  local chipX = 0
-  for _, row in ipairs(ns.ENVIRONMENTS) do
-    local key = row.key
-    local chip = ui.envChips[key]
-    local visible = (environmentMode == "solo" and key == "SOLO")
-      or (environmentMode == "multiple" and ns.MULTIPLE_ENV_SET[key] == true)
-    chip:SetShown(visible)
-    chip:ClearAllPoints()
-    if visible then
-      chip:SetPoint("TOPLEFT", chipX, -24)
-      chipX = chipX + 126
-    end
-    chip:SetText(ns.ENV_LABELS[key] or key)
-    if key == env then
-      Paint(chip, {0.07, 0.22, 0.24, 1}, GOLD)
-      chip.label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-    else
-      Paint(chip, TAB_IDLE, {0.25, 0.25, 0.28, 1})
-      chip.label:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
-    end
-  end
-  if ui.envCopyBtn then
-    ui.envCopyBtn:SetShown(environmentMode == "multiple")
-  end
-
-  local navY = ui.environmentNavStartY or -84
-  for _, row in ipairs(ns.ENVIRONMENTS) do
-    local button = ui.navButtons and ui.navButtons["environment:" .. row.key]
-    local visible = (environmentMode == "solo" and row.key == "SOLO")
-      or (environmentMode == "multiple" and ns.MULTIPLE_ENV_SET[row.key] == true)
-    if button then
-      button:SetShown(visible)
-      button:ClearAllPoints()
-      if visible then
-        button:SetPoint("TOPLEFT", 20, navY)
-        navY = navY - 34
-      end
-    end
-  end
-  if ui.addonProfilesNav then
-    ui.addonProfilesNav:ClearAllPoints()
-    ui.addonProfilesNav:SetPoint("TOPLEFT", 12, navY - 10)
-  end
-  if ui.diagnosticsNav then
-    ui.diagnosticsNav:ClearAllPoints()
-    ui.diagnosticsNav:SetPoint("TOPLEFT", 12, navY - 44)
-  end
+  if ui.envCopyBtn then ui.envCopyBtn:SetShown(environmentMode == "multiple") end
+  if ui.modeButton then ui.modeButton:SetText(environmentMode == "solo" and "Mode: Solo" or "Mode: Multiple") end
+  if ui.pageTitle then ui.pageTitle:SetText(PAGE_LABELS[ui.tab] or "Settings") end
+  if ui.pageSummary then ui.pageSummary:SetText(PAGE_SUMMARIES[ui.tab] or "") end
 
   local searching = ui.search and ui.search ~= ""
   for key, tab in pairs(ui.tabs) do
@@ -2030,10 +2281,10 @@ local function Refresh()
       active = key == ui.tab
     end
     if active then
-      Paint(tab, {0.06, 0.20, 0.22, 1}, GOLD)
+      Paint(tab, {0.23, 0.18, 0.11, 1}, GOLD)
       tab.label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
     else
-      Paint(tab, TAB_IDLE, {0.25, 0.25, 0.28, 1})
+      Paint(tab, HEADER)
       tab.label:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
     end
   end
@@ -2077,15 +2328,14 @@ local function Refresh()
   end
   for key, button in pairs(ui.navButtons or {}) do
     local active = key == destination
-    if key:find("environment:", 1, true) == 1 then
-      local environment = key:sub(13)
-      active = destination == "environment" and environment == env
+    if key:find("page:", 1, true) == 1 then
+      active = destination == "environment" and key:sub(6) == ui.tab
     end
     if active then
-      Paint(button, {0.06, 0.20, 0.22, 1}, GOLD)
+      Paint(button, {0.23, 0.18, 0.11, 1}, GOLD)
       button.label:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
     else
-      Paint(button, TAB_IDLE, {0.25, 0.25, 0.28, 1})
+      Paint(button, HEADER)
       button.label:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
     end
   end
@@ -2101,7 +2351,7 @@ local function Refresh()
     elseif bind.kind == "choice" then
       local v = bind.get()
       local values = type(bind.values) == "function" and bind.values() or bind.values
-      bind.widget:SetText(values[v] or tostring(v))
+      bind.widget:SetText(bind.display and bind.display() or values[v] or tostring(v))
     elseif bind.kind == "color" then
       bind.widget:SetColor(bind.get())
     elseif bind.kind == "readout" then
@@ -2121,25 +2371,30 @@ local function Refresh()
   end
 
   if searching then
-    local y = -16
+    local y = -76
     local n = 0
     for _, row in ipairs(ui.searchRows) do
       row:Hide()
     end
     for i, spec in ipairs(CATALOG) do
-      if MatchesSearch(spec.label) or MatchesSearch(PAGE_LABELS[spec.page] or "") then
+      if RowVisible(spec) and (MatchesSearch(spec.label) or MatchesSearch(PAGE_LABELS[spec.page] or "") or MatchesSearch(spec.group or "") or MatchesSearch(spec.description or "")) then
         n = n + 1
         local row = ui.searchRows[n]
         if row then
           row.searchSpec = spec
-          row.label:SetText((PAGE_LABELS[spec.page] or spec.page) .. " - " .. spec.label)
-          row:SetPoint("TOPLEFT", 16, y)
+          row.label:SetText(spec.label)
+          row.path:SetText((PAGE_LABELS[spec.page] or spec.page) .. "  /  " .. (spec.group or "Settings"))
+          row:ClearAllPoints()
+          row:SetPoint("TOPLEFT", 0, y)
+          row:SetPoint("TOPRIGHT", 0, y)
           row:Show()
-          y = y - 36
+          y = y - 72
         end
       end
     end
     ui.searchCount:SetText(n .. " matches")
+    ui.searchChild:SetHeight(math.max(140, -y + 16))
+    if LayoutScrollChildren then LayoutScrollChildren() end
   end
 
   local key = addon:GetCharacterKey()
@@ -2181,10 +2436,16 @@ end
 
 ns.RefreshOptions = function()
   if OptionsCombatReadOnly() then
+    ui.needsRefresh = true
     return false
   end
-  Refresh()
-  return true
+  return Refresh()
+end
+
+function ns.RefreshBandageOptions()
+  if not OptionsCombatReadOnly() and ui.frame and ui.frame:IsShown() then
+    ns.RefreshOptions()
+  end
 end
 
 local PROFILE_ERRORS = {
@@ -2225,7 +2486,28 @@ end
 
 local function BindRow(parent, y, spec)
   local row = MakeRow(parent, y, spec.label)
+  row:SetHeight(84)
+  row.label:ClearAllPoints()
+  row.label:SetPoint("TOPLEFT", 18, -12)
+  row.label:SetPoint("TOPRIGHT", -342, -12)
+  row.label:SetHeight(18)
+  row.label:SetWordWrap(false)
+  local divider = row:CreateTexture(nil, "BACKGROUND")
+  divider:SetPoint("BOTTOMLEFT", 18, 0)
+  divider:SetPoint("BOTTOMRIGHT", -18, 0)
+  divider:SetHeight(1)
+  divider:SetColorTexture(BORDER[1], BORDER[2], BORDER[3], 0.42)
   if type(spec.description) == "string" and spec.description ~= "" then
+    local summary = spec.description:match("^([^%.]+%.)") or spec.description
+    if #summary > 180 then summary = summary:sub(1, 176):gsub("%s+%S*$", "") .. "..." end
+    local help = Font(row, "GameFontHighlightSmall", summary)
+    help:SetPoint("TOPLEFT", 18, -36)
+    help:SetPoint("TOPRIGHT", -342, -36)
+    help:SetHeight(40)
+    help:SetJustifyV("TOP")
+    help:SetWordWrap(true)
+    help:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+    row.description = help
     row:EnableMouse(true)
     row:SetScript("OnEnter", function(self)
       GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -2242,19 +2524,19 @@ local function BindRow(parent, y, spec)
     widget = MakeToggle(row)
     widget:SetPoint("RIGHT", -12, 0)
     widget.OnValueChanged = function(_, on)
-      spec.set(on)
+      if OptionsAccessAllowed("SETTINGS_TOGGLE") then spec.set(on) end
     end
   elseif spec.kind == "slider" then
     widget = MakeSlider(row, spec.min, spec.max, spec.step)
     widget:SetPoint("RIGHT", -12, 0)
     widget.OnValueChanged = function(_, v)
-      spec.set(v)
+      if OptionsAccessAllowed("SETTINGS_SLIDER") then spec.set(v) end
     end
   elseif spec.kind == "choice" then
-    widget = MakeButton(row, "", 200)
+    widget = MakeButton(row, "", spec.width or 300)
     widget:SetPoint("RIGHT", -12, 0)
     widget:SetScript("OnClick", function(self)
-      OpenChoiceMenu(self, spec.values, spec.get, spec.set)
+      if spec.menu then spec.menu(self) else OpenChoiceMenu(self, spec.values, spec.get, spec.set) end
     end)
   elseif spec.kind == "color" then
     widget = MakeColorSwatch(row, spec.hasOpacity)
@@ -2280,20 +2562,20 @@ local function BindRow(parent, y, spec)
   elseif spec.kind == "readout" then
     widget = Font(row, "GameFontHighlightSmall", "")
     widget:SetPoint("RIGHT", -12, 0)
-    widget:SetWidth(440)
-    widget:SetHeight(38)
+    widget:SetWidth(300)
+    widget:SetHeight(58)
     widget:SetJustifyH("RIGHT")
     widget:SetWordWrap(true)
   elseif spec.kind == "button" then
-    widget = MakeButton(row, spec.buttonLabel or "Test", 88, "gold")
+    widget = MakeButton(row, spec.buttonLabel or "Test", spec.width or 88, "gold")
     widget:SetPoint("RIGHT", -12, 0)
     widget:SetScript("OnClick", function()
-      if spec.run then
+      if OptionsAccessAllowed("SETTINGS_ACTION") and spec.run then
         spec.run()
       end
     end)
   end
-  ui.binds[#ui.binds + 1] = {kind = spec.kind, widget = widget, get = spec.get, set = spec.set, values = spec.values, label = spec.label}
+  ui.binds[#ui.binds + 1] = {kind = spec.kind, widget = widget, get = spec.get, set = spec.set, values = spec.values, label = spec.label, display = spec.display}
   if widget and type(widget.HookScript) == "function" and spec.kind ~= "readout" and spec.description then
     widget:HookScript("OnEnter", function(self)
       GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -2308,11 +2590,29 @@ end
 
 local function MakeScrollPage(parent)
   local scroll = CreateFrame("ScrollFrame", nil, parent)
-  scroll:SetAllPoints()
+  scroll:SetPoint("TOPLEFT", 0, 0)
+  scroll:SetPoint("BOTTOMRIGHT", -16, 0)
   local child = CreateFrame("Frame", nil, scroll)
-  child:SetWidth(parent:GetWidth() > 0 and parent:GetWidth() or 820)
+  child:SetWidth(math.max(200, parent:GetWidth() - 16))
   child:SetHeight(40)
   scroll:SetScrollChild(child)
+  local bar = CreateFrame("Slider", nil, parent)
+  bar:SetPoint("TOPRIGHT", 0, 0)
+  bar:SetPoint("BOTTOMRIGHT", 0, 0)
+  bar:SetWidth(8)
+  bar:SetOrientation("VERTICAL")
+  bar:SetMinMaxValues(0, 1)
+  bar:SetValueStep(1)
+  local track = bar:CreateTexture(nil, "BACKGROUND")
+  track:SetAllPoints()
+  track:SetColorTexture(CARD[1], CARD[2], CARD[3], 1)
+  local thumb = bar:CreateTexture(nil, "OVERLAY")
+  thumb:SetSize(8, 40)
+  thumb:SetColorTexture(MUTED[1], MUTED[2], MUTED[3], 0.8)
+  bar:SetThumbTexture(thumb)
+  bar:SetScript("OnValueChanged", function(_, value) scroll:SetVerticalScroll(value) end)
+  child.scrollFrame = scroll
+  child.scrollbar = bar
   ui.scrollChildren[#ui.scrollChildren + 1] = child
   scroll:EnableMouseWheel(true)
   scroll:SetScript("OnMouseWheel", function(self, delta)
@@ -2325,6 +2625,7 @@ local function MakeScrollPage(parent)
       pos = range
     end
     self:SetVerticalScroll(pos)
+    bar:SetValue(pos)
   end)
   return child
 end
@@ -2394,7 +2695,7 @@ local function BuildStatusPage(parent)
   local quick = MakeCard(child, "Quick bindings")
   quick:SetPoint("TOPLEFT", mappings, "BOTTOMLEFT", 0, -10)
   quick:SetPoint("TOPRIGHT", mappings, "BOTTOMRIGHT", 0, -10)
-  quick:SetHeight(132)
+  quick:SetHeight(150)
   local quickHint = Font(quick, "GameFontDisable", "Changes the editing Environment Profile. Read-only in combat.")
   quickHint:SetPoint("TOPLEFT", 16, -40)
   quickHint:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
@@ -2432,7 +2733,7 @@ local function BuildStatusPage(parent)
     ui.quickBindingButtons[#ui.quickBindingButtons + 1] = button
     previous = button
   end
-  local openCure = MakeButton(quick, "Open full Cure settings", 178)
+  local openCure = MakeButton(quick, "Open Actions settings", 178)
   openCure:SetPoint("TOPLEFT", 16, -102)
   openCure:SetScript("OnClick", function()
     ui.tab = "cure"
@@ -2509,16 +2810,19 @@ RefreshStatusPage = function(profileStatus, environmentStatus)
   end
 end
 
-local function LayoutScrollChildren()
+LayoutScrollChildren = function()
   if not ui.body then
     return
   end
-  local inner = ui.body:GetWidth()
-  if not inner or inner < 200 then
-    inner = 1040
-  end
   for _, child in ipairs(ui.scrollChildren or {}) do
-    child:SetWidth(inner)
+    local scroll = child.scrollFrame
+    child:SetWidth(math.max(200, scroll:GetWidth()))
+    local range = math.max(0, child:GetHeight() - scroll:GetHeight())
+    local position = math.min(range, math.max(0, scroll:GetVerticalScroll()))
+    scroll:SetVerticalScroll(position)
+    child.scrollbar:SetMinMaxValues(0, math.max(1, range))
+    child.scrollbar:SetValue(position)
+    child.scrollbar:SetShown(range > 0)
   end
 end
 
@@ -2533,8 +2837,8 @@ end
 
 local function ApplySavedSize(f)
   local addon = Addon()
-  local w = 1100
-  local h = 780
+  local w = 1180
+  local h = 820
   if addon and addon.db and addon.db.char then
     w = addon.db.char.optionsWidth or w
     h = addon.db.char.optionsHeight or h
@@ -2546,8 +2850,8 @@ local function ApplySavedSize(f)
   if w < 1100 then
     w = 1100
   end
-  if h < 580 then
-    h = 580
+  if h < 680 then
+    h = 680
   end
   f:SetSize(w, h)
 end
@@ -2587,8 +2891,8 @@ local function BuildPages(content)
         local specs = grouped[groupName]
         if specs then
           local header = CreateFrame("Button", nil, child, "BackdropTemplate")
-          header:SetHeight(28)
-          Paint(header, {0.07, 0.11, 0.14, 1}, BORDER)
+          header:SetHeight(40)
+          Paint(header, CARD, BORDER)
           local hl = Font(header, "GameFontNormal", groupName)
           hl:SetPoint("LEFT", 12, 0)
           hl:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
@@ -2596,7 +2900,7 @@ local function BuildPages(content)
           header.group = groupName
           header.page = pageKey
           header:SetScript("OnClick", function(self)
-            if ui.simple then
+            if not OptionsAccessAllowed("SETTINGS_SECTION") then
               return
             end
             ui.collapsed[self.page] = ui.collapsed[self.page] or {}
@@ -2619,20 +2923,16 @@ local function BuildPages(content)
       if pageKey == "sorting" then
         BuildListsPanel(child)
       end
-      local hint = Font(child, "GameFontHighlight", "Click Simple (top right) to show all options for this environment.")
-      hint:SetJustifyH("LEFT")
-      hint:SetHeight(18)
-      hint:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-      hint:Hide()
-      ui.pageHints[pageKey] = hint
     end
   end
 
   local assignWrap = ui.pages.assign
-  local assignChild = assignWrap:GetChildren()
-  -- rebuild assign as custom assignment controls on top of empty catalog
-  local asCard = MakeCard(assignWrap, "Decursive Profiles and assignments")
-  asCard:SetAllPoints()
+  local assignChild = ui.pageChildren.assign
+  local asCard = MakeCard(assignChild, "Decursive Profiles and assignments")
+  asCard:SetPoint("TOPLEFT", 0, 0)
+  asCard:SetPoint("TOPRIGHT", 0, 0)
+  asCard:SetHeight(406)
+  assignChild:SetHeight(422)
   ui.profileActive = Font(asCard, "GameFontHighlightLarge", "Active profile: unavailable")
   ui.profileActive:SetPoint("TOPLEFT", 16, -42)
   ui.profileActive:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
@@ -2660,7 +2960,7 @@ local function BuildPages(content)
         local ok, state = Addon():SetAccountProfileAssignment(name)
         ReportProfileAction(ok, state, "Account assignment updated.")
       end
-    end)
+    end, false, function() return Addon().db.global.accountProfile or "Default" end)
   end)
   local rowChar = MakeRow(asCard, -180, "This character")
   ui.assign.character = MakeButton(rowChar, "Use account / Default", 220)
@@ -2669,7 +2969,11 @@ local function BuildPages(content)
     OpenProfileMenu(self, function(name)
       local ok, state = Addon():SetCharacterProfileAssignment(name)
       ReportProfileAction(ok, state, "Character assignment updated.")
-    end, true)
+    end, true, function()
+      local addon = Addon()
+      local key = addon:GetCharacterKey()
+      return key and addon.db.global.characters[key] or nil
+    end)
   end)
   ui.assign.specs = {}
   for spec = 1, 4 do
@@ -2690,6 +2994,9 @@ local function BuildPages(content)
           local ok, state = Addon():SetSpecProfileAssignment(captured, name)
           ReportProfileAction(ok, state, "Specialization profile updated.")
         end
+      end, false, function()
+        local assignment = Addon():GetSpecAssignment(captured)
+        return assignment and assignment.profile or "Default"
       end)
     end)
     ui.assign.specs[spec] = {
@@ -2702,19 +3009,42 @@ local function BuildPages(content)
 
   local searchWrap = CreateFrame("Frame", nil, content)
   searchWrap:SetAllPoints()
-  local searchCard = MakeCard(searchWrap, "Search")
-  searchCard:SetAllPoints()
+  local searchCard = MakeScrollPage(searchWrap)
+  ui.searchChild = searchCard
+  local searchTitle = Font(searchCard, "GameFontHighlightLarge", "Search settings")
+  searchTitle:SetPoint("TOPLEFT", 16, -10)
   ui.searchCount = Font(searchCard, "GameFontDisable", "")
   ui.searchCount:SetPoint("TOPLEFT", 16, -44)
   ui.searchCount:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
   for i = 1, #CATALOG do
     local row = MakeRow(searchCard, -80, "")
+    row:SetHeight(66)
+    Paint(row, CARD, BORDER)
+    row.label:ClearAllPoints()
+    row.label:SetPoint("TOPLEFT", 16, -12)
+    row.label:SetPoint("TOPRIGHT", -16, -12)
+    row.label:SetHeight(20)
+    row.path = Font(row, "GameFontDisableSmall", "")
+    row.path:SetPoint("TOPLEFT", 16, -38)
+    row.path:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
     row:EnableMouse(true)
     row:SetScript("OnMouseUp", function(self)
       local spec = self.searchSpec
-      if spec and spec.page and spec.page ~= "assign" then
+      if spec and spec.page and spec.page ~= "assign" and OptionsAccessAllowed("SEARCH_RESULT") then
+        ui.collapsed[spec.page] = ui.collapsed[spec.page] or {}
+        ui.collapsed[spec.page][spec.group] = false
         ui.tab = spec.page
         SetDestination("environment")
+        local child = ui.pageChildren[spec.page]
+        for _, section in ipairs(ui.sections[spec.page] or {}) do
+          for _, item in ipairs(section.rows) do
+            if item.spec == spec and child then
+              local range = math.max(0, child:GetHeight() - child.scrollFrame:GetHeight())
+              child.scrollFrame:SetVerticalScroll(math.min(range, math.max(0, (item.offset or 0) - 44)))
+              LayoutScrollChildren()
+            end
+          end
+        end
       end
     end)
     row:Hide()
@@ -2727,6 +3057,7 @@ local function SetTab(tab)
   if not OptionsAccessAllowed("TAB_NAVIGATION") then
     return false
   end
+  CloseOptionsTransients()
   TeardownMUFPreview()
   ui.tab = tab
   ui.destination = "environment"
@@ -2742,6 +3073,7 @@ SetDestination = function(destination, environment)
   if not OptionsAccessAllowed("PAGE_NAVIGATION") then
     return false, "combat"
   end
+  CloseOptionsTransients()
   TeardownMUFPreview()
   if destination == "environment" and environment then
     local ok, state = Addon():SetEditingEnvironment(environment)
@@ -2843,12 +3175,43 @@ local function BuildDiagnosticsPage(parent)
   flush:SetPoint("TOPRIGHT", -16, -260)
   flush:SetJustifyH("LEFT")
   flush:SetWordWrap(true)
+  local performanceHelp = Font(card, "GameFontHighlight", "Performance capture measures ZDecursive's own Lua callbacks for 15 or 30 seconds. Start outside combat, then reproduce the issue. Recording stops automatically; Copy timing shows call counts and time including capture overhead.")
+  performanceHelp:SetPoint("TOPLEFT", 16, -306)
+  performanceHelp:SetPoint("TOPRIGHT", -16, -306)
+  performanceHelp:SetJustifyH("LEFT")
+  performanceHelp:SetWordWrap(true)
+  local capture15 = MakeButton(card, "Capture 15s", 112, "gold")
+  capture15:SetPoint("TOPLEFT", 16, -374)
+  local capture30 = MakeButton(card, "Capture 30s", 112)
+  capture30:SetPoint("LEFT", capture15, "RIGHT", 8, 0)
+  local captureStop = MakeButton(card, "Stop capture", 112)
+  captureStop:SetPoint("LEFT", capture30, "RIGHT", 8, 0)
+  local captureReport = MakeButton(card, "Copy timing", 112)
+  captureReport:SetPoint("LEFT", captureStop, "RIGHT", 8, 0)
+  local function CaptureCommand(command)
+    if not OptionsAccessAllowed("PERFORMANCE_CAPTURE") then return end
+    if ns.HandlePerformanceCommand then ns.HandlePerformanceCommand(command) end
+    RefreshDiagnosticsPage()
+  end
+  capture15:SetScript("OnClick", function() CaptureCommand("15") end)
+  capture30:SetScript("OnClick", function() CaptureCommand("30") end)
+  captureStop:SetScript("OnClick", function() CaptureCommand("stop") end)
+  captureReport:SetScript("OnClick", function() CaptureCommand("report") end)
+  ui.performanceStatus = Font(card, "GameFontDisable", "Performance capture: Off. /zdperf report also opens timing results.")
+  ui.performanceStatus:SetPoint("TOPLEFT", 16, -414)
+  ui.performanceStatus:SetPoint("TOPRIGHT", -16, -414)
+  ui.performanceStatus:SetJustifyH("LEFT")
+  ui.performanceStatus:SetWordWrap(true)
   ui.diagnosticsPage = wrap
 end
 
 RefreshDiagnosticsPage = function()
   if not ui.diagnosticsStatus then
     return
+  end
+  if ui.performanceStatus then
+    local timing = ns.GetPerformanceCaptureStatus and ns.GetPerformanceCaptureStatus()
+    ui.performanceStatus:SetText("Performance capture: " .. (timing and timing.state or "Unavailable") .. ". /zdperf report also opens timing results.")
   end
   local persistent = ns.PersistentDiagnostics
   local status = persistent and persistent.Status and persistent.Status() or nil
@@ -2867,10 +3230,16 @@ RefreshDiagnosticsPage = function()
   }, "\n"))
 end
 
+ns.RefreshPerformanceOptions = function()
+  if ui.frame and ui.frame:IsShown() and not OptionsCombatReadOnly() then RefreshDiagnosticsPage() end
+end
+
+if ns.RegisterPerformanceTarget then
+  ns.RegisterPerformanceTarget("Options.Refresh", function() return Refresh end, function(callback) Refresh = callback end)
+end
+
 local function BuildFrame()
-  if not OptionsAccessAllowed("FRAME_BUILD") then
-    return nil
-  end
+  if not OptionsAccessAllowed("FRAME_BUILD") then return nil end
   local f = CreateFrame("Frame", "DecursiveRebuildOptions", UIParent, "BackdropTemplate")
   f:Hide()
   f:SetPoint("CENTER")
@@ -2880,76 +3249,37 @@ local function BuildFrame()
   f:SetResizable(true)
   f:EnableMouse(true)
   f:SetClampedToScreen(true)
-  if f.SetResizeBounds then
-    f:SetResizeBounds(1100, 580, 1800, 1400)
-  else
-    f:SetMinResize(1100, 580)
-    f:SetMaxResize(1800, 1400)
-  end
+  if f.SetResizeBounds then f:SetResizeBounds(1100, 680, 1800, 1400)
+  else f:SetMinResize(1100, 680) f:SetMaxResize(1800, 1400) end
   ApplySavedSize(f)
   Paint(f, BG, BORDER)
   tinsert(UISpecialFrames, f:GetName())
 
-  local accent = f:CreateTexture(nil, "BORDER")
-  accent:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
-  accent:SetPoint("TOPLEFT", 1, -1)
-  accent:SetPoint("TOPRIGHT", -1, -1)
-  accent:SetHeight(2)
-
   local header = CreateFrame("Frame", nil, f, "BackdropTemplate")
-  header:SetPoint("TOPLEFT", 1, -3)
-  header:SetPoint("TOPRIGHT", -1, -3)
-  header:SetHeight(108)
+  header:SetPoint("TOPLEFT", 1, -1)
+  header:SetPoint("TOPRIGHT", -1, -1)
+  header:SetHeight(64)
   Paint(header, HEADER)
   header:EnableMouse(true)
   header:RegisterForDrag("LeftButton")
-  header:SetScript("OnDragStart", function()
-    f:StartMoving()
-  end)
-  header:SetScript("OnDragStop", function()
-    f:StopMovingOrSizing()
-  end)
-
+  header:SetScript("OnDragStart", function() f:StartMoving() end)
+  header:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
   local title = Font(header, "GameFontHighlightLarge", "Zhaohu's Decursive")
-  title:SetPoint("TOPLEFT", 22, -12)
-  title:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-  local subtitle = Font(header, "GameFontDisable", "Detect Dispel Protect")
-  subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
-  subtitle:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
-
-  local status = CreateFrame("Frame", nil, header, "BackdropTemplate")
-  status:SetPoint("BOTTOMLEFT", 8, 8)
-  status:SetPoint("BOTTOMRIGHT", -8, 8)
-  status:SetHeight(36)
-  Paint(status, {0.06, 0.18, 0.20, 1}, GOLD)
-  local statusTick = status:CreateTexture(nil, "ARTWORK")
-  statusTick:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 1)
-  statusTick:SetPoint("TOPLEFT", 0, 0)
-  statusTick:SetPoint("BOTTOMLEFT", 0, 0)
-  statusTick:SetWidth(4)
-
-  ui.envHint = Font(status, "GameFontHighlightLarge", "Editing Open World inside Default")
-  ui.envHint:SetPoint("LEFT", 16, 0)
-  ui.envHint:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-
-  ui.resolved = Font(status, "GameFontHighlightLarge", "Active profile: unavailable")
-  ui.resolved:SetPoint("RIGHT", -16, 0)
-  ui.resolved:SetTextColor(TEXT[1], TEXT[2], TEXT[3])
-
+  title:SetPoint("TOPLEFT", 24, -13)
+  local subtitle = Font(header, "GameFontNormalSmall", "SETTINGS / RETAIL 12.1")
+  subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -5)
+  subtitle:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
   local close = MakeButton(header, "Close", 72)
-  close:SetPoint("TOPRIGHT", -16, -14)
-  close:SetScript("OnClick", function()
-    f:Hide()
-  end)
-
+  close:SetPoint("RIGHT", -24, 0)
+  close:SetScript("OnClick", function() f:Hide() end)
   local searchBox = CreateFrame("EditBox", nil, header, "BackdropTemplate")
-  searchBox:SetSize(188, 28)
+  searchBox:SetSize(280, 32)
   searchBox:SetPoint("RIGHT", close, "LEFT", -12, 0)
   searchBox:SetAutoFocus(false)
   searchBox:SetFontObject(GameFontHighlight)
-  searchBox:SetTextInsets(10, 10, 0, 0)
-  searchBox:SetMaxLetters(40)
-  Paint(searchBox, {0.05, 0.08, 0.10, 1}, BORDER)
+  searchBox:SetTextInsets(12, 12, 0, 0)
+  searchBox:SetMaxLetters(60)
+  Paint(searchBox, BG, BORDER)
   searchBox:SetScript("OnEscapePressed", function(self)
     self:ClearFocus()
     self:SetText("")
@@ -2957,77 +3287,78 @@ local function BuildFrame()
     Refresh()
   end)
   searchBox:SetScript("OnTextChanged", function(self)
-    if not OptionsAccessAllowed("SEARCH") then
-      return
-    end
+    if not OptionsAccessAllowed("SEARCH") then return end
     ui.search = string.lower(strtrim(self:GetText() or ""))
     Refresh()
   end)
   ui.searchBox = searchBox
-  local searchPh = Font(searchBox, "GameFontDisable", "Search settings")
-  searchPh:SetPoint("LEFT", 10, 0)
-  searchPh:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
-  searchBox:SetScript("OnEditFocusGained", function()
-    searchPh:Hide()
-  end)
+  local placeholder = Font(searchBox, "GameFontDisable", "Find a setting...")
+  placeholder:SetPoint("LEFT", 12, 0)
+  placeholder:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  searchBox:SetScript("OnEditFocusGained", function() placeholder:Hide() end)
   searchBox:SetScript("OnEditFocusLost", function(self)
-    if strtrim(self:GetText() or "") == "" then
-      searchPh:Show()
-    end
+    placeholder:SetShown(strtrim(self:GetText() or "") == "")
   end)
 
   local navigation = CreateFrame("Frame", nil, f, "BackdropTemplate")
-  navigation:SetPoint("TOPLEFT", 20, -116)
-  navigation:SetPoint("BOTTOMLEFT", 20, 20)
-  navigation:SetWidth(170)
-  Paint(navigation, CARD, BORDER)
+  navigation:SetPoint("TOPLEFT", 1, -65)
+  navigation:SetPoint("BOTTOMLEFT", 1, 1)
+  navigation:SetWidth(214)
+  Paint(navigation, HEADER)
   ui.navigation = navigation
-  ui.navButtons = {}
-  local navY = -16
-  local statusNav = MakeButton(navigation, "Status", 146, "gold")
-  statusNav:SetPoint("TOPLEFT", 12, navY)
-  statusNav:SetScript("OnClick", function()
-    SetDestination("status")
-  end)
+  ui.navButtons, ui.tabs = {}, {}
+  local statusNav = MakeButton(navigation, "Status", 182, "gold")
+  statusNav:SetPoint("TOPLEFT", 16, -20)
+  statusNav:SetHeight(36)
+  statusNav:SetScript("OnClick", function() SetDestination("status") end)
   ui.navButtons.status = statusNav
-  navY = navY - 44
-  local environmentLabel = Font(navigation, "GameFontNormalSmall", "ENVIRONMENT PROFILES")
-  environmentLabel:SetPoint("TOPLEFT", 12, navY)
-  environmentLabel:SetWidth(SIDEBAR_HEADING_WIDTH)
-  environmentLabel:SetWordWrap(false)
-  environmentLabel:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-  navY = navY - 24
-  ui.environmentNavStartY = navY
-  for i = 1, #ENVIRONMENT_SUBMENU_ORDER do
-    local environment = ENVIRONMENT_SUBMENU_ORDER[i]
-    local button = MakeButton(navigation, ns.ENV_LABELS[environment] or environment, 138)
-    button:SetPoint("TOPLEFT", 20, navY)
-    button:SetScript("OnClick", function()
-      SetDestination("environment", environment)
-    end)
-    ui.navButtons["environment:" .. environment] = button
-    navY = navY - 34
+  local section = Font(navigation, "GameFontNormalSmall", "ENVIRONMENT SETTINGS")
+  section:SetPoint("TOPLEFT", 24, -80)
+  section:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  for index, key in ipairs(EDITOR_PAGES) do
+    local button = MakeButton(navigation, PAGE_LABELS[key], 182)
+    button:SetPoint("TOPLEFT", 16, -104 - (index - 1) * 40)
+    button:SetHeight(34)
+    button.label:ClearAllPoints()
+    button.label:SetPoint("LEFT", 14, 0)
+    button.label:SetJustifyH("LEFT")
+    button:SetScript("OnClick", function() SetTab(key) end)
+    ui.navButtons["page:" .. key], ui.tabs[key] = button, button
   end
-  navY = navY - 10
-  local addonProfilesNav = MakeButton(navigation, "Decursive Profiles", 146)
-  addonProfilesNav:SetPoint("TOPLEFT", 12, navY)
-  addonProfilesNav:SetScript("OnClick", function()
-    SetDestination("addon_profiles")
-  end)
+  local addonProfilesNav = MakeButton(navigation, "Decursive Profiles", 182)
+  addonProfilesNav:SetPoint("TOPLEFT", 16, -414)
+  addonProfilesNav:SetHeight(34)
+  addonProfilesNav:SetScript("OnClick", function() SetDestination("addon_profiles") end)
   ui.navButtons.addon_profiles = addonProfilesNav
-  ui.addonProfilesNav = addonProfilesNav
-  local diagnosticsNav = MakeButton(navigation, "Diagnostics", 146)
-  diagnosticsNav:SetPoint("TOPLEFT", 12, navY - 44)
-  diagnosticsNav:SetScript("OnClick", function()
-    SetDestination("diagnostics")
-  end)
+  local diagnosticsNav = MakeButton(navigation, "Diagnostics", 182)
+  diagnosticsNav:SetPoint("TOPLEFT", 16, -454)
+  diagnosticsNav:SetHeight(34)
+  diagnosticsNav:SetScript("OnClick", function() SetDestination("diagnostics") end)
   ui.navButtons.diagnostics = diagnosticsNav
-  ui.diagnosticsNav = diagnosticsNav
+  local navigationHint = Font(navigation, "GameFontNormalSmall", "One profile.\nSettings for every environment.")
+  navigationHint:SetPoint("BOTTOMLEFT", 24, 24)
+  navigationHint:SetWidth(166)
+  navigationHint:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+
+  local footer = CreateFrame("Frame", nil, f)
+  footer:SetPoint("BOTTOMLEFT", WORKSPACE_LEFT, 10)
+  footer:SetPoint("BOTTOMRIGHT", WORKSPACE_RIGHT, 10)
+  footer:SetHeight(20)
+  ui.envHint = Font(footer, "GameFontNormalSmall", "Changes save automatically")
+  ui.envHint:SetPoint("LEFT", 0, 0)
+  ui.envHint:SetWidth(430)
+  ui.envHint:SetWordWrap(false)
+  ui.envHint:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  ui.resolved = Font(footer, "GameFontNormalSmall", "Active profile: unavailable")
+  ui.resolved:SetPoint("RIGHT", 0, 0)
+  ui.resolved:SetWidth(330)
+  ui.resolved:SetJustifyH("RIGHT")
+  ui.resolved:SetWordWrap(false)
 
   local profileBar = CreateFrame("Frame", nil, f)
   profileBar:SetPoint("TOPLEFT", WORKSPACE_LEFT, WORKSPACE_TOP)
   profileBar:SetPoint("TOPRIGHT", WORKSPACE_RIGHT, WORKSPACE_TOP)
-  profileBar:SetHeight(48)
+  profileBar:SetHeight(68)
   ui.profileBar = profileBar
 
   local profileLabel = Font(profileBar, "GameFontNormal", "PROFILE")
@@ -3078,8 +3409,11 @@ local function BuildFrame()
     if not OptionsAccessAllowed("PROFILE_DELETE") then
       return
     end
-    local ok, state = Addon():DeleteCurrentProfile()
-    ReportProfileAction(ok, state, "Profile deleted; Default activated.")
+    local name = Addon():GetCurrentProfileName()
+    ShowConfirm("Delete " .. name .. "?", "Delete this profile and return its assignments to Default.", function()
+      local ok, state = Addon():DeleteCurrentProfile()
+      ReportProfileAction(ok, state, "Profile deleted; Default activated.")
+    end)
   end)
 
   local resetAllBtn = MakeButton(profileBar, "Reset all", 88, "danger")
@@ -3091,41 +3425,52 @@ local function BuildFrame()
     end)
   end)
 
-  local envBar = CreateFrame("Frame", nil, f)
+  local envBar = CreateFrame("Frame", nil, f, "BackdropTemplate")
   envBar:SetPoint("TOPLEFT", WORKSPACE_LEFT, WORKSPACE_TOP)
   envBar:SetPoint("TOPRIGHT", WORKSPACE_RIGHT, WORKSPACE_TOP)
-  envBar:SetHeight(88)
+  envBar:SetHeight(86)
+  Paint(envBar, CARD)
   ui.envBar = envBar
-
-  ui.environmentApplied = Font(envBar, "GameFontNormalLarge", "Applied: Open World")
-  ui.environmentApplied:SetPoint("TOPLEFT", 0, 0)
-  ui.environmentApplied:SetTextColor(0.35, 1, 0.55)
-  ui.environmentEditing = Font(envBar, "GameFontHighlight", "Editing: Open World")
-  ui.environmentEditing:SetPoint("LEFT", ui.environmentApplied, "RIGHT", 18, 0)
-  ui.environmentDetected = Font(envBar, "GameFontDisable", "Detected: Open World")
-  ui.environmentDetected:SetPoint("LEFT", ui.environmentEditing, "RIGHT", 18, 0)
-  ui.environmentPending = Font(envBar, "GameFontDisable", "")
-  ui.environmentPending:SetPoint("TOPRIGHT", 0, -2)
-  ui.environmentPending:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-
-  ui.envChips = {}
-  local chipX = 0
-  for _, row in ipairs(ns.ENVIRONMENTS) do
-    local chip = MakeButton(envBar, row.label, 118)
-    chip:SetPoint("TOPLEFT", chipX, -24)
-    chip:SetScript("OnClick", function()
-      if not OptionsAccessAllowed("ENVIRONMENT_NAVIGATION") then
-        return
+  ui.environmentEditing = MakeButton(envBar, "Editing: Open World", 216, "gold")
+  ui.environmentEditing:SetPoint("TOPLEFT", 14, -12)
+  ui.environmentEditing:SetScript("OnClick", function(self)
+    if not OptionsAccessAllowed("ENVIRONMENT_NAVIGATION") or not MenuUtil or not MenuUtil.CreateContextMenu then return end
+    CloseOptionsTransients()
+    local capturedProfile = Addon().db and Addon().db.profile
+    local mode = Addon():GetEnvironmentMode()
+    MenuUtil.CreateContextMenu(self, function(_, root)
+      root:CreateTitle("Edit environment")
+      for _, row in ipairs(ns.ENVIRONMENTS) do
+        local visible = mode == "solo" and row.key == "SOLO" or mode == "multiple" and ns.MULTIPLE_ENV_SET[row.key]
+        if visible then
+          root:CreateRadio(row.label, function() return Addon():GetEditingEnvironment() == row.key end, function()
+            if OptionsAccessAllowed("ENVIRONMENT_NAVIGATION") and Addon().db.profile == capturedProfile and Addon():GetEnvironmentMode() == mode then
+              SetDestination("environment", row.key)
+            end
+          end)
+        end
       end
-      local ok, state = Addon():SetEditingEnvironment(row.key)
-      ReportProfileAction(ok, state, "Editing environment changed.")
     end)
-    ui.envChips[row.key] = chip
-    chipX = chipX + 126
-  end
-
-  local envResetBtn = MakeButton(envBar, "Reset env", 88)
-  envResetBtn:SetPoint("TOPRIGHT", 0, -24)
+  end)
+  ui.modeButton = MakeButton(envBar, "Mode: Multiple", 166)
+  ui.modeButton:SetPoint("LEFT", ui.environmentEditing, "RIGHT", 10, 0)
+  ui.modeButton:SetScript("OnClick", function(self)
+    if not OptionsAccessAllowed("PROFILE_MODE") or not MenuUtil or not MenuUtil.CreateContextMenu then return end
+    local capturedProfile = Addon().db and Addon().db.profile
+    MenuUtil.CreateContextMenu(self, function(_, root)
+      root:CreateTitle("Environment profile mode")
+      for _, row in ipairs({{key = "multiple", label = "Multiple - follow content"}, {key = "solo", label = "Solo - use one settings pack"}}) do
+        root:CreateRadio(row.label, function() return Addon():GetEnvironmentMode() == row.key end, function()
+          if OptionsAccessAllowed("PROFILE_MODE") and Addon().db.profile == capturedProfile then
+            local ok, state = Addon():SetEnvironmentMode(row.key)
+            ReportProfileAction(ok, state, "Environment mode updated.")
+          end
+        end)
+      end
+    end)
+  end)
+  local envResetBtn = MakeButton(envBar, "Reset settings", 112)
+  envResetBtn:SetPoint("TOPRIGHT", -14, -12)
   envResetBtn:SetScript("OnClick", function()
     local env = Addon():GetEditingEnvironment()
     local label = ns.ENV_LABELS[env] or env
@@ -3134,69 +3479,36 @@ local function BuildFrame()
       ReportProfileAction(ok, state, label .. " reset to defaults.")
     end)
   end)
-
-  local envCopyBtn = MakeButton(envBar, "Copy to", 80)
-  envCopyBtn:SetPoint("RIGHT", envResetBtn, "LEFT", -6, 0)
-  envCopyBtn:SetScript("OnClick", function(self)
-    OpenEnvCopyMenu(self)
-  end)
+  local envCopyBtn = MakeButton(envBar, "Copy to...", 92)
+  envCopyBtn:SetPoint("RIGHT", envResetBtn, "LEFT", -8, 0)
+  envCopyBtn:SetScript("OnClick", function(self) OpenEnvCopyMenu(self) end)
   ui.envCopyBtn = envCopyBtn
-
-  local profileModeLabel = Font(envBar, "GameFontNormal", "PROFILE MODE")
-  profileModeLabel:SetPoint("TOPLEFT", 0, -60)
-  profileModeLabel:SetWidth(PROFILE_MODE_LABEL_WIDTH)
-  profileModeLabel:SetWordWrap(false)
-  profileModeLabel:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
-  ui.profileModeLabel = profileModeLabel
-  ui.routingMultiple = MakeButton(envBar, "Multiple", 118)
-  ui.routingMultiple:SetPoint("LEFT", profileModeLabel, "RIGHT", PROFILE_MODE_GAP, 0)
-  ui.routingMultiple:SetScript("OnClick", function()
-    if not OptionsAccessAllowed("PROFILE_MODE") then
-      return
-    end
-    local ok, state = Addon():SetEnvironmentMode("multiple")
-    ReportProfileAction(ok, state, "Multiple environment mode selected.")
-  end)
-  ui.routingSolo = MakeButton(envBar, "Solo", 100)
-  ui.routingSolo:SetPoint("LEFT", ui.routingMultiple, "RIGHT", PROFILE_MODE_BUTTON_GAP, 0)
-  ui.routingSolo:SetScript("OnClick", function()
-    if not OptionsAccessAllowed("PROFILE_MODE") then
-      return
-    end
-    local ok, state = Addon():SetEnvironmentMode("solo")
-    ReportProfileAction(ok, state, "Solo environment mode selected.")
-  end)
-
-  ui.simpleBtn = MakeButton(header, "Simple", 72, "gold")
-  ui.simpleBtn:SetPoint("RIGHT", searchBox, "LEFT", -8, 0)
-  ui.simpleBtn:SetScript("OnClick", function()
-    if not OptionsAccessAllowed("SIMPLE_MODE") then
-      return
-    end
-    ui.simple = not ui.simple
-    local addon = Addon()
-    if addon and addon.db then
-      addon.db.char.optionsSimple = ui.simple
-    end
-    LayoutCatalog()
-    Refresh()
-  end)
-
+  ui.environmentApplied = Font(envBar, "GameFontNormal", "Applied: Open World")
+  ui.environmentApplied:SetPoint("TOPLEFT", 16, -57)
+  ui.environmentApplied:SetWidth(208)
+  ui.environmentApplied:SetWordWrap(false)
+  ui.environmentApplied:SetTextColor(GOLD[1], GOLD[2], GOLD[3])
+  ui.environmentDetected = Font(envBar, "GameFontDisable", "Detected: Open World")
+  ui.environmentDetected:SetPoint("LEFT", ui.environmentApplied, "RIGHT", 18, 0)
+  ui.environmentDetected:SetWidth(200)
+  ui.environmentDetected:SetWordWrap(false)
+  ui.environmentDetected:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
+  ui.environmentPending = Font(envBar, "GameFontNormalSmall", "")
+  ui.environmentPending:SetPoint("TOPRIGHT", -16, -57)
+  ui.environmentPending:SetWidth(330)
+  ui.environmentPending:SetJustifyH("RIGHT")
+  ui.environmentPending:SetWordWrap(false)
   local tabBar = CreateFrame("Frame", nil, f)
   AnchorWorkspaceFrame(tabBar, envBar, envBar, WORKSPACE_GAP)
-  tabBar:SetHeight(34)
+  tabBar:SetHeight(54)
   ui.tabBar = tabBar
-  ui.tabs = {}
-  local tabX = 0
-  for _, key in ipairs(EDITOR_PAGES) do
-    local tab = MakeButton(tabBar, PAGE_LABELS[key], 100)
-    tab:SetPoint("LEFT", tabX, 0)
-    tab:SetScript("OnClick", function()
-      SetTab(key)
-    end)
-    ui.tabs[key] = tab
-    tabX = tabX + 108
-  end
+  ui.pageTitle = Font(tabBar, "GameFontHighlightLarge", "Frames")
+  ui.pageTitle:SetPoint("TOPLEFT", 0, -4)
+  ui.pageSummary = Font(tabBar, "GameFontDisable", "")
+  ui.pageSummary:SetPoint("TOPLEFT", 0, -30)
+  ui.pageSummary:SetPoint("TOPRIGHT", 0, -30)
+  ui.pageSummary:SetWordWrap(false)
+  ui.pageSummary:SetTextColor(MUTED[1], MUTED[2], MUTED[3])
 
   local body = CreateFrame("Frame", nil, f)
   ui.body = body
@@ -3204,13 +3516,13 @@ local function BuildFrame()
   BuildPages(body)
 
   local statusHost = CreateFrame("Frame", nil, f)
-  statusHost:SetPoint("TOPLEFT", 204, -116)
-  statusHost:SetPoint("BOTTOMRIGHT", -20, 20)
+  statusHost:SetPoint("TOPLEFT", WORKSPACE_LEFT, WORKSPACE_TOP)
+  statusHost:SetPoint("BOTTOMRIGHT", WORKSPACE_RIGHT, WORKSPACE_BOTTOM)
   BuildStatusPage(statusHost)
 
   local diagnosticsHost = CreateFrame("Frame", nil, f)
-  diagnosticsHost:SetPoint("TOPLEFT", 204, -116)
-  diagnosticsHost:SetPoint("BOTTOMRIGHT", -20, 20)
+  diagnosticsHost:SetPoint("TOPLEFT", WORKSPACE_LEFT, WORKSPACE_TOP)
+  diagnosticsHost:SetPoint("BOTTOMRIGHT", WORKSPACE_RIGHT, WORKSPACE_BOTTOM)
   BuildDiagnosticsPage(diagnosticsHost)
 
   local grip = CreateFrame("Button", nil, f)
@@ -3235,6 +3547,7 @@ local function BuildFrame()
   local modal = CreateFrame("Frame", nil, f, "BackdropTemplate")
   modal:SetFrameStrata("DIALOG")
   modal:SetAllPoints()
+  modal:EnableMouse(true)
   Paint(modal, {0, 0, 0, 0.55})
   local box = CreateFrame("Frame", nil, modal, "BackdropTemplate")
   box:SetSize(420, 160)
@@ -3296,6 +3609,7 @@ local function BuildFrame()
     Refresh()
   end)
   f:SetScript("OnHide", function()
+    CloseOptionsTransients()
     TeardownMUFPreview()
   end)
   ui.frame = f
@@ -3341,10 +3655,7 @@ function ns.ShowOptions()
   else
     ApplySavedSize(ui.frame)
   end
-  local addon = Addon()
-  if addon and addon.db and addon.db.char and addon.db.char.optionsSimple ~= nil then
-    ui.simple = addon.db.char.optionsSimple
-  end
+  ui.simple = false
   ui.frame:Show()
   LayoutScrollChildren()
   Refresh()
@@ -3367,6 +3678,7 @@ function ns.CloseOptionsForCombat(source)
     return false
   end
   TeardownMUFPreview()
+  CloseOptionsTransients()
   if ui.modal then
     ui.modal:Hide()
     ui.modal.onAccept = nil
@@ -3414,7 +3726,9 @@ if ns.RegisterDiagnosticProvider then
       healthCheckAvailable = ns.Diagnostics and type(ns.Diagnostics.RunHealthCheck) == "function" or false,
       lastHealthVerdict = type(health) == "table" and health.verdict or "NOT_RUN",
       searchAvailable = true,
-      simpleModeAvailable = true,
+      simpleModeAvailable = false,
+      inlineDescriptions = true,
+      categoryNavigation = true,
       statusPanels = {"CURRENT_SETUP", "DISPEL_CAPABILITY", "CLICK_MAPPINGS", "QUICK_BINDINGS"},
     }
   end)

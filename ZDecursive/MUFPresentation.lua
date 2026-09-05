@@ -30,13 +30,14 @@ local PRESENTATION = {
   deathLevelOffset = 44,
   cooldownLevelOffset = 48,
   readabilityLevelOffset = 64,
+  rangeShadeLevelOffset = 80,
   hostParent = "NATIVE_AURA_SLOT",
   hostBounds = "INNER_FILL_FULL_BOUNDS",
   visibilityGate = "NATIVE_AURA_SLOT_PARENT",
   healthyVisibility = "INHERITED_SLOT_HIDDEN",
   afflictedVisibility = "INHERITED_SLOT_SHOWN",
   registrationStyle = "PRESERVE_ASSET",
-  order = "NATIVE_SLOT_MANAGED_FILL_DEATH_COOLDOWN_READABILITY",
+  order = "NATIVE_SLOT_MANAGED_FILL_DEATH_COOLDOWN_READABILITY_RANGE_SHADE",
   afflictionPrecedence = "ABOVE_RANGE_SOUL_LINK_ORDINARY_MANAGED",
   nativeLifecycle = "SET_UNIT_ADD_SLOT_INITIALIZE_ENABLE_LAST",
   nativeChildrenUntouched = true,
@@ -154,6 +155,86 @@ local function PreserveAssetStyle()
   return styles and styles.PreserveAsset or nil
 end
 
+function ns.RaiseMUFRangeShade(owner, above)
+  if InCombatLockdown and InCombatLockdown() then return false end
+  local host = owner and owner.rangeShadeHost
+  if not host then return false end
+  local baseLevel = owner.GetFrameLevel and owner:GetFrameLevel() or 0
+  local level = math.max(host:GetFrameLevel() or 0, baseLevel + PRESENTATION.rangeShadeLevelOffset)
+  if above and above.GetFrameLevel then
+    level = math.max(level, (above:GetFrameLevel() or 0) + 1)
+  end
+  host:SetFrameLevel(level)
+  return true
+end
+
+function ns.ConfigureMUFRangeShade(owner, statusEnabled, borderOn)
+  if not owner or (InCombatLockdown and InCombatLockdown()) then return false end
+  local host = owner.rangeShadeHost
+  if not host then
+    host = CreateFrame("Frame", nil, owner)
+    host:SetAllPoints(owner)
+    DisableInteraction(host)
+    if host.SetPropagateMouseClicks then host:SetPropagateMouseClicks(true) end
+    -- Isolate the one gate, not its textures: all shade pieces inherit exactly
+    -- the same opacity, independent of the MUF's ancestor transparency.
+    if host.SetIgnoreParentAlpha then host:SetIgnoreParentAlpha(true) end
+    host:SetAlpha(0)
+    host.texture = host:CreateTexture(nil, "OVERLAY", nil, 7)
+    host.texture:SetColorTexture(0, 0, 0, 1)
+    host.statusShade = host:CreateTexture(nil, "OVERLAY", nil, 7)
+    host.statusShade:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask")
+    host.statusShade:SetVertexColor(0, 0, 0, 1)
+    owner.rangeShadeHost = host
+  end
+  local edge = borderOn == false and 1 or 0
+  host.texture:ClearAllPoints()
+  host.texture:SetPoint("TOPLEFT", owner, "TOPLEFT", -edge, edge)
+  host.texture:SetPoint("BOTTOMRIGHT", owner, "BOTTOMRIGHT", 0, 0)
+  if owner.statusLight then host.statusShade:SetAllPoints(owner.statusLight) end
+  if statusEnabled == true and owner.statusLight then host.statusShade:Show() else host.statusShade:Hide() end
+  host.rangeState, host.rangeBrightness = nil, nil
+  ns.RaiseMUFRangeShade(owner, owner.readabilityHost)
+  host:Show()
+  return true
+end
+
+function ns.ApplyMUFRangeShade(owner, inRange, enabled, brightness)
+  local host = owner and owner.rangeShadeHost
+  if not host then return false end
+  if type(brightness) ~= "number" then brightness = 0.50 end
+  brightness = math.max(0, math.min(1, brightness))
+  local opacity = 1 - brightness
+  local public = true
+  if enabled ~= true then
+    inRange = true
+  elseif (type(issecretvalue) == "function" and issecretvalue(inRange))
+    or (type(canaccessvalue) == "function" and not canaccessvalue(inRange)) then
+    public = false
+  else
+    -- Unknown/unavailable ranges remain bright. Only an actual false is out.
+    inRange = inRange ~= false
+  end
+  if public and host.rangeState == inRange and host.rangeBrightness == brightness then return true end
+  host.rangeState, host.rangeBrightness = nil, nil
+  local ok, applied
+  if type(host.SetAlphaFromBoolean) == "function" then
+    ok, applied = pcall(host.SetAlphaFromBoolean, host, inRange, 0, opacity)
+  elseif type(host.SetAlpha) == "function" then
+    ok, applied = pcall(host.SetAlpha, host, public and inRange == false and opacity or 0)
+  else
+    return false
+  end
+  if not ok or applied == false then return false end
+  if public then host.rangeState, host.rangeBrightness = inRange, brightness end
+  return true
+end
+
+function ns.InvalidateMUFRangeShade(owner)
+  local host = owner and owner.rangeShadeHost
+  if host then host.rangeState, host.rangeBrightness = nil, nil end
+end
+
 local function CreateFillHost(slot, bounds)
   local host = CreateFrame("Frame", nil, slot)
   host:SetAllPoints(bounds)
@@ -189,9 +270,15 @@ local function CreateFillHost(slot, bounds)
 end
 
 function ns.ConfigureMUFDispelPresentation(slot, pack, bounds, baseLevel, owner, slotInfo)
+  -- Keep the existing host/texture returns for presentation callers. The extra
+  -- result lets the coordinator withhold READY until the native fill is bound.
+  local existingHost = slot and slot._decursivePresentationHost
+  if InCombatLockdown and InCombatLockdown() then
+    return existingHost, existingHost and existingHost.texture, false, "DEFERRED_COMBAT"
+  end
   local style = PreserveAssetStyle()
   if not slot or not owner or not bounds or type(CreateFrame) ~= "function" or style == nil then
-    return nil
+    return existingHost, existingHost and existingHost.texture, false, "FAILURE"
   end
   if slot.ClearAllPoints then
     slot:ClearAllPoints()
@@ -243,19 +330,19 @@ function ns.ConfigureMUFDispelPresentation(slot, pack, bounds, baseLevel, owner,
     customDispelColorCurve = colorCurve,
   }
   if not slot.AddDispelTypeTexture then
-    return nil
+    return host, host.texture, false, "FAILURE"
   end
   local paletteChanged = slot._decursivePresentationRegistered == true
 	and slot._decursivePresentationPaletteSignature ~= paletteSignature
   if paletteChanged then
 	if type(slot.ClearDispelTypeTextures) ~= "function" then
 		PRESENTATION.paletteRefreshFailureCount = PRESENTATION.paletteRefreshFailureCount + 1
-		return host, host.texture
+		return host, host.texture, false, "FAILURE"
 	end
-	local clearOK = pcall(slot.ClearDispelTypeTextures, slot)
-	if not clearOK then
+	local clearOK, cleared = pcall(slot.ClearDispelTypeTextures, slot)
+	if not clearOK or cleared == false then
 		PRESENTATION.paletteRefreshFailureCount = PRESENTATION.paletteRefreshFailureCount + 1
-		return host, host.texture
+		return host, host.texture, false, "FAILURE"
 	end
 	slot._decursivePresentationRegistered = false
 	host:Hide()
@@ -265,7 +352,7 @@ function ns.ConfigureMUFDispelPresentation(slot, pack, bounds, baseLevel, owner,
 	local addOK, registrationIndex = pcall(slot.AddDispelTypeTexture, slot, host.texture, options)
 	if not addOK or registrationIndex == false then
 		PRESENTATION.paletteRefreshFailureCount = PRESENTATION.paletteRefreshFailureCount + 1
-		return host, host.texture
+		return host, host.texture, false, "FAILURE"
 	end
 	host.registrationIndex = registrationIndex
 	slot._decursivePresentationRegistered = true
@@ -275,7 +362,7 @@ function ns.ConfigureMUFDispelPresentation(slot, pack, bounds, baseLevel, owner,
   elseif host.Show then
 	host:Show()
   end
-  return host, host.texture
+  return host, host.texture, true, "SUCCESS"
 end
 
 if ns.DiagnosticModuleLoaded then

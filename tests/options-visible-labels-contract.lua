@@ -31,14 +31,17 @@ file:close()
 
 for _, token in ipairs({
   'assign = "Decursive Profiles"',
-  'MakeButton(navigation, "Decursive Profiles", 146)',
-  'MakeCard(assignWrap, "Decursive Profiles and assignments")',
+  'MakeButton(navigation, "Decursive Profiles", 182)',
+  'MakeCard(assignChild, "Decursive Profiles and assignments")',
   '"Decursive Profile: "',
-  'Font(navigation, "GameFontNormalSmall", "ENVIRONMENT PROFILES")',
-  'Font(envBar, "GameFontNormal", "PROFILE MODE")',
-  'profileModeLabel:SetWidth(PROFILE_MODE_LABEL_WIDTH)',
-  'ui.routingMultiple:SetPoint("LEFT", profileModeLabel, "RIGHT", PROFILE_MODE_GAP, 0)',
-  'ui.routingSolo:SetPoint("LEFT", ui.routingMultiple, "RIGHT", PROFILE_MODE_BUTTON_GAP, 0)',
+  'Font(navigation, "GameFontNormalSmall", "ENVIRONMENT SETTINGS")',
+  'MakeButton(envBar, "Editing: Open World"',
+  'MakeButton(envBar, "Mode: Multiple"',
+  'mufs = "Frames"',
+  'sorting = "Roster"',
+  'cure = "Actions"',
+  'color = "Colors"',
+  'items = "Supplies"',
 }) do
   Check(source:find(token, 1, true), "missing visible label/layout contract: " .. token)
 end

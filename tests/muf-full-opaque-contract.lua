@@ -48,6 +48,7 @@ local textureSupportsIgnoreParentAlpha = true
 
 local function NewTexture(parent, owner, sublevel)
   local texture = {parent = parent, owner = owner, shown = true, asset = "SOLID", sublevel = sublevel or 0, alpha = 1}
+  function texture:SetAlpha(value) self.alpha = value end
   function texture:SetAllPoints(target)
     self.bounds = target or self.parent
   end

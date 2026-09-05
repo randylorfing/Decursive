@@ -1,8 +1,23 @@
--- This file is part of ZDecursive, an independently maintained rebuild of Decursive.
---
--- Based on Decursive, Copyright (C) 2006-2026 John Wellesz
--- ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
--- Licensed under the GNU General Public License version 3 or later.
+--[[
+    This file is part of ZDecursive, an independently maintained rebuild of Decursive.
+
+    Based on Decursive, Copyright (C) 2006-2026 John Wellesz
+    (Decursive AT 2072productions.com) (https://www.2072productions.com/to/decursive.php)
+    ZDecursive rebuild and ongoing maintenance, Copyright (C) 2026 Randy Lorfing
+
+    ZDecursive is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    ZDecursive is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with ZDecursive. If not, see <https://www.gnu.org/licenses/>.
+--]]
 
 -- Validate the real catalog and its description assignment without building UI.
 local file = assert(io.open("ZDecursive/Options.lua", "rb"))

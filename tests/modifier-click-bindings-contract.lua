@@ -52,6 +52,7 @@ local function Harness()
   h.button = {attributes = {}}
   function h.button:SetAttribute(key, value)
     Check(not h.combat, "protected attributes must never change in combat")
+    if h.reject == key then return false end
     h.writes = h.writes + 1
     self.attributes[key] = value
   end
@@ -70,6 +71,40 @@ end
 
 local cases = {}
 local function Case(name, callback) cases[#cases + 1] = {name, callback} end
+
+Case("identical secure plans do not rewrite bindings", function()
+  local h = Harness()
+  Check(h:Install(), "first secure plan installs")
+  local before = h.writes
+  Check(h:Install(), "identical plan remains installed")
+  Equal(h.writes, before, "unchanged secure attributes are skipped")
+  h:Set("left", "TARGET")
+  Check(h:Install(), "changed action installs")
+  Check(h.writes > before and h.writes - before < 10, "only the changed gesture is written")
+  Equal(h.button.attributes["*macrotext1"], nil, "removed macro is cleared")
+  Equal(h.button.attributes["*type1"], "target", "replacement action is installed")
+end)
+
+Case("failed attribute writes invalidate the entire installation cache", function()
+  local h = Harness()
+  Check(h:Install(), "first plan installs")
+  h:Set("left", "TARGET")
+  h.reject = "*type1"
+  Equal(h:Install(), false, "explicit native rejection is a failed installation")
+  Equal(h.button.clickAttributes, nil, "partial writes cannot become a reusable plan")
+  Equal(next(h.button.cureRows), nil, "failed plan has no successful cure attribution")
+  h.reject = nil
+  Check(h:Install(), "retry sanitizes and reinstalls the complete plan")
+  Equal(h.button.attributes["*macrotext1"], nil, "retry removes stale cure macro")
+  Equal(h.button.attributes["*type1"], "target", "retry installs requested action")
+  local before = h.writes
+  Check(h.runtime.clear(h.button), "retired button is cleared")
+  Equal(h.button.attributes.unit, nil, "retirement clears the secure unit")
+  Check(h.writes > before, "retirement writes owned attributes")
+  before = h.writes
+  Check(h.runtime.clear(h.button), "already retired button remains clear")
+  Equal(h.writes, before, "unused buttons do not repeat a full attribute sweep")
+end)
 
 Case("old AUTO defaults keep their gestures", function()
   local h = Harness()

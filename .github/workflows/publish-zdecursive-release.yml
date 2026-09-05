@@ -1,0 +1,66 @@
+name: Publish ZDecursive stable release
+
+on:
+  push:
+    tags:
+      - 'v13.1.2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-zdecursive-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify exact release source and package
+    uses: ./.github/workflows/verify-zdecursive-release.yml
+
+  publish-curseforge:
+    name: Publish verified stable release to CurseForge
+    needs: verify
+    # Rerunning this workflow must never repeat an accepted upload, including
+    # when a later artifact-retention step failed. A failed upload requires
+    # maintainer inspection; a rerun is deliberately verification-only.
+    if: >-
+      ${{ needs.verify.result == 'success'
+          && github.event_name == 'push'
+          && github.ref == 'refs/tags/v13.1.2'
+          && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact verified source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Recheck annotated release tag identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/tags/v13.1.2'
+          test "$(git cat-file -t refs/tags/v13.1.2)" = 'tag'
+          test "$(git rev-parse 'refs/tags/v13.1.2^{commit}')" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Publish stable package to CurseForge
+        uses: BigWigsMods/packager@36b4c3b7b7bd17c835ad8c83fed4976c067edfbe
+        with:
+          args: '-u -p 1659159'
+          pandoc: false
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_KEY }}
+
+      # The packager removes cf_result.json after upload. Retain only the
+      # actual archive; do not turn an accepted upload into a missing-file error.
+      - name: Retain CurseForge package ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ZDecursive-CurseForge-v13.1.2
+          path: .release/ZDecursive-*.zip
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

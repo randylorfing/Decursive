@@ -224,6 +224,48 @@ local function LockedDown()
   return InCombatLockdown and InCombatLockdown()
 end
 
+local legacyUpgradeWarningShown = false
+local legacyUpgradeWarningPending = false
+local LEGACY_UPGRADE_MESSAGE = "ZDecursive upgrade notice\n\n"
+  .. "ZDecursive and an older Zhaohu's Decursive build are both loaded.\n\n"
+  .. "Exit World of Warcraft completely. In Interface/AddOns, remove the old project's Decursive and Decursive_Options folders. Keep the ZDecursive folder.\n\n"
+  .. "Keep your WTF folder and SavedVariables backups. Do not remove them.\n\n"
+  .. "Old DecursiveDB profiles are not imported into ZDecursive. Configure your profiles in the new options menu."
+
+function Decursive:CheckLegacyUpgradeWarning()
+  if legacyUpgradeWarningShown then return true end
+  local addons = C_AddOns
+  if type(addons) ~= "table" or type(addons.GetAddOnMetadata) ~= "function"
+    or type(addons.IsAddOnLoaded) ~= "function" then
+    legacyUpgradeWarningPending = false
+    return false
+  end
+  local metadataOK, marker = pcall(addons.GetAddOnMetadata, "Decursive", "X-Zhaohu-Build")
+  if not metadataOK or not ValueAccessible(marker) or marker ~= "Zhaohu-Decursive" then
+    legacyUpgradeWarningPending = false
+    return false
+  end
+  -- The first result also admits addons that are still loading. The second
+  -- result proves that the specifically identified old build is fully loaded.
+  local loadedOK, _loadedOrLoading, loaded = pcall(addons.IsAddOnLoaded, "Decursive")
+  if not loadedOK or not ValueAccessible(loaded) or loaded ~= true then
+    legacyUpgradeWarningPending = false
+    return false
+  end
+  legacyUpgradeWarningPending = true
+  if LockedDown() then return false end
+  local diagnostics = ns.Diagnostics
+  if type(diagnostics) ~= "table" or type(diagnostics.ShowText) ~= "function" then return false end
+  -- Reserve the session flag before showing, so reentrant UI callbacks cannot
+  -- open the same notice twice. Failed presentation remains pending for an
+  -- existing world-entry or combat-exit event; no timer or saved setting is used.
+  legacyUpgradeWarningShown = true
+  local ok, shown = pcall(diagnostics.ShowText, LEGACY_UPGRADE_MESSAGE)
+  legacyUpgradeWarningShown = ok and ValueAccessible(shown) and shown == true
+  legacyUpgradeWarningPending = not legacyUpgradeWarningShown
+  return legacyUpgradeWarningShown
+end
+
 local function PublicString(value)
   if issecretvalue and issecretvalue(value) then
     return nil
@@ -421,7 +463,7 @@ local function CopyMissingEntries(destination, source)
   return copied
 end
 
-local function Notify()
+local function Notify(isRetry)
   local runtimeOK = true
   local runtimeState = "applied"
   local currentProfile
@@ -450,7 +492,7 @@ local function Notify()
     if ns.InvalidateUnitSort then
       ns.InvalidateUnitSort("profile-notify")
     end
-    local ok, refreshed, state = pcall(engine.Refresh, engine, "PROFILE_NOTIFY")
+    local ok, refreshed, state = pcall(engine.Refresh, engine, "PROFILE_NOTIFY", isRetry == true)
     if not ok or refreshed == false then
       runtimeOK = false
       runtimeState = type(state) == "string" and state or "runtime-refresh"
@@ -611,40 +653,46 @@ function Decursive:OnInitialize()
     end
   end)
 
+  local function ShowSlashStatus(message)
+    if ns.Diagnostics and ns.Diagnostics.ShowText then
+      ns.Diagnostics.ShowText(message)
+    end
+  end
+
   self:RegisterChatCommand("dcrshow", function()
     local pack = self:GetEditingPack()
     if not pack or type(pack.mufs) ~= "table" then
-      self:Print("no editing pack")
+      ShowSlashStatus("ZDecursive: no editing pack")
       return
     end
     pack.mufs.show = true
     if ns.RefreshMUFs then
       ns.RefreshMUFs()
     end
-    self:Print("MUFs shown (editing pack)")
+    ShowSlashStatus("ZDecursive: MUFs shown (editing pack)")
   end)
 
   self:RegisterChatCommand("dcrhide", function()
     local pack = self:GetEditingPack()
     if not pack or type(pack.mufs) ~= "table" then
-      self:Print("no editing pack")
+      ShowSlashStatus("ZDecursive: no editing pack")
       return
     end
     pack.mufs.show = false
     if ns.RefreshMUFs then
       ns.RefreshMUFs()
     end
-    self:Print("MUFs hidden (editing pack)")
+    ShowSlashStatus("ZDecursive: MUFs hidden (editing pack)")
   end)
 
   self:RegisterChatCommand("dcrshoworder", function()
     if not ns.BuildRoster then
-      self:Print("BuildRoster unavailable")
+      ShowSlashStatus("ZDecursive: BuildRoster unavailable")
       return
     end
     local units = ns.BuildRoster()
     if type(units) ~= "table" or #units == 0 then
-      self:Print("roster empty")
+      ShowSlashStatus("ZDecursive: roster empty")
       return
     end
     local parts = {}
@@ -653,7 +701,7 @@ function Decursive:OnInitialize()
       local name = UnitName and UnitName(u)
       parts[#parts + 1] = string.format("%d:%s%s", i, tostring(u), name and ("=" .. name) or "")
     end
-    self:Print("order " .. table.concat(parts, " "))
+    ShowSlashStatus("ZDecursive: order " .. table.concat(parts, " "))
   end)
 
   self:RegisterChatCommand("zddb", function()
@@ -662,7 +710,7 @@ function Decursive:OnInitialize()
     elseif ns.PrintDiagnostics then
       ns.PrintDiagnostics()
     else
-      self:Print("status dump unavailable")
+      ShowSlashStatus("ZDecursive: status dump unavailable")
     end
   end)
 
@@ -741,6 +789,7 @@ function Decursive:OnEnable()
     ns.DiagnosticCheckpoint("core", "Core OnEnable success")
     ns.DiagnosticModuleEnabled("Core", true)
   end
+  self:CheckLegacyUpgradeWarning()
 end
 
 function Decursive:OnCombatOptionsChanged()
@@ -1261,6 +1310,7 @@ function Decursive:OnGroupRosterUpdate(event)
 end
 
 function Decursive:OnRegenEnabled()
+  if legacyUpgradeWarningPending then self:CheckLegacyUpgradeWarning() end
   local sortGeneration = ns.GetUnitSortRefreshGeneration and ns.GetUnitSortRefreshGeneration() or 0
   local engine = ns.DetectionEngine
   local engineGeneration = engine and engine.refreshGeneration or 0
@@ -1380,6 +1430,7 @@ function Decursive:OnLeavingWorld()
 end
 
 function Decursive:OnEnteringWorld()
+  self:CheckLegacyUpgradeWarning()
   local engine = ns.DetectionEngine
   local beforeRefresh = engine and engine.refreshGeneration or 0
   if self.worldEntryRecoveryPending ~= true and self.fullWorldRecoveryPending ~= true then
@@ -1690,10 +1741,19 @@ function Decursive:ApplyResolvedProfile(_reason)
     end
   end
   self.profileResolvePending = nil
-  self:EnsureEnvironments()
-  local _environmentOK, environmentState = self:ApplyResolvedEnvironment("profile")
+  local ensureCalled, ensured, ensureState = pcall(self.EnsureEnvironments, self)
+  if not ensureCalled or ensured ~= true then
+    return false, ensureCalled and ensureState or "migration"
+  end
+  local environmentCalled, environmentOK, environmentState = pcall(self.ApplyResolvedEnvironment, self, "profile")
+  if not environmentCalled or environmentOK ~= true then
+    return false, environmentCalled and environmentState or "runtime-refresh"
+  end
   if environmentState ~= "applied" then
-    Notify()
+    local called, refreshed, refreshState = pcall(Notify)
+    if not called or refreshed ~= true then
+      return false, called and refreshState or "runtime-refresh"
+    end
   end
   return true, "applied"
 end
@@ -1873,7 +1933,7 @@ function Decursive:GetEnvironmentProfileStatus()
   }
 end
 
-function Decursive:ApplyResolvedEnvironment(_reason)
+function Decursive:ApplyResolvedEnvironment(_reason, isRetry)
   local resolved, detected, reason, tier = self:ResolveRoutedEnvironment()
   self.environmentResolutionReason = reason or "CONTEXT_UNAVAILABLE"
   self.environmentResolutionTier = tier or "unknown"
@@ -1905,11 +1965,11 @@ function Decursive:ApplyResolvedEnvironment(_reason)
   self.appliedEnvironment = resolved
   self.pendingEnvironment = nil
   if changed then
-    local refreshed, refreshState = Notify()
-    if refreshed ~= true then
+    local called, refreshed, refreshState = pcall(Notify, isRetry == true)
+    if not called or refreshed ~= true then
       self.appliedEnvironment = applied
       self.pendingEnvironment = resolved
-      return false, refreshState or "runtime-refresh"
+      return false, called and refreshState or "runtime-refresh"
     end
     return true, "applied"
   end
@@ -1917,6 +1977,25 @@ function Decursive:ApplyResolvedEnvironment(_reason)
     ns.RefreshOptions()
   end
   return true, "unchanged"
+end
+
+-- Engine retries must complete the requested environment transaction before
+-- they can declare its restored last-good provider configuration ready.
+function Decursive:RetryPendingEnvironment(reason)
+  if not ns.ENV_SET[self.pendingEnvironment] then
+    return false
+  end
+  local called, applied, state = pcall(self.ApplyResolvedEnvironment, self, reason or "environment-retry", true)
+  if not called then
+    return true, false, "runtime-refresh"
+  end
+  if applied == true and state == "unchanged" then
+    -- Routing may have returned to the last-good environment during a retry.
+    -- It still needs to reconcile any unfinished native consumer work.
+    local refreshed, result, refreshState = pcall(Notify, true)
+    return true, refreshed and result == true, refreshed and refreshState or "runtime-refresh"
+  end
+  return true, applied == true, state
 end
 
 function Decursive:EnvironmentModeMutationReady()
@@ -2151,49 +2230,50 @@ function Decursive:RunProfileStorageTransaction(reason, mutation, resolveEnviron
   if not snapshot then
     return false, "storage"
   end
-  local ok, mutationResult, mutationState = pcall(mutation)
-  if not ok or mutationResult == false then
-    self:RestoreProfileStorageTransaction(snapshot, reason)
-    return false, mutationState or "transaction"
-  end
-  local ensured, ensureState = self:EnsureEnvironments()
-  if ensured == false then
-    self:RestoreProfileStorageTransaction(snapshot, reason)
-    return false, ensureState or "migration"
-  end
-  local valid, validState = self:ValidateProfileTransactionState()
-  if not valid then
-    self:RestoreProfileStorageTransaction(snapshot, reason)
-    return false, validState
-  end
-  if refreshRuntime == false then
-    if ns.RefreshOptions then
-      pcall(ns.RefreshOptions)
+  local ok, completed, completionState = pcall(function()
+    local mutationResult, mutationState = mutation()
+    if mutationResult == false then
+      return false, mutationState or "transaction"
     end
-  elseif resolveEnvironment == true then
-    local applied, environmentState = self:ApplyResolvedEnvironment(reason)
-    if applied ~= true then
-      self:RestoreProfileStorageTransaction(snapshot, reason)
-      return false, environmentState or "runtime"
+    local ensured, ensureState = self:EnsureEnvironments()
+    if ensured ~= true then
+      return false, ensureState or "migration"
     end
-    if environmentState ~= "applied" then
+    local valid, validState = self:ValidateProfileTransactionState()
+    if not valid then
+      return false, validState
+    end
+    if refreshRuntime == false then
+      if ns.RefreshOptions then
+        ns.RefreshOptions()
+      end
+    elseif resolveEnvironment == true then
+      local applied, environmentState = self:ApplyResolvedEnvironment(reason)
+      if applied ~= true then
+        return false, environmentState or "runtime"
+      end
+      if environmentState ~= "applied" then
+        local refreshed, refreshState = Notify()
+        if refreshed ~= true then
+          return false, refreshState or "runtime-refresh"
+        end
+      end
+    else
       local refreshed, refreshState = Notify()
       if refreshed ~= true then
-        self:RestoreProfileStorageTransaction(snapshot, reason)
         return false, refreshState or "runtime-refresh"
       end
     end
-  else
-    local refreshed, refreshState = Notify()
-    if refreshed ~= true then
-      self:RestoreProfileStorageTransaction(snapshot, reason)
-      return false, refreshState or "runtime-refresh"
-    end
+    return true, mutationState or "applied"
+  end)
+  if not ok or completed ~= true then
+    self:RestoreProfileStorageTransaction(snapshot, reason)
+    return false, ok and completionState or "transaction"
   end
   if ns.DiagnosticRecord then
-    ns.DiagnosticRecord("PROFILE_TRANSACTION", {result = "COMMITTED", reason = reason or "mutation"}, false)
+    pcall(ns.DiagnosticRecord, "PROFILE_TRANSACTION", {result = "COMMITTED", reason = reason or "mutation"}, false)
   end
-  return true, mutationState or "applied"
+  return true, completionState
 end
 
 function Decursive:ActivateProfile(name)
@@ -2659,6 +2739,27 @@ function Decursive:MigrateAppearanceDefaults(environments)
     if ns.HasPriorDefaultPvPMUFDisplayCap and ns.HasPriorDefaultPvPMUFDisplayCap(pvp) then
       pvp.mufs.maxUnits = ns.DEFAULT_PVP_MUF_DISPLAY_CAP or 40
       migrated = migrated + 1
+    end
+  end
+  if type(currentSchema) ~= "number" or currentSchema < 9 then
+    -- Recognize the previously shipped Open World exception before updating
+    -- its brightness. Other disabled packs and customized appearances survive.
+    if type(openWorld) == "table" and type(openWorld.mufs) == "table"
+      and openWorld.mufs.dimOutOfRange == false and openWorld.mufs.dimAmount == 0.60
+      and ns.HasObsoleteOpenWorldAppearance and ns.DeepCopy then
+      local prior = ns.DeepCopy(openWorld)
+      prior.mufs.dimOutOfRange = true
+      if ns.HasObsoleteOpenWorldAppearance(prior) then
+        openWorld.mufs.dimOutOfRange = true
+        migrated = migrated + 1
+      end
+    end
+    for _, row in ipairs(ns.ENVIRONMENTS) do
+      local pack = type(environments) == "table" and environments[row.key] or nil
+      if type(pack) == "table" and type(pack.mufs) == "table" and pack.mufs.dimAmount == 0.60 then
+        pack.mufs.dimAmount = 0.50
+        migrated = migrated + 1
+      end
     end
   end
   profile.appearanceSchema = targetSchema

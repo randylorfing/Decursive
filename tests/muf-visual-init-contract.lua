@@ -177,12 +177,13 @@ end
 Equal(first.managedHost.frameLevel, 39, "managed overlays frame level")
 Equal(first.deathHost.frameLevel, 47, "death host stays above range and Soul Link")
 Check(first.cooldownHost == nil, "removed cooldown host path stays absent")
-Equal(first.readabilityHost.frameLevel, 67, "text, raid icon, border-adjacent status, and skull remain readable")
+Equal(first.readabilityHost.frameLevel, 67, "text, raid icon, status and skull keep their existing content layer")
+Check(first.rangeShadeHost.frameLevel > first.readabilityHost.frameLevel, "whole-MUF shade is above icons, text and skull")
 Check(first.deadFill.parent == first.deathHost, "death fill is isolated on authoritative frame host")
 Equal(first.deadFill.sublevel, 0, "death fill uses a legal texture sublevel")
 Check(first.rangeHost.parent == first.managedHost and first.rangeOverlay.parent == first.rangeHost and first.soulLinkFill.parent == first.managedHost, "range composition and Soul Link stay below death")
 Equal(first.rangeHost.frameLevel, first.managedHost.frameLevel, "range composition retains managed precedence")
-Check(first.skullTex.parent == first.readabilityHost, "skull stays on highest readability host")
+Check(first.skullTex.parent == first.readabilityHost, "skull stays in the content layer below range dimming")
 
 local pack = {
   colors = {dead = {0, 0, 0, 1}},
@@ -206,7 +207,9 @@ local range = ns.ResolveMUFRangePresentation({colors = {range = {0.2, 0.4, 0.8, 
 ns.ApplyMUFRangePresentation(first.rangeOverlay, range, first.rangeHost)
 Equal(first.rangeOverlay.alpha, 1, "out-of-range texture remains locally opaque")
 Equal(first.rangeOverlay.color[4], 1, "out-of-range intrinsic texture alpha is one")
-Equal(first.rangeOverlay.color[1], 0.2 * 0.7, "out-of-range dim darkens configured RGB once")
+Equal(first.rangeOverlay.color[1], 0.2, "range RGB stays full before the whole-MUF shade")
+ns.ApplyMUFRangeShade(first, false, true, range.alpha)
+Equal(first.rangeShadeHost.alpha, 1 - range.alpha, "one top shade controls final brightness")
 Equal(first.rangeHost.alpha, 1, "out-of-range composition host remains opaque")
 
 local secret = {secret = true}

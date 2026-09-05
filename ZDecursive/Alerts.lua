@@ -80,9 +80,14 @@ local removeRetryToken = 0
 local removeRetryExhausted = false
 local lastSoundAt = 0
 local lastTextAt = 0
+local lastRangeWarningAt
+local lastRangeWarningPack
 local textFrame
 local textFont
 local hideAt = 0
+local bandageReminderFrame
+local bandageReminderText
+local bandageReminderToken = 0
 local printFrame
 local alertLayers = setmetatable({}, {__mode = "k"})
 local soulLinkAttempt
@@ -856,8 +861,12 @@ local function EnsureTextFrame()
   textFrame:Hide()
   RestoreTextPoint()
   textFont = textFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-  textFont:SetAllPoints()
+  -- Leave height unconstrained so wrapping can report its complete text height.
+  textFont:SetPoint("TOPLEFT", textFrame, "TOPLEFT", 12, -8)
+  textFont:SetPoint("TOPRIGHT", textFrame, "TOPRIGHT", -12, -8)
   textFont:SetJustifyH("CENTER")
+  if textFont.SetWordWrap then textFont:SetWordWrap(true) end
+  if textFont.SetNonSpaceWrap then textFont:SetNonSpaceWrap(true) end
   ApplyFontStyle(textFont, GetPack(), "THICKOUTLINE")
   textFrame:SetScript("OnDragStart", function(self)
     if moveMode then
@@ -879,6 +888,36 @@ local function EnsureTextFrame()
   ApplyMoveMode()
 end
 
+local function PublicTextMetric(region, method)
+  if not region or type(region[method]) ~= "function" then return nil end
+  local ok, value = pcall(region[method], region)
+  if ok and Accessible(value) and type(value) == "number"
+    and value > 0 and value < math.huge then
+    return value
+  end
+  return nil
+end
+
+local function ShowSizedAlertText(message, pack)
+  if not Accessible(message) or type(message) ~= "string" then return false end
+  EnsureTextFrame()
+  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
+  textFont:SetText(message)
+  local _, fontSize = AlertFont(pack)
+  local screenWidth = PublicTextMetric(UIParent, "GetWidth") or 1024
+  local maxWidth = math.max(48, screenWidth - 32)
+  -- This font only receives public display text; never measure native aura text.
+  local naturalWidth = PublicTextMetric(textFont, "GetUnboundedStringWidth")
+    or PublicTextMetric(textFont, "GetStringWidth") or (#message * fontSize)
+  local width = math.min(maxWidth, math.max(48, math.ceil(naturalWidth) + 24))
+  textFrame:SetSize(width, 80)
+  local fallbackLines = math.max(1, math.ceil(naturalWidth / math.max(1, width - 24)))
+  local textHeight = PublicTextMetric(textFont, "GetStringHeight") or (fontSize * 1.3 * fallbackLines)
+  textFrame:SetSize(width, math.ceil(math.max(fontSize * 1.3, textHeight)) + 16)
+  textFrame:Show()
+  return true
+end
+
 local function ShowDispelText(message, pack)
   if not pack.alerts or not pack.alerts.dispelEnabled then
     return
@@ -886,10 +925,7 @@ local function ShowDispelText(message, pack)
   if pack.alerts.text == false and pack.alerts.pvpText ~= true then
     return
   end
-  EnsureTextFrame()
-  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
-  textFont:SetText(message)
-  textFrame:Show()
+  ShowSizedAlertText(message, pack)
   if pack.alerts.dispelMode == "UNTIL_CLEARED" then
     hideAt = 0
   else
@@ -922,6 +958,53 @@ local function RecordCopyableAlertText(text)
     return ns.Diagnostics.AppendRuntimeMessage(text) == true
   end
   return false
+end
+
+-- Stock warnings have their own nonsecure, click-through presentation. Turning
+-- them off must never dismiss a dispel opportunity or Soul Link range warning.
+function ns.HideBandageLowStockReminder()
+  bandageReminderToken = bandageReminderToken + 1
+  if bandageReminderFrame then bandageReminderFrame:Hide() end
+end
+
+function ns.ShowBandageLowStockReminder(status)
+  if type(InCombatLockdown) == "function" then
+    local ok, locked = pcall(InCombatLockdown)
+    if not ok or not Accessible(locked) or locked ~= false then return false end
+  end
+  if type(status) ~= "table" or status.low ~= true or not Accessible(status.count)
+    or type(status.count) ~= "number" or status.count ~= status.count or status.count < 0
+    or status.count >= math.huge or status.count ~= math.floor(status.count) then return false end
+  if not bandageReminderFrame then
+    bandageReminderFrame = CreateFrame("Frame", "ZDecursiveBandageReminder", UIParent)
+    bandageReminderFrame:SetSize(430, 56)
+    bandageReminderFrame:SetPoint("TOP", 0, -240)
+    bandageReminderFrame:SetFrameStrata("HIGH")
+    bandageReminderFrame:EnableMouse(false)
+    local background = bandageReminderFrame:CreateTexture(nil, "BACKGROUND")
+    background:SetAllPoints()
+    background:SetColorTexture(0.06, 0.09, 0.14, 0.94)
+    bandageReminderText = bandageReminderFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    bandageReminderText:SetPoint("TOPLEFT", 16, -10)
+    bandageReminderText:SetPoint("BOTTOMRIGHT", -16, 10)
+    bandageReminderText:SetTextColor(1, 0.79, 0.39, 1)
+    bandageReminderFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
+    bandageReminderFrame:SetScript("OnEvent", function() ns.HideBandageLowStockReminder() end)
+  end
+  if status.count == 0 then
+    bandageReminderText:SetText("Your selected bandage is out of stock.\nRestock before your next match.")
+  else
+    bandageReminderText:SetText(("Bandages running low: %d remaining.\nRestock before your next match."):format(status.count))
+  end
+  bandageReminderToken = bandageReminderToken + 1
+  local token = bandageReminderToken
+  bandageReminderFrame:Show()
+  if C_Timer and type(C_Timer.After) == "function" then
+    C_Timer.After(8, function()
+      if token == bandageReminderToken then ns.HideBandageLowStockReminder() end
+    end)
+  end
+  return true
 end
 
 -- Explicit slash/help reports still intentionally use the copyable report view.
@@ -958,14 +1041,13 @@ end
 
 local function PlayPreset(pack, kind)
   if not pack.alerts or not pack.alerts.sound then
-    return
+    return false
   end
   local now = GetTime and GetTime() or 0
   local wait = pack.alerts.soundDebounce or 2
   if now - lastSoundAt < wait then
-    return
+    return false
   end
-  lastSoundAt = now
   local file
   if kind == "failure" then
     file = PRESET_FILES.FAILURE
@@ -973,9 +1055,14 @@ local function PlayPreset(pack, kind)
     file = PackSoundFile(pack)
   end
   local channel = PackChannel(pack)
-  if PlaySoundFile then
-    PlaySoundFile(file, channel)
+  if type(PlaySoundFile) == "function" then
+    local ok, played = pcall(PlaySoundFile, file, channel)
+    if ok and Accessible(played) and played == true then
+      lastSoundAt = now
+      return true
+    end
   end
+  return false
 end
 
 local DISPEL_TEXT_MAP = {Magic = "DISPEL", Curse = "DISPEL", Disease = "DISPEL", Poison = "DISPEL"}
@@ -1028,9 +1115,33 @@ end
 function ns.PlayCureFailureSound()
   local pack = GetPack()
   if not pack.alerts or not pack.alerts.errorSound then
-    return
+    return false
   end
-  PlayPreset(pack, "failure")
+  return PlayPreset(pack, "failure")
+end
+
+-- MUFs supplies an attributed, publicly confirmed range failure. This presenter
+-- never infers spell identity from UI_ERROR_MESSAGE or inspects aura contents.
+function ns.NotifyCureOutOfRange()
+  local pack = GetPack()
+  if not pack.alerts or pack.alerts.outOfRangeDispel == false then
+    return false, false
+  end
+  local now = GetTime and GetTime() or 0
+  if lastRangeWarningPack == pack and lastRangeWarningAt and now - lastRangeWarningAt < 0.5 then
+    return false, false
+  end
+  lastRangeWarningPack, lastRangeWarningAt = pack, now
+  local shown = false
+  if pack.alerts.text ~= false then
+    shown = ShowSizedAlertText("OUT OF RANGE", pack)
+    hideAt = now + math.max(0.5, math.min(30, tonumber(pack.alerts.dispelDuration) or 2))
+  end
+  local soundPlayed = ns.PlayCureFailureSound() == true
+  if (shown or soundPlayed) and pack.alerts.printErrors ~= false and pack.alerts.printChat ~= false then
+    RecordCopyableAlertText("Dispel attempt out of range")
+  end
+  return shown, soundPlayed
 end
 
 local function UnitLabel(unit, destName)
@@ -1048,11 +1159,8 @@ local function UnitLabel(unit, destName)
 end
 
 local function ShowSuccessfulDispelText(pack)
-  EnsureTextFrame()
   local duration = math.max(0.5, math.min(30, tonumber(pack.alerts.dispelDuration) or 2))
-  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
-  textFont:SetText("Dispelled")
-  textFrame:Show()
+  ShowSizedAlertText("Dispelled", pack)
   hideAt = (GetTime and GetTime() or 0) + duration
 end
 
@@ -1070,10 +1178,6 @@ function ns.NotifyCureSucceeded(_unit)
   return true
 end
 
-local function SoulLinkSpellId()
-  return ns.SOUL_LINK_SPELL_ID or 1259646
-end
-
 local function ShowSoulLinkWarning(destName)
   local pack = GetPack()
   if not pack.alerts or pack.alerts.soulLinkAlert == false then
@@ -1087,10 +1191,7 @@ local function ShowSoulLinkWarning(destName)
   if who == "unit" then
     who = "your target"
   end
-  EnsureTextFrame()
-  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
-  textFont:SetText("Battle rez: move within range of " .. who .. "!")
-  textFrame:Show()
+  ShowSizedAlertText("Battle rez: move within range of " .. who .. "!", pack)
   hideAt = (GetTime and GetTime() or 0) + 2.5
   PrintLine("Battle rez: move within range of " .. who, false, pack, "Battle rez range warning emitted")
 end
@@ -1348,10 +1449,7 @@ function ns.PlayTestText(packOverride)
   if type(pack) ~= "table" or type(pack.alerts) ~= "table" then
     return false, "PACK_UNAVAILABLE"
   end
-  EnsureTextFrame()
-  ApplyFontStyle(textFont, pack, "THICKOUTLINE")
-  textFont:SetText("DISPEL")
-  textFrame:Show()
+  ShowSizedAlertText("DISPEL", pack)
   hideAt = (GetTime and GetTime() or 0) + math.max(0.5, math.min(30, tonumber(pack.alerts.dispelDuration) or 2))
   return true, "PREVIEW"
 end
