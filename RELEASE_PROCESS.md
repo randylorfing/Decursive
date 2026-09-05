@@ -1,4 +1,4 @@
-# Decursive — Release Process & Agent Handoff
+# Decursive — Release Process
 
 Everything that must be verified before committing, tagging, or publishing a
 release of Zhaohu's Decursive, including the GPL obligations inherited from
@@ -35,8 +35,6 @@ verified in game; yours has not.
 
 **Never force-push `master`. Never rewrite published tags.**
 Released commits are immutable. Fix forward with a new version.
-
-**No `Co-Authored-By: Claude` trailer** in commit messages, in this or any repo.
 
 **Do not disable or remove existing functionality while debugging** without
 asking first.
@@ -418,8 +416,7 @@ paths, then read `git diff --cached --stat` before committing. `*.zip` is now
 gitignored, but the habit is the protection.
 
 **4. Commit.**
-Explain WHY, not just what — root cause, mechanism, and what was verified. No
-`Co-Authored-By` trailer.
+Explain WHY, not just what — root cause, mechanism, and what was verified.
 
 **5. Push to `master`, confirm its automatic verification, then rehearse the
 exact commit if needed.**
@@ -613,3 +610,4 @@ Known and deliberately deferred by the maintainer.
 *(Resolved: the broken v11.0.46 / v12.0.4 / v12.0.5 / v12.1.2 files have been
 removed from CurseForge by the maintainer. Deleting a GitHub release does not
 remove the CurseForge file — both must be done.)*
+

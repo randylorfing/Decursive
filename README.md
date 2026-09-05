@@ -1,3 +1,21 @@
+> **Current rebuild: v13.1.2 — ZDecursive for Retail 12.1.**
+>
+> The maintained rebuild uses **one addon folder, `ZDecursive`**, and its source
+> and current user guide are on the [`zdecursive` branch](https://github.com/randylorfing/Decursive/tree/zdecursive).
+> Check [Releases](https://github.com/randylorfing/Decursive/releases) for available packaged downloads.
+>
+> **The `master` branch and the guide below describe the legacy two-folder addon.**
+> For the rebuild, follow the [current installation guide](https://github.com/randylorfing/Decursive/blob/zdecursive/README.md),
+> not the legacy instructions below. Install the packaged `ZDecursive` folder
+> into Retail `Interface/AddOns` and disable the older `Decursive` and
+> `Decursive_Options` addons before enabling the rebuild.
+>
+> Keep a backup of your existing settings when upgrading. The rebuild stores its
+> settings in `DecursiveRebuildDB`; it does not import the legacy `DecursiveDB`.
+> Existing rebuild users retain their rebuild profiles and assignments.
+
+---
+
 # Zhaohu's Decursive — User Guide
 
 A fast dispel addon for **World of Warcraft Retail 12.1**. It shows your group as a
@@ -273,3 +291,4 @@ maintained and developed it from 2006 through 2026. This fork continues that wor
 WoW 12.1 and is maintained by **Randy Lorfing**.
 
 Licensed under the [GNU General Public License version 3 or later](LICENSE).
+

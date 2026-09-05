@@ -55,10 +55,6 @@ ignore:
     - .gitattributes
     - .editorconfig
     - .docmeta
-    # Cloud Agent development environment (install/verify scripts). The packager
-    # already prunes every dot-prefixed path, so this is belt-and-suspenders --
-    # but per this repo's rule, every root-level entry gets an explicit ignore.
-    - .cursor
     - Decursive/docs
     # Superseded release notes and development docs are source-only. They stay
     # in the repository as project history but have no business in a user's
@@ -98,4 +94,5 @@ license-output: LICENSE.txt
 # self-referencing move-folders entry -- doesn't use manual-changelog either,
 # for the same reason. Falls back to the packager's own auto-generated
 # commit-based changelog instead.
+
 
