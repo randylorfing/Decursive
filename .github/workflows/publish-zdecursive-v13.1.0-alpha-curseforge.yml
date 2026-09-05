@@ -1,0 +1,177 @@
+name: Recover ZDecursive v13.1.2 CurseForge publication
+
+# This registered workflow filename is retained for dispatch on zdecursive.
+# The original tag run stopped at verification before any publication step.
+# Recover only that immutable release; this workflow accepts no version input.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-zdecursive-v13.1.2-recovery
+  cancel-in-progress: false
+
+env:
+  TARGET_TAG: v13.1.2
+  TARGET_SHA: b6ee58973f06881fd94c33fbf4caced3c4bf2a32
+  TARGET_TAG_OBJECT: acdde7e907f1dca329b0982d4155d5661f153947
+
+jobs:
+  verify:
+    name: Verify immutable release source and package
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/zdecursive'
+    runs-on: ubuntu-latest
+    outputs:
+      verified_sha: ${{ steps.verified.outputs.verified_sha }}
+    steps:
+      - name: Checkout immutable release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: b6ee58973f06881fd94c33fbf4caced3c4bf2a32
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify unchanged annotated release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "refs/tags/$TARGET_TAG")" = tag
+          test "$(git rev-parse "refs/tags/$TARGET_TAG")" = "$TARGET_TAG_OBJECT"
+          test "$(git rev-parse "refs/tags/$TARGET_TAG^{commit}")" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          # A branch dispatch leaves tag selection to the packager. Require
+          # exactly this tag so it cannot choose another version at the same HEAD.
+          test "$(git tag --points-at HEAD)" = "$TARGET_TAG"
+
+      - name: Install integrity-locked validation runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools_dir="$RUNNER_TEMP/zdecursive-node"
+          mkdir -p "$tools_dir"
+          cp .github/validation/package.json .github/validation/package-lock.json "$tools_dir/"
+          npm ci --ignore-scripts --no-audit --no-fund --prefix "$tools_dir"
+          echo "NODE_PATH=$tools_dir/node_modules" >> "$GITHUB_ENV"
+
+      - name: Validate tagged release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/validate-zdecursive-source.py \
+            --root "$GITHUB_WORKSPACE" --release-tag "$TARGET_TAG"
+
+      - name: Run all 76 Lua regression contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_files=(tests/*.lua)
+          test "${#test_files[@]}" -eq 76
+          for test_file in "${test_files[@]}"; do
+            node tests/run-fengari.cjs "$test_file"
+          done
+
+      - name: Run all 12 release-note package boundary cases
+        shell: bash
+        run: python3 .github/scripts/test-package-changelog.py
+
+      - name: Run diagnostics exporter contract
+        shell: pwsh
+        run: ./tests/export-diagnostics-contract.ps1
+
+      - name: Fetch pinned BigWigs packager for verification
+        shell: bash
+        env:
+          PACKAGER_REVISION: 36b4c3b7b7bd17c835ad8c83fed4976c067edfbe
+        run: |
+          set -euo pipefail
+          packager_dir="$RUNNER_TEMP/bigwigs-packager"
+          git init "$packager_dir"
+          git -C "$packager_dir" remote add origin https://github.com/BigWigsMods/packager.git
+          git -C "$packager_dir" fetch --depth=1 origin "$PACKAGER_REVISION"
+          git -C "$packager_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$packager_dir" rev-parse HEAD)" = "$PACKAGER_REVISION"
+
+      - name: Assemble release without publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="$RUNNER_TEMP/zdecursive-release"
+          bash "$RUNNER_TEMP/bigwigs-packager/release.sh" \
+            -d -u \
+            -t "$GITHUB_WORKSPACE" \
+            -r "$release_root"
+
+      - name: Validate expanded package and ZIP against immutable release
+        id: verified
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="$RUNNER_TEMP/zdecursive-release"
+          mapfile -t archives < <(find "$release_root" -maxdepth 1 -type f -name 'ZDecursive-*.zip' -print)
+          test "${#archives[@]}" -eq 1
+          python3 .github/scripts/validate-zdecursive-package.py "$release_root" \
+            --archive "${archives[0]}" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --expected-version "$TARGET_TAG" \
+            --expected-source-commit "$TARGET_SHA"
+          sha256sum "${archives[0]}"
+          echo "verified_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Retain verified release ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ZDecursive-verified-v13.1.2
+          path: ${{ runner.temp }}/zdecursive-release/ZDecursive-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-curseforge:
+    name: Publish verified v13.1.2 to CurseForge once
+    needs: verify
+    # An accepted upload can be followed by an artifact-retention failure.
+    # Reruns are verification-only; inspect service status before any recovery.
+    # Retire this job after the first accepted upload, before another dispatch.
+    if: >-
+      ${{ needs.verify.result == 'success'
+          && needs.verify.outputs.verified_sha == 'b6ee58973f06881fd94c33fbf4caced3c4bf2a32'
+          && github.event_name == 'workflow_dispatch'
+          && github.ref == 'refs/heads/zdecursive'
+          && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact verified release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: b6ee58973f06881fd94c33fbf4caced3c4bf2a32
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Recheck unchanged annotated release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "refs/tags/$TARGET_TAG")" = tag
+          test "$(git rev-parse "refs/tags/$TARGET_TAG")" = "$TARGET_TAG_OBJECT"
+          test "$(git rev-parse "refs/tags/$TARGET_TAG^{commit}")" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git tag --points-at HEAD)" = "$TARGET_TAG"
+
+      - name: Publish stable package to CurseForge
+        uses: BigWigsMods/packager@36b4c3b7b7bd17c835ad8c83fed4976c067edfbe
+        with:
+          args: '-u -p 1659159'
+          pandoc: false
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_KEY }}
+
+      # The packager deletes cf_result.json after upload. Retain only the ZIP.
+      - name: Retain actual CurseForge package ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ZDecursive-CurseForge-v13.1.2
+          path: .release/ZDecursive-*.zip
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
