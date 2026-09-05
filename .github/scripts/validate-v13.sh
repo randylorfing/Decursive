@@ -209,7 +209,7 @@ source_only_files=(
     Decursive/V10.20_HOTFIX.md
     Decursive/V10.41_12.1_SECRET_SAFETY.md
     Decursive/Todo.txt
-    Decursive/branding/decursive-logo.jpg
+    Decursive/branding/decursive-logo-v2.jpg
 )
 for file in "${source_only_files[@]}"; do
     [ -f "$file" ] || fail "Source-only project file was lost: $file"

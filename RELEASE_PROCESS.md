@@ -302,7 +302,7 @@ exists, which produced an empty changelog, a malformed CurseForge payload
 
 **`ignore:` paths resolve from the REPO ROOT.**
 They are plain shell globs matched against the path as the packager prints it —
-`Decursive/branding/decursive-logo.jpg` — so they need the `Decursive/` prefix. An
+`Decursive/branding/decursive-logo-v2.jpg` — so they need the `Decursive/` prefix. An
 unprefixed `branding` matched nothing and shipped a 612 KB unused logo in every
 release through v12.0.4, roughly 30% of the download. After changing an ignore
 rule, confirm the build log says `Ignoring:` and not `Copying:`.
@@ -550,7 +550,7 @@ Treat the ignore rule as part of adding the file.
 
 **An offline drop is a packaged build, not a source tree. MERGE, never replace.**
 Files the packager ignores are simply absent from it. A clean replace deletes
-them from source — including `branding/decursive-logo.jpg`, which is missing from
+them from source — including `branding/decursive-logo-v2.jpg`, which is missing from
 every zip *by design*. Always list repo-only files before overwriting.
 
 **Check the drop's base commit.**

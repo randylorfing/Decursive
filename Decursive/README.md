@@ -1,6 +1,6 @@
 # Zhaohu's Decursive
 
-![Zhaohu's Decursive logo](https://raw.githubusercontent.com/randylorfing/Decursive/master/Decursive/branding/decursive-logo.jpg)
+![Zhaohu's Decursive logo](https://raw.githubusercontent.com/randylorfing/Decursive/master/Decursive/branding/decursive-logo-v2.jpg)
 
 **Detect. Cleanse. Protect.**
 

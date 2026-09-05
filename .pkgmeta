@@ -31,7 +31,7 @@ move-folders:
 # Ignore paths must be relative to the REPO ROOT, not to the addon folder --
 # so they need the Decursive/ prefix in this multi-folder layout. The packager
 # matches these as plain shell globs against the path it prints as
-# "Copying: Decursive/branding/decursive-logo.jpg", and an unprefixed
+# "Copying: Decursive/branding/decursive-logo-v2.jpg", and an unprefixed
 # "branding" matched nothing: because $topdir/branding doesn't exist, the
 # packager expanded it to "branding:branding/*", neither of which matches
 # "Decursive/branding/...". Result: a 612 KB logo referenced by no code shipped
